@@ -3,7 +3,7 @@
  * the user selects text in the document WebView.
  *
  * Layout (horizontal, scrollable):
- *   "Highlight" label → 5 colour circles | Underline | Ask xumpta |
+ *   "Highlight" label → 5 colour circles | Underline | Ask athemi |
  *   Cross Out | Copy | Share | Cancel
  *
  * Positions itself above the selection when there is room, otherwise below.
@@ -28,9 +28,9 @@ const ARROW_SIZE = 7;
 // ── Highlight colour palette (5 colours, matching /sleek) ─────────────────────
 const HIGHLIGHT_COLORS = [
   { id: "yellow", color: "#FFD600", label: "Yellow" },
-  { id: "green",  color: "#00C853", label: "Green"  },
-  { id: "blue",   color: "#2979FF", label: "Blue"   },
-  { id: "pink",   color: "#FF4081", label: "Pink"   },
+  { id: "green", color: "#00C853", label: "Green" },
+  { id: "blue", color: "#2979FF", label: "Blue" },
+  { id: "pink", color: "#FF4081", label: "Pink" },
   { id: "orange", color: "#FF6D00", label: "Orange" },
 ] as const;
 
@@ -52,7 +52,7 @@ interface Props {
   onStrikethrough: () => void;
   onCopy: () => void;
   onShare: () => void;
-  onAskXumpta: () => void;
+  onAskAthemi: () => void;
   onDismiss: () => void;
 }
 
@@ -66,22 +66,38 @@ export function SelectionToolbar({
   onStrikethrough,
   onCopy,
   onShare,
-  onAskXumpta,
+  onAskAthemi,
   onDismiss,
 }: Props) {
-  const opacity   = useRef(new Animated.Value(0)).current;
+  const opacity = useRef(new Animated.Value(0)).current;
   const translateY = useRef(new Animated.Value(8)).current;
 
   useEffect(() => {
     if (visible) {
       Animated.parallel([
-        Animated.timing(opacity,     { toValue: 1, duration: 180, useNativeDriver: true }),
-        Animated.timing(translateY,  { toValue: 0, duration: 180, useNativeDriver: true }),
+        Animated.timing(opacity, {
+          toValue: 1,
+          duration: 180,
+          useNativeDriver: true,
+        }),
+        Animated.timing(translateY, {
+          toValue: 0,
+          duration: 180,
+          useNativeDriver: true,
+        }),
       ]).start();
     } else {
       Animated.parallel([
-        Animated.timing(opacity,     { toValue: 0, duration: 120, useNativeDriver: true }),
-        Animated.timing(translateY,  { toValue: 8, duration: 120, useNativeDriver: true }),
+        Animated.timing(opacity, {
+          toValue: 0,
+          duration: 120,
+          useNativeDriver: true,
+        }),
+        Animated.timing(translateY, {
+          toValue: 8,
+          duration: 120,
+          useNativeDriver: true,
+        }),
       ]).start();
     }
   }, [visible]);
@@ -90,7 +106,7 @@ export function SelectionToolbar({
 
   // ── Positioning ──────────────────────────────────────────────────────────────
   const TOOLBAR_HEIGHT = 56;
-  const TOOLBAR_WIDTH  = Math.min(SCREEN_WIDTH - 24, 380);
+  const TOOLBAR_WIDTH = Math.min(SCREEN_WIDTH - 24, 380);
   const { height: SCREEN_HEIGHT } = Dimensions.get("window");
 
   let toolbarX: number;
@@ -102,7 +118,10 @@ export function SelectionToolbar({
     const selectionMidX = rect.x + rect.width / 2;
 
     toolbarX = selectionMidX - TOOLBAR_WIDTH / 2;
-    toolbarX = Math.max(12, Math.min(toolbarX, SCREEN_WIDTH - TOOLBAR_WIDTH - 12));
+    toolbarX = Math.max(
+      12,
+      Math.min(toolbarX, SCREEN_WIDTH - TOOLBAR_WIDTH - 12),
+    );
 
     const spaceAbove = rect.y - 12;
     showAbove = spaceAbove > TOOLBAR_HEIGHT + ARROW_SIZE + 4;
@@ -111,7 +130,10 @@ export function SelectionToolbar({
       ? rect.y - TOOLBAR_HEIGHT - ARROW_SIZE - 8
       : rect.y + rect.height + ARROW_SIZE + 8;
 
-    arrowLeft = Math.max(8, Math.min(selectionMidX - toolbarX - ARROW_SIZE, TOOLBAR_WIDTH - 16));
+    arrowLeft = Math.max(
+      8,
+      Math.min(selectionMidX - toolbarX - ARROW_SIZE, TOOLBAR_WIDTH - 16),
+    );
   } else {
     // Fallback: float above the keyboard area at bottom of screen
     toolbarX = (SCREEN_WIDTH - TOOLBAR_WIDTH) / 2;
@@ -123,9 +145,9 @@ export function SelectionToolbar({
       style={[
         styles.container,
         {
-          left:    toolbarX,
-          top:     toolbarY,
-          width:   TOOLBAR_WIDTH,
+          left: toolbarX,
+          top: toolbarY,
+          width: TOOLBAR_WIDTH,
           opacity,
           transform: [{ translateY }],
         },
@@ -140,7 +162,12 @@ export function SelectionToolbar({
         <View style={[styles.arrowUp, { left: arrowLeft }]} />
       )}
 
-      <View style={[styles.toolbar, showAbove ? styles.toolbarAbove : styles.toolbarBelow]}>
+      <View
+        style={[
+          styles.toolbar,
+          showAbove ? styles.toolbarAbove : styles.toolbarBelow,
+        ]}
+      >
         <ScrollView
           horizontal
           showsHorizontalScrollIndicator={false}
@@ -155,12 +182,17 @@ export function SelectionToolbar({
           {HIGHLIGHT_COLORS.map((c) => (
             <TouchableOpacity
               key={c.id}
-              onPress={() => { onHighlight(c.color); onDismiss(); }}
+              onPress={() => {
+                onHighlight(c.color);
+                onDismiss();
+              }}
               style={styles.colorBtn}
               hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
               accessibilityLabel={`Highlight ${c.label}`}
             >
-              <View style={[styles.colorCircle, { backgroundColor: c.color }]} />
+              <View
+                style={[styles.colorCircle, { backgroundColor: c.color }]}
+              />
             </TouchableOpacity>
           ))}
 
@@ -168,7 +200,10 @@ export function SelectionToolbar({
 
           {/* ── Underline ── */}
           <TouchableOpacity
-            onPress={() => { onUnderline(); onDismiss(); }}
+            onPress={() => {
+              onUnderline();
+              onDismiss();
+            }}
             style={styles.actionBtn}
             hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
             accessibilityLabel="Underline"
@@ -177,20 +212,23 @@ export function SelectionToolbar({
             <Text style={styles.actionLabel}>Underline</Text>
           </TouchableOpacity>
 
-          {/* ── Ask xumpta ── */}
+          {/* ── Ask athemi ── */}
           <TouchableOpacity
-            onPress={onAskXumpta}
+            onPress={onAskAthemi}
             style={styles.actionBtn}
             hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
-            accessibilityLabel="Ask xumpta"
+            accessibilityLabel="Ask athemi"
           >
             <Text style={[styles.actionIcon, { color: "#A78BFA" }]}>✦</Text>
-            <Text style={styles.actionLabel}>Ask xumpta</Text>
+            <Text style={styles.actionLabel}>Ask athemi</Text>
           </TouchableOpacity>
 
           {/* ── Cross Out (strikethrough) ── */}
           <TouchableOpacity
-            onPress={() => { onStrikethrough(); onDismiss(); }}
+            onPress={() => {
+              onStrikethrough();
+              onDismiss();
+            }}
             style={styles.actionBtn}
             hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
             accessibilityLabel="Cross out"
@@ -201,7 +239,10 @@ export function SelectionToolbar({
 
           {/* ── Copy ── */}
           <TouchableOpacity
-            onPress={() => { onCopy(); onDismiss(); }}
+            onPress={() => {
+              onCopy();
+              onDismiss();
+            }}
             style={styles.actionBtn}
             hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
             accessibilityLabel="Copy"
@@ -212,7 +253,10 @@ export function SelectionToolbar({
 
           {/* ── Share ── */}
           <TouchableOpacity
-            onPress={() => { onShare(); onDismiss(); }}
+            onPress={() => {
+              onShare();
+              onDismiss();
+            }}
             style={styles.actionBtn}
             hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
             accessibilityLabel="Share"
@@ -242,108 +286,108 @@ export function SelectionToolbar({
 // ── Styles ─────────────────────────────────────────────────────────────────────
 const styles = StyleSheet.create({
   container: {
-    position:  "absolute",
-    zIndex:    9999,
+    position: "absolute",
+    zIndex: 9999,
     elevation: 20,
   },
   toolbar: {
     backgroundColor: "#1E1E2E",
-    borderRadius:    12,
-    height:          56,
-    shadowColor:     "#000",
-    shadowOffset:    { width: 0, height: 4 },
-    shadowOpacity:   0.32,
-    shadowRadius:    12,
-    elevation:       12,
-    overflow:        "hidden",
+    borderRadius: 12,
+    height: 56,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.32,
+    shadowRadius: 12,
+    elevation: 12,
+    overflow: "hidden",
   },
   toolbarAbove: { marginBottom: 0 },
   toolbarBelow: { marginTop: 0 },
 
   scrollContent: {
-    flexDirection:     "row",
-    alignItems:        "center",
+    flexDirection: "row",
+    alignItems: "center",
     paddingHorizontal: 8,
-    height:            56,
+    height: 56,
   },
 
   // "Highlight" label
   sectionLabel: {
     justifyContent: "center",
-    paddingRight:   4,
+    paddingRight: 4,
   },
   sectionLabelText: {
-    color:      "rgba(255,255,255,0.45)",
-    fontSize:   10,
+    color: "rgba(255,255,255,0.45)",
+    fontSize: 10,
     fontWeight: "500",
   },
 
   // Colour circle button
   colorBtn: {
-    justifyContent:  "center",
-    alignItems:      "center",
+    justifyContent: "center",
+    alignItems: "center",
     marginHorizontal: 4,
-    width:  28,
+    width: 28,
     height: 56,
   },
   colorCircle: {
-    width:        22,
-    height:       22,
+    width: 22,
+    height: 22,
     borderRadius: 11,
-    borderWidth:  2,
-    borderColor:  "rgba(255,255,255,0.15)",
+    borderWidth: 2,
+    borderColor: "rgba(255,255,255,0.15)",
   },
 
   // Vertical separator
   divider: {
-    width:           1,
-    height:          30,
+    width: 1,
+    height: 30,
     backgroundColor: "rgba(255,255,255,0.12)",
     marginHorizontal: 6,
   },
 
   // Text action button
   actionBtn: {
-    alignItems:        "center",
-    justifyContent:    "center",
+    alignItems: "center",
+    justifyContent: "center",
     paddingHorizontal: 8,
-    height:            56,
-    minWidth:          44,
+    height: 56,
+    minWidth: 44,
   },
   actionIcon: {
-    fontSize:   18,
-    color:      "#FFFFFF",
+    fontSize: 18,
+    color: "#FFFFFF",
     lineHeight: 22,
   },
   actionLabel: {
-    fontSize:  9,
-    color:     "rgba(255,255,255,0.55)",
+    fontSize: 9,
+    color: "rgba(255,255,255,0.55)",
     marginTop: 1,
   },
 
   // Arrow indicators
   arrowUp: {
-    position:         "absolute",
-    top:              -(ARROW_SIZE * 2 - 1),
-    width:            0,
-    height:           0,
-    borderLeftWidth:  ARROW_SIZE,
+    position: "absolute",
+    top: -(ARROW_SIZE * 2 - 1),
+    width: 0,
+    height: 0,
+    borderLeftWidth: ARROW_SIZE,
     borderRightWidth: ARROW_SIZE,
     borderBottomWidth: ARROW_SIZE * 2,
-    borderLeftColor:  "transparent",
+    borderLeftColor: "transparent",
     borderRightColor: "transparent",
     borderBottomColor: "#1E1E2E",
   },
   arrowDown: {
-    position:        "absolute",
-    bottom:          -(ARROW_SIZE * 2 - 1),
-    width:           0,
-    height:          0,
-    borderLeftWidth:  ARROW_SIZE,
+    position: "absolute",
+    bottom: -(ARROW_SIZE * 2 - 1),
+    width: 0,
+    height: 0,
+    borderLeftWidth: ARROW_SIZE,
     borderRightWidth: ARROW_SIZE,
-    borderTopWidth:   ARROW_SIZE * 2,
-    borderLeftColor:  "transparent",
+    borderTopWidth: ARROW_SIZE * 2,
+    borderLeftColor: "transparent",
     borderRightColor: "transparent",
-    borderTopColor:   "#1E1E2E",
+    borderTopColor: "#1E1E2E",
   },
 });

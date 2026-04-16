@@ -1,10 +1,16 @@
 /**
  * DOCX Service - Handles DOCX viewing and editing
- * Converts DOCX files to HTML for rendering in WebView using Mammoth.js (CDN)
+ * Converts DOCX files to HTML for rendering in WebView using Mammoth.js.
+ * Mammoth.js is bundled locally via assets/vendor/mammoth.browser.min.js.vlib
+ * and inlined into the WebView HTML — the viewer/editor work fully offline.
  */
 
 import * as FileSystem from "expo-file-system/legacy";
 import { SELECTION_BRIDGE_JS } from "@/utils/selectionScripts";
+
+function escapeForScriptTag(js: string): string {
+  return js.replace(/<\/script/gi, "<\\/script");
+}
 
 // ============================================================================
 // TYPES
@@ -26,16 +32,21 @@ export interface DocxFileInfo {
 // ============================================================================
 
 /**
- * Generate the HTML wrapper with Mammoth.js for DOCX conversion
- * This uses CDN-loaded Mammoth.js to convert DOCX to HTML in WebView
+ * Generate the HTML wrapper with inlined Mammoth.js for DOCX conversion.
+ * `mammothJs` is the raw JavaScript source of mammoth.browser.min.js, loaded
+ * from the bundled vendor asset. It is inlined so the WebView never hits the
+ * network.
  */
-export function generateDocxViewerHtml(base64Content: string): string {
+export function generateDocxViewerHtml(
+  base64Content: string,
+  mammothJs: string,
+): string {
   return `
     <!DOCTYPE html>
     <html>
       <head>
         <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=3.0, user-scalable=yes">
-        <script src="https://cdn.jsdelivr.net/npm/mammoth@1.11.0/mammoth.browser.min.js"></script>
+        <script>${escapeForScriptTag(mammothJs)}<\/script>
         <style>
           * {
             box-sizing: border-box;
@@ -285,16 +296,20 @@ export function generateDocxViewerHtml(base64Content: string): string {
 }
 
 /**
- * Generate the HTML wrapper for DOCX editing
- * Uses contenteditable for simple editing
+ * Generate the HTML wrapper for DOCX editing with inlined Mammoth.js.
+ * Uses contenteditable for simple editing. Mammoth.js is inlined from the
+ * bundled vendor asset so editing works with no network access.
  */
-export function generateDocxEditorHtml(base64Content: string): string {
+export function generateDocxEditorHtml(
+  base64Content: string,
+  mammothJs: string,
+): string {
   return `
     <!DOCTYPE html>
     <html>
       <head>
         <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-        <script src="https://cdn.jsdelivr.net/npm/mammoth@1.11.0/mammoth.browser.min.js"></script>
+        <script>${escapeForScriptTag(mammothJs)}<\/script>
         <style>
           * {
             box-sizing: border-box;

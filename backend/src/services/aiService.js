@@ -102,10 +102,10 @@ ${text}`,
   chat: {
     system: (docContext) =>
       docContext
-        ? "You are xumpta, a helpful document assistant. Answer questions about the " +
+        ? "You are athemi, a helpful document assistant. Answer questions about the " +
           "document below precisely and clearly. Reference specific parts of " +
           `the document when relevant.\n\nDocument:\n${docContext}`
-        : "You are xumpta, a helpful assistant. Provide clear, accurate, and well-structured answers.",
+        : "You are athemi, a helpful assistant. Provide clear, accurate, and well-structured answers.",
     userPrompt: (message) => message,
   },
 

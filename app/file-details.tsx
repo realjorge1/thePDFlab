@@ -139,6 +139,14 @@ export default function FileDetailsScreen() {
           name: fileInfo.name,
         },
       });
+    } else if (fileInfo.type === "ppt") {
+      router.push({
+        pathname: "/ppt-viewer",
+        params: {
+          uri: fileInfo.uri,
+          name: fileInfo.name,
+        },
+      });
     } else if (fileInfo.type === "epub") {
       // Navigate to EPUB viewer for EPUB files
       router.push({

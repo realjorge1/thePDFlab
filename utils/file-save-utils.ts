@@ -78,7 +78,12 @@ async function prepareFileForSave(
   sourceUri: string,
   fileName: string,
 ): Promise<string> {
-  const sourceFile = new File(sourceUri);
+  // expo-file-system requires an absolute URI with file:// scheme
+  const normalizedUri =
+    sourceUri.startsWith('file://') || sourceUri.startsWith('content://')
+      ? sourceUri
+      : `file://${sourceUri}`;
+  const sourceFile = new File(normalizedUri);
   const preparedFile = new File(Paths.cache, fileName);
 
   // Delete existing file if it exists to avoid copy error

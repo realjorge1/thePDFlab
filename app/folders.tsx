@@ -365,6 +365,11 @@ export default function FoldersScreen() {
           pathname: "/epub-viewer",
           params: { uri: file.uri, name: file.displayName },
         });
+      } else if (extension === "pptx" || extension === "ppt") {
+        router.push({
+          pathname: "/ppt-viewer",
+          params: { uri: file.uri, name: file.displayName },
+        });
       } else {
         const result = await openWithSystemApp({
           uri: file.uri,

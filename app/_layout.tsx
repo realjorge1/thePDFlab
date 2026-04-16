@@ -133,6 +133,7 @@ export default function RootLayout() {
           <Stack.Screen name="highlight-export" />
           <Stack.Screen name="citation-extractor" />
           <Stack.Screen name="ppt-studio" />
+          <Stack.Screen name="ppt-viewer" />
         </Stack>
         <FloatingAIButton />
       </View>

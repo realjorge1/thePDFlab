@@ -18,6 +18,7 @@ import React, { useCallback, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  Platform,
   Pressable,
   StyleSheet,
   Text,
@@ -62,11 +63,12 @@ import {
   saveEditedContent,
 } from "@/services/docxService";
 import {
+  isFavorite as checkIsFavorite,
   deleteFileReference,
   getAllFiles,
   toggleFavorite,
-  isFavorite as checkIsFavorite,
 } from "@/services/fileService";
+import { loadMobileViewVendorScripts } from "@/services/mobileViewVendorLoader";
 import { recycleFile } from "@/services/recycleBinService";
 
 // ============================================================================
@@ -121,6 +123,7 @@ export default function DocxViewerScreen() {
   const theme = colorScheme === "dark" ? DarkTheme : LightTheme;
   const webViewRef = useRef<WebView>(null);
   const mobileRendererRef = useRef<MobileRendererHandle>(null);
+  const mammothJsRef = useRef<string | null>(null);
 
   const { uri, name } = useLocalSearchParams<{ uri: string; name: string }>();
   const displayName = name || getDocxDisplayName(uri || "");
@@ -158,6 +161,7 @@ export default function DocxViewerScreen() {
     selectionOffsets: null,
   });
 
+  const [headerHeight, setHeaderHeight] = useState(0);
   const isMountedRef = useRef(true);
 
   React.useEffect(() => {
@@ -170,7 +174,11 @@ export default function DocxViewerScreen() {
   // Load document + check star on mount
   React.useEffect(() => {
     if (!uri) {
-      setState((prev) => ({ ...prev, loading: false, error: "No DOCX file specified" }));
+      setState((prev) => ({
+        ...prev,
+        loading: false,
+        error: "No DOCX file specified",
+      }));
       return;
     }
     loadDocument();
@@ -185,7 +193,11 @@ export default function DocxViewerScreen() {
       if (match) {
         const starred = await checkIsFavorite(match.id);
         if (isMountedRef.current) {
-          setState((prev) => ({ ...prev, isStarred: starred, fileId: match.id }));
+          setState((prev) => ({
+            ...prev,
+            isStarred: starred,
+            fileId: match.id,
+          }));
         }
       }
     } catch {
@@ -207,7 +219,11 @@ export default function DocxViewerScreen() {
 
       if (isValid) {
         base64 = await readDocxAsBase64(normalized);
-        html = generateDocxViewerHtml(base64);
+        if (!mammothJsRef.current) {
+          const vendor = await loadMobileViewVendorScripts();
+          mammothJsRef.current = vendor.mammothBrowserMinJs;
+        }
+        html = generateDocxViewerHtml(base64, mammothJsRef.current);
       } else {
         textContent = await readFileAsText(normalized);
         html = generatePlainTextViewerHtml(textContent);
@@ -240,7 +256,8 @@ export default function DocxViewerScreen() {
     const result = await openWithSystemApp({
       uri,
       displayName,
-      mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      mimeType:
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     });
     if (!result.success) showOpenFailedAlert(displayName, result.error);
   }, [uri, displayName]);
@@ -273,7 +290,22 @@ export default function DocxViewerScreen() {
     async (newMode: ViewMode) => {
       // Switching back to original — immediate, cancel any pending load
       if (newMode === "original") {
-        setState((prev) => ({ ...prev, viewMode: "original", mobileLoading: false }));
+        setState((prev) => ({
+          ...prev,
+          viewMode: "original",
+          mobileLoading: false,
+        }));
+        return;
+      }
+
+      // Android 8/9 ship Chrome-backed WebView that crashes the process on
+      // init when running a recent Chrome build. Android 10+ decouples
+      // WebView from Chrome, so the crash can't happen there.
+      if (Platform.OS === "android" && (Platform.Version as number) < 29) {
+        Alert.alert(
+          "Mobile View Unavailable",
+          "Mobile View requires Android 10 or newer. Your device will continue to work in Normal View.",
+        );
         return;
       }
 
@@ -303,7 +335,10 @@ export default function DocxViewerScreen() {
             mobileLoading: false,
           }));
         } else {
-          Alert.alert("Mobile View", result.message || "Mobile View not available.");
+          Alert.alert(
+            "Mobile View",
+            result.message || "Mobile View not available.",
+          );
           setState((prev) => ({ ...prev, mobileLoading: false }));
         }
       } catch {
@@ -318,7 +353,8 @@ export default function DocxViewerScreen() {
   // ── Reading mode toggle (Continuous ↔ Facing) ───────────────────
   const toggleReadingMode = useCallback(() => {
     setState((prev) => {
-      const newMode: ReadingMode = prev.readingMode === "continuous" ? "facing" : "continuous";
+      const newMode: ReadingMode =
+        prev.readingMode === "continuous" ? "facing" : "continuous";
 
       // For original view, inject CSS to paginate or unpaginate
       if (prev.viewMode === "original" && webViewRef.current) {
@@ -398,7 +434,12 @@ export default function DocxViewerScreen() {
 
   // ── Search ───────────────────────────────────────────────────────
   const handleOpenSearch = useCallback(() => {
-    setState((prev) => ({ ...prev, showSearch: true, searchQuery: "", searchMatchCount: 0 }));
+    setState((prev) => ({
+      ...prev,
+      showSearch: true,
+      searchQuery: "",
+      searchMatchCount: 0,
+    }));
   }, []);
 
   const handleSearchQuery = useCallback(
@@ -451,7 +492,12 @@ export default function DocxViewerScreen() {
   );
 
   const handleCloseSearch = useCallback(() => {
-    setState((prev) => ({ ...prev, showSearch: false, searchQuery: "", searchMatchCount: 0 }));
+    setState((prev) => ({
+      ...prev,
+      showSearch: false,
+      searchQuery: "",
+      searchMatchCount: 0,
+    }));
     if (state.viewMode === "mobile" && mobileRendererRef.current) {
       mobileRendererRef.current.clearSearch();
     } else if (webViewRef.current) {
@@ -502,12 +548,23 @@ export default function DocxViewerScreen() {
     }
 
     if (state.mode === "view") {
-      if (state.isValidDocx && state.base64Content) {
-        const editorHtml = generateDocxEditorHtml(state.base64Content);
-        setState((prev) => ({ ...prev, htmlContent: editorHtml, mode: "edit" }));
+      if (state.isValidDocx && state.base64Content && mammothJsRef.current) {
+        const editorHtml = generateDocxEditorHtml(
+          state.base64Content,
+          mammothJsRef.current,
+        );
+        setState((prev) => ({
+          ...prev,
+          htmlContent: editorHtml,
+          mode: "edit",
+        }));
       } else if (state.textContent !== null) {
         const editorHtml = generatePlainTextEditorHtml(state.textContent);
-        setState((prev) => ({ ...prev, htmlContent: editorHtml, mode: "edit" }));
+        setState((prev) => ({
+          ...prev,
+          htmlContent: editorHtml,
+          mode: "edit",
+        }));
       }
     } else {
       Alert.alert("Exit Edit Mode", "Do you want to save your changes?", [
@@ -515,10 +572,17 @@ export default function DocxViewerScreen() {
           text: "Discard",
           style: "destructive",
           onPress: () => {
-            if (state.isValidDocx && state.base64Content) {
+            if (
+              state.isValidDocx &&
+              state.base64Content &&
+              mammothJsRef.current
+            ) {
               setState((prev) => ({
                 ...prev,
-                htmlContent: generateDocxViewerHtml(state.base64Content!),
+                htmlContent: generateDocxViewerHtml(
+                  state.base64Content!,
+                  mammothJsRef.current!,
+                ),
                 mode: "view",
               }));
             } else if (state.textContent !== null) {
@@ -534,7 +598,13 @@ export default function DocxViewerScreen() {
         { text: "Cancel", style: "cancel" },
       ]);
     }
-  }, [state.mode, state.base64Content, state.textContent, state.isValidDocx, state.viewMode]);
+  }, [
+    state.mode,
+    state.base64Content,
+    state.textContent,
+    state.isValidDocx,
+    state.viewMode,
+  ]);
 
   const handleSave = useCallback(async () => {
     if (!webViewRef.current) return;
@@ -550,38 +620,34 @@ export default function DocxViewerScreen() {
 
   // ── Delete ───────────────────────────────────────────────────────
   const handleDelete = useCallback(async () => {
-    Alert.alert(
-      "Delete File",
-      `Move "${displayName}" to the recycle bin?`,
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Delete",
-          style: "destructive",
-          onPress: async () => {
-            try {
-              const allFiles = await getAllFiles();
-              const match = allFiles.find((f) => f.uri === uri);
-              if (match) {
-                await recycleFile({
-                  id: match.id,
-                  name: match.name,
-                  uri: match.uri,
-                  size: match.size,
-                  type: match.type,
-                  mimeType: match.mimeType,
-                  source: match.source,
-                });
-                await deleteFileReference(match.id);
-              }
-              router.back();
-            } catch {
-              Alert.alert("Error", "Failed to delete file.");
+    Alert.alert("Delete File", `Move "${displayName}" to the recycle bin?`, [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Delete",
+        style: "destructive",
+        onPress: async () => {
+          try {
+            const allFiles = await getAllFiles();
+            const match = allFiles.find((f) => f.uri === uri);
+            if (match) {
+              await recycleFile({
+                id: match.id,
+                name: match.name,
+                uri: match.uri,
+                size: match.size,
+                type: match.type,
+                mimeType: match.mimeType,
+                source: match.source,
+              });
+              await deleteFileReference(match.id);
             }
-          },
+            router.back();
+          } catch {
+            Alert.alert("Error", "Failed to delete file.");
+          }
         },
-      ],
-    );
+      },
+    ]);
   }, [uri, displayName]);
 
   // ── Star / Favourite ─────────────────────────────────────────────
@@ -621,36 +687,49 @@ export default function DocxViewerScreen() {
               const newUri = await saveEditedContent(data.content, displayName);
               setState((prev) => ({ ...prev, saving: false }));
 
-              Alert.alert("Document Saved", "Your changes have been saved successfully.", [
-                {
-                  text: "Share",
-                  onPress: async () => {
-                    try {
-                      await Sharing.shareAsync(newUri);
-                    } catch {
-                      Alert.alert("Error", "Failed to share document");
-                    }
+              Alert.alert(
+                "Document Saved",
+                "Your changes have been saved successfully.",
+                [
+                  {
+                    text: "Share",
+                    onPress: async () => {
+                      try {
+                        await Sharing.shareAsync(newUri);
+                      } catch {
+                        Alert.alert("Error", "Failed to share document");
+                      }
+                    },
                   },
-                },
-                {
-                  text: "OK",
-                  onPress: () => {
-                    if (state.isValidDocx && state.base64Content) {
-                      setState((prev) => ({
-                        ...prev,
-                        htmlContent: generateDocxViewerHtml(state.base64Content!),
-                        mode: "view",
-                      }));
-                    } else if (state.textContent !== null) {
-                      setState((prev) => ({
-                        ...prev,
-                        htmlContent: generatePlainTextViewerHtml(state.textContent!),
-                        mode: "view",
-                      }));
-                    }
+                  {
+                    text: "OK",
+                    onPress: () => {
+                      if (
+                        state.isValidDocx &&
+                        state.base64Content &&
+                        mammothJsRef.current
+                      ) {
+                        setState((prev) => ({
+                          ...prev,
+                          htmlContent: generateDocxViewerHtml(
+                            state.base64Content!,
+                            mammothJsRef.current!,
+                          ),
+                          mode: "view",
+                        }));
+                      } else if (state.textContent !== null) {
+                        setState((prev) => ({
+                          ...prev,
+                          htmlContent: generatePlainTextViewerHtml(
+                            state.textContent!,
+                          ),
+                          mode: "view",
+                        }));
+                      }
+                    },
                   },
-                },
-              ]);
+                ],
+              );
             } catch {
               setState((prev) => ({ ...prev, saving: false }));
               Alert.alert("Error", "Failed to save document");
@@ -658,15 +737,52 @@ export default function DocxViewerScreen() {
             break;
 
           case "extract-text":
-            setState((prev) => ({ ...prev, extractedText: data.content?.trim() || "" }));
+            setState((prev) => ({
+              ...prev,
+              extractedText: data.content?.trim() || "",
+            }));
             break;
 
           case "read-aloud-extract":
-            setState((prev) => ({ ...prev, readAloudText: data.content?.trim() || "" }));
+            setState((prev) => ({
+              ...prev,
+              readAloudText: data.content?.trim() || "",
+            }));
             break;
 
           case "search-count":
-            setState((prev) => ({ ...prev, searchMatchCount: data.count || 0 }));
+            setState((prev) => ({
+              ...prev,
+              searchMatchCount: data.count || 0,
+            }));
+            break;
+
+          // ── Text selection from the original DOCX WebView ──────────
+          // The SELECTION_BRIDGE_JS injected into generateDocxViewerHtml
+          // sends these messages when the user selects text.
+          case "selection":
+            if (data.text) {
+              setState((prev) => ({
+                ...prev,
+                selectionVisible: true,
+                selectionText: data.text,
+                selectionRect: data.rect ?? null,
+                selectionOffsets: {
+                  startOffset: data.startOffset ?? 0,
+                  endOffset: data.endOffset ?? 0,
+                },
+              }));
+            }
+            break;
+
+          case "selection_clear":
+            setState((prev) => ({
+              ...prev,
+              selectionVisible: false,
+              selectionText: "",
+              selectionRect: null,
+              selectionOffsets: null,
+            }));
             break;
         }
       } catch {
@@ -686,7 +802,10 @@ export default function DocxViewerScreen() {
         selectionVisible: true,
         selectionText: msg.text,
         selectionRect: msg.rect ?? null,
-        selectionOffsets: { startOffset: msg.startOffset, endOffset: msg.endOffset },
+        selectionOffsets: {
+          startOffset: msg.startOffset,
+          endOffset: msg.endOffset,
+        },
       }));
     } else if (msg.type === "selection_clear") {
       setState((prev) => ({
@@ -696,64 +815,97 @@ export default function DocxViewerScreen() {
         selectionRect: null,
         selectionOffsets: null,
       }));
+    } else if (msg.type === "search-count") {
+      setState((prev) => ({ ...prev, searchMatchCount: msg.count ?? 0 }));
     }
   }, []);
 
   // ── Selection toolbar actions ────────────────────────────────────
-  const handleSelectionHighlight = useCallback((colorHex: string) => {
-    const { selectionOffsets } = state;
-    if (!selectionOffsets) return;
-    const id = `hl_${Date.now()}`;
-    mobileRendererRef.current?.bridgeHighlight(
-      id,
-      selectionOffsets.startOffset,
-      selectionOffsets.endOffset,
-      colorHex,
-    );
-  }, [state.selectionOffsets]);
+  const handleSelectionHighlight = useCallback(
+    (colorHex: string) => {
+      const { selectionOffsets, viewMode } = state;
+      if (!selectionOffsets) return;
+      const id = `hl_${Date.now()}`;
+      if (viewMode === "original") {
+        webViewRef.current?.injectJavaScript(
+          `window.__selBridge_highlight(${JSON.stringify(id)},${selectionOffsets.startOffset},${selectionOffsets.endOffset},${JSON.stringify(colorHex)}); true;`,
+        );
+      } else {
+        mobileRendererRef.current?.bridgeHighlight(
+          id,
+          selectionOffsets.startOffset,
+          selectionOffsets.endOffset,
+          colorHex,
+        );
+      }
+    },
+    [state.selectionOffsets, state.viewMode],
+  );
 
   const handleSelectionUnderline = useCallback(() => {
-    const { selectionOffsets } = state;
+    const { selectionOffsets, viewMode } = state;
     if (!selectionOffsets) return;
     const id = `ul_${Date.now()}`;
-    mobileRendererRef.current?.bridgeUnderline(
-      id,
-      selectionOffsets.startOffset,
-      selectionOffsets.endOffset,
-    );
-  }, [state.selectionOffsets]);
+    if (viewMode === "original") {
+      webViewRef.current?.injectJavaScript(
+        `window.__selBridge_underline(${JSON.stringify(id)},${selectionOffsets.startOffset},${selectionOffsets.endOffset}); true;`,
+      );
+    } else {
+      mobileRendererRef.current?.bridgeUnderline(
+        id,
+        selectionOffsets.startOffset,
+        selectionOffsets.endOffset,
+      );
+    }
+  }, [state.selectionOffsets, state.viewMode]);
 
   const handleSelectionStrikethrough = useCallback(() => {
-    const { selectionOffsets } = state;
+    const { selectionOffsets, viewMode } = state;
     if (!selectionOffsets) return;
     const id = `st_${Date.now()}`;
-    mobileRendererRef.current?.bridgeStrikethrough(
-      id,
-      selectionOffsets.startOffset,
-      selectionOffsets.endOffset,
-    );
-  }, [state.selectionOffsets]);
+    if (viewMode === "original") {
+      webViewRef.current?.injectJavaScript(
+        `window.__selBridge_strikethrough(${JSON.stringify(id)},${selectionOffsets.startOffset},${selectionOffsets.endOffset}); true;`,
+      );
+    } else {
+      mobileRendererRef.current?.bridgeStrikethrough(
+        id,
+        selectionOffsets.startOffset,
+        selectionOffsets.endOffset,
+      );
+    }
+  }, [state.selectionOffsets, state.viewMode]);
 
   const handleSelectionCopy = useCallback(() => {
-    mobileRendererRef.current?.bridgeCopySelection();
-  }, []);
+    if (state.viewMode === "original") {
+      webViewRef.current?.injectJavaScript(`document.execCommand('copy'); true;`);
+    } else {
+      mobileRendererRef.current?.bridgeCopySelection();
+    }
+  }, [state.viewMode]);
 
   const handleSelectionShare = useCallback(async () => {
     if (!state.selectionText) return;
     try {
       const { Share } = await import("react-native");
       await Share.share({ message: state.selectionText });
-    } catch { /* non-critical */ }
+    } catch {
+      /* non-critical */
+    }
   }, [state.selectionText]);
 
-  const handleSelectionAskXumpta = useCallback(() => {
+  const handleSelectionAskAthemi = useCallback(() => {
     if (!state.selectionText) return;
     router.push({ pathname: "/ai", params: { prompt: state.selectionText } });
     setState((prev) => ({ ...prev, selectionVisible: false }));
   }, [state.selectionText]);
 
   const handleSelectionDismiss = useCallback(() => {
-    mobileRendererRef.current?.bridgeClearSelection();
+    if (state.viewMode === "original") {
+      webViewRef.current?.injectJavaScript(`window.__selBridge_clearSelection(); true;`);
+    } else {
+      mobileRendererRef.current?.bridgeClearSelection();
+    }
     setState((prev) => ({
       ...prev,
       selectionVisible: false,
@@ -761,7 +913,7 @@ export default function DocxViewerScreen() {
       selectionRect: null,
       selectionOffsets: null,
     }));
-  }, []);
+  }, [state.viewMode]);
 
   const handleRetry = useCallback(() => {
     loadDocument();
@@ -772,7 +924,12 @@ export default function DocxViewerScreen() {
   // ====================================================================
   if (state.loading) {
     return (
-      <SafeAreaView style={[styles.container, { backgroundColor: theme.background.primary }]}>
+      <SafeAreaView
+        style={[
+          styles.container,
+          { backgroundColor: theme.background.primary },
+        ]}
+      >
         <Header
           name={displayName}
           theme={theme}
@@ -787,7 +944,9 @@ export default function DocxViewerScreen() {
         />
         <View style={styles.centerContent}>
           <ActivityIndicator size="large" color={Palette.primary[500]} />
-          <Text style={[styles.loadingText, { color: theme.text.secondary }]}>Preparing document...</Text>
+          <Text style={[styles.loadingText, { color: theme.text.secondary }]}>
+            Preparing document...
+          </Text>
         </View>
         <DocxShareOptions
           visible={state.showShareModal}
@@ -805,7 +964,12 @@ export default function DocxViewerScreen() {
   // ====================================================================
   if (state.error) {
     return (
-      <SafeAreaView style={[styles.container, { backgroundColor: theme.background.primary }]}>
+      <SafeAreaView
+        style={[
+          styles.container,
+          { backgroundColor: theme.background.primary },
+        ]}
+      >
         <Header
           name={displayName}
           theme={theme}
@@ -819,17 +983,54 @@ export default function DocxViewerScreen() {
           mobileLoading={state.mobileLoading}
         />
         <View style={styles.centerContent}>
-          <MaterialIcons name="error-outline" size={64} color={Palette.error.main} />
-          <Text style={[styles.errorTitle, { color: theme.text.primary }]}>Failed to load document</Text>
-          <Text style={[styles.errorMessage, { color: theme.text.secondary }]}>{state.error}</Text>
+          <MaterialIcons
+            name="error-outline"
+            size={64}
+            color={Palette.error.main}
+          />
+          <Text style={[styles.errorTitle, { color: theme.text.primary }]}>
+            Failed to load document
+          </Text>
+          <Text style={[styles.errorMessage, { color: theme.text.secondary }]}>
+            {state.error}
+          </Text>
           <View style={styles.errorActions}>
-            <Pressable style={[styles.retryButton, { backgroundColor: Palette.primary[500] }]} onPress={handleRetry}>
-              <MaterialIcons name="refresh" size={20} color={Palette.white} style={{ marginRight: Spacing.sm }} />
+            <Pressable
+              style={[
+                styles.retryButton,
+                { backgroundColor: Palette.primary[500] },
+              ]}
+              onPress={handleRetry}
+            >
+              <MaterialIcons
+                name="refresh"
+                size={20}
+                color={Palette.white}
+                style={{ marginRight: Spacing.sm }}
+              />
               <Text style={styles.retryButtonText}>Try Again</Text>
             </Pressable>
-            <Pressable style={[styles.externalButton, { borderColor: theme.border.default }]} onPress={handleOpenWithSystem}>
-              <MaterialIcons name="open-in-new" size={20} color={theme.text.primary} style={{ marginRight: Spacing.sm }} />
-              <Text style={[styles.externalButtonText, { color: theme.text.primary }]}>Open Externally</Text>
+            <Pressable
+              style={[
+                styles.externalButton,
+                { borderColor: theme.border.default },
+              ]}
+              onPress={handleOpenWithSystem}
+            >
+              <MaterialIcons
+                name="open-in-new"
+                size={20}
+                color={theme.text.primary}
+                style={{ marginRight: Spacing.sm }}
+              />
+              <Text
+                style={[
+                  styles.externalButtonText,
+                  { color: theme.text.primary },
+                ]}
+              >
+                Open Externally
+              </Text>
             </Pressable>
           </View>
         </View>
@@ -856,6 +1057,7 @@ export default function DocxViewerScreen() {
     >
       {/* ── Header (hidden in fullscreen) ──────────────────────── */}
       {!state.fullscreen && (
+        <View onLayout={(e) => setHeaderHeight(e.nativeEvent.layout.height)}>
         <Header
           name={displayName}
           theme={theme}
@@ -871,6 +1073,7 @@ export default function DocxViewerScreen() {
           onMenuPress={() => setState((prev) => ({ ...prev, showMenu: true }))}
           mobileLoading={state.mobileLoading}
         />
+        </View>
       )}
 
       {/* ── Search bar ─────────────────────────────────────────── */}
@@ -878,7 +1081,10 @@ export default function DocxViewerScreen() {
         <View
           style={[
             styles.searchBar,
-            { backgroundColor: theme.surface.primary, borderBottomColor: theme.border.light },
+            {
+              backgroundColor: theme.surface.primary,
+              borderBottomColor: theme.border.light,
+            },
           ]}
         >
           <MaterialIcons name="search" size={20} color={theme.text.secondary} />
@@ -897,7 +1103,11 @@ export default function DocxViewerScreen() {
             </Text>
           )}
           <Pressable onPress={handleCloseSearch} style={styles.searchClose}>
-            <MaterialIcons name="close" size={20} color={theme.text.secondary} />
+            <MaterialIcons
+              name="close"
+              size={20}
+              color={theme.text.secondary}
+            />
           </Pressable>
         </View>
       )}
@@ -912,19 +1122,6 @@ export default function DocxViewerScreen() {
             error={state.mobileError}
             onMessage={handleMobileMessage}
           />
-          {/* Selection toolbar — WPS-style, shown on text selection */}
-          <SelectionToolbar
-            visible={state.selectionVisible}
-            selectedText={state.selectionText}
-            rect={state.selectionRect}
-            onHighlight={handleSelectionHighlight}
-            onUnderline={handleSelectionUnderline}
-            onStrikethrough={handleSelectionStrikethrough}
-            onCopy={handleSelectionCopy}
-            onShare={handleSelectionShare}
-            onAskXumpta={handleSelectionAskXumpta}
-            onDismiss={handleSelectionDismiss}
-          />
         </View>
       ) : (
         <View style={{ flex: 1 }}>
@@ -938,12 +1135,18 @@ export default function DocxViewerScreen() {
               domStorageEnabled
               onMessage={handleWebViewMessage}
               onError={() => {
-                setState((prev) => ({ ...prev, error: "Failed to render document" }));
+                setState((prev) => ({
+                  ...prev,
+                  error: "Failed to render document",
+                }));
               }}
               startInLoadingState
               renderLoading={() => (
                 <View style={styles.webviewLoading}>
-                  <ActivityIndicator size="large" color={Palette.primary[500]} />
+                  <ActivityIndicator
+                    size="large"
+                    color={Palette.primary[500]}
+                  />
                 </View>
               )}
             />
@@ -952,7 +1155,9 @@ export default function DocxViewerScreen() {
           {state.mobileLoading && (
             <View style={styles.mobileLoadingOverlay}>
               <ActivityIndicator size="large" color={Palette.white} />
-              <Text style={styles.mobileLoadingText}>Generating Mobile View…</Text>
+              <Text style={styles.mobileLoadingText}>
+                Generating Mobile View…
+              </Text>
             </View>
           )}
         </View>
@@ -963,10 +1168,33 @@ export default function DocxViewerScreen() {
         <Pressable style={styles.fullscreenExitHint} onPress={toggleFullscreen}>
           <View style={styles.fullscreenExitPill}>
             <MaterialIcons name="fullscreen-exit" size={18} color="#fff" />
-            <Text style={styles.fullscreenExitText}>Tap to exit fullscreen</Text>
+            <Text style={styles.fullscreenExitText}>
+              Tap to exit fullscreen
+            </Text>
           </View>
         </Pressable>
       )}
+
+      {/* ── Selection toolbar — at SafeAreaView level so it renders above
+           WebView on Android. Rect y offset by headerHeight because the toolbar
+           is positioned relative to the SafeAreaView while the rect is in
+           WebView-container coordinates (below the header). */}
+      <SelectionToolbar
+        visible={state.selectionVisible}
+        selectedText={state.selectionText}
+        rect={
+          state.selectionRect
+            ? { ...state.selectionRect, y: state.selectionRect.y + headerHeight }
+            : null
+        }
+        onHighlight={handleSelectionHighlight}
+        onUnderline={handleSelectionUnderline}
+        onStrikethrough={handleSelectionStrikethrough}
+        onCopy={handleSelectionCopy}
+        onShare={handleSelectionShare}
+        onAskAthemi={handleSelectionAskAthemi}
+        onDismiss={handleSelectionDismiss}
+      />
 
       {/* ── Three dots menu ────────────────────────────────────── */}
       <ThreeDotsMenu
@@ -986,10 +1214,14 @@ export default function DocxViewerScreen() {
 
       {/* ── Read Aloud controller ──────────────────────────────── */}
       <ReadAloudController
-        text={state.readAloudText || state.extractedText || state.textContent || ""}
+        text={
+          state.readAloudText || state.extractedText || state.textContent || ""
+        }
         colorScheme={colorScheme}
         active={state.readAloudActive}
-        onRequestClose={() => setState((prev) => ({ ...prev, readAloudActive: false }))}
+        onRequestClose={() =>
+          setState((prev) => ({ ...prev, readAloudActive: false }))
+        }
         documentId={uri}
         documentName={displayName}
       />
@@ -1044,7 +1276,10 @@ function Header({
     <View
       style={[
         styles.header,
-        { backgroundColor: theme.surface.primary, borderBottomColor: theme.border.light },
+        {
+          backgroundColor: theme.surface.primary,
+          borderBottomColor: theme.border.light,
+        },
       ]}
     >
       {/* ── Left: Back / Close ──────────────────────────────────── */}
@@ -1062,7 +1297,11 @@ function Header({
           {name}
         </Text>
         {mode === "edit" && (
-          <Text style={[styles.headerSubtitle, { color: Palette.primary[500] }]}>Editing</Text>
+          <Text
+            style={[styles.headerSubtitle, { color: Palette.primary[500] }]}
+          >
+            Editing
+          </Text>
         )}
       </View>
 
@@ -1072,7 +1311,10 @@ function Header({
         {mode === "edit" && onSave && (
           <Pressable
             onPress={onSave}
-            style={[styles.saveButton, { backgroundColor: Palette.primary[500] }]}
+            style={[
+              styles.saveButton,
+              { backgroundColor: Palette.primary[500] },
+            ]}
             disabled={saving}
           >
             {saving ? (
@@ -1085,7 +1327,11 @@ function Header({
 
         {/* Exit edit mode */}
         {mode === "edit" && onToggleEdit && (
-          <Pressable onPress={onToggleEdit} style={styles.headerButton} hitSlop={6}>
+          <Pressable
+            onPress={onToggleEdit}
+            style={styles.headerButton}
+            hitSlop={6}
+          >
             <MaterialIcons name="close" size={22} color={theme.text.primary} />
           </Pressable>
         )}
@@ -1101,17 +1347,31 @@ function Header({
             />
 
             {/* Continuous / Facing toggle */}
-            <Pressable onPress={onToggleReadingMode} style={styles.headerButton} hitSlop={6}>
+            <Pressable
+              onPress={onToggleReadingMode}
+              style={styles.headerButton}
+              hitSlop={6}
+            >
               <MaterialIcons
-                name={readingMode === "continuous" ? "view-day" : "view-carousel"}
+                name={
+                  readingMode === "continuous" ? "view-day" : "view-carousel"
+                }
                 size={22}
                 color={theme.text.primary}
               />
             </Pressable>
 
             {/* Three dots menu */}
-            <Pressable onPress={onMenuPress} style={styles.headerButton} hitSlop={6}>
-              <MaterialIcons name="more-vert" size={24} color={theme.text.primary} />
+            <Pressable
+              onPress={onMenuPress}
+              style={styles.headerButton}
+              hitSlop={6}
+            >
+              <MaterialIcons
+                name="more-vert"
+                size={24}
+                color={theme.text.primary}
+              />
             </Pressable>
           </>
         )}

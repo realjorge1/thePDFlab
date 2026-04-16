@@ -4,6 +4,7 @@
  */
 
 import * as IntentLauncher from "expo-intent-launcher";
+import * as FileSystem from "expo-file-system";
 import { Alert, Platform } from "react-native";
 
 // Lazy import to prevent crashes when native module is not available
@@ -87,14 +88,20 @@ export async function openWithSystemApp(
 
 /**
  * Open file using Android Intent (ACTION_VIEW)
+ * Android 7+ forbids file:// URIs in intents — must use a content:// URI.
  */
 async function openWithAndroidIntent(
   uri: string,
   mimeType: string,
 ): Promise<ViewerResult> {
   try {
+    // Convert file:// URI to content:// URI via FileProvider (required on Android 7+)
+    const intentUri = uri.startsWith("file://")
+      ? await FileSystem.getContentUriAsync(uri)
+      : uri;
+
     await IntentLauncher.startActivityAsync("android.intent.action.VIEW", {
-      data: uri,
+      data: intentUri,
       type: mimeType,
       flags: 1, // FLAG_GRANT_READ_URI_PERMISSION
     });

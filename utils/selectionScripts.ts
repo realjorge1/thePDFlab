@@ -18,12 +18,12 @@ export const SELECTION_BRIDGE_JS = `
   var _debounceTimer = null;
   var _lastSentText = '';
 
-  /** Debounce wrapper (default 200ms). */
+  /** Debounce wrapper. */
   function debounce(fn, ms) {
     return function () {
       var args = arguments;
       clearTimeout(_debounceTimer);
-      _debounceTimer = setTimeout(function () { fn.apply(null, args); }, ms || 200);
+      _debounceTimer = setTimeout(function () { fn.apply(null, args); }, ms || 250);
     };
   }
 
@@ -57,8 +57,8 @@ export const SELECTION_BRIDGE_JS = `
     return { startOffset: startOffset, endOffset: endOffset };
   }
 
-  /* ── Selection change listener (debounced) ───────────────────── */
-  var handleSelectionChange = debounce(function () {
+  /* ── Shared selection reporter ───────────────────────────────── */
+  function reportSelection() {
     var sel = window.getSelection();
     if (!sel || sel.isCollapsed || !sel.toString().trim()) {
       if (_lastSentText) {
@@ -90,71 +90,60 @@ export const SELECTION_BRIDGE_JS = `
         scrollY: window.scrollY
       });
     } catch (_) {}
-  }, 200);
+  }
 
+  /* ── Selection change listener (debounced 250ms) ─────────────── */
+  var handleSelectionChange = debounce(reportSelection, 250);
   document.addEventListener('selectionchange', handleSelectionChange);
 
-  /* touchend / mouseup — fire after the user lifts their finger.
-   * A 120ms delay is used so Android's native selection handling
-   * has time to commit the selection before we read it. */
-  function reportSelectionImmediate() {
-    var sel = window.getSelection();
-    if (!sel || sel.isCollapsed || !sel.toString().trim()) return;
-    var text = sel.toString().trim();
-    try {
-      var range = sel.getRangeAt(0);
-      var offsets = rangeToOffsets(range);
-      var rect = range.getBoundingClientRect();
-      if (text === _lastSentText) return;
-      clearTimeout(_debounceTimer);
-      _lastSentText = text;
-      post({
-        type: 'selection',
-        text: text,
-        startOffset: offsets.startOffset,
-        endOffset: offsets.endOffset,
-        rect: {
-          x: rect.left,
-          y: rect.top,
-          width: rect.width,
-          height: rect.height
-        },
-        scrollX: window.scrollX,
-        scrollY: window.scrollY
-      });
-    } catch (_) {}
-  }
+  /* touchend — fire after the user lifts their finger.
+   * 250ms gives Android time to commit the selection. */
   document.addEventListener('touchend', function() {
-    setTimeout(reportSelectionImmediate, 120);
+    setTimeout(reportSelection, 250);
   }, { passive: true });
-  document.addEventListener('mouseup', reportSelectionImmediate);
+
+  document.addEventListener('mouseup', function() {
+    setTimeout(reportSelection, 50);
+  });
+
+  /* contextmenu fires on Android long-press — prevent the native popup
+   * and read the selection after a delay that covers both fast and slow
+   * Android WebView implementations (300ms is reliably after selection). */
+  document.addEventListener('contextmenu', function(e) {
+    e.preventDefault();
+    setTimeout(reportSelection, 300);
+  });
+
+  /* ── Long-press detection via touchstart + timer ─────────────── *
+   * Fallback for devices where contextmenu doesn't fire. After 600ms
+   * of sustained touch (i.e. a long-press), poll for a selection. */
+  var _lpTimer = null;
+  var _lpActive = false;
+  document.addEventListener('touchstart', function() {
+    _lpActive = true;
+    clearTimeout(_lpTimer);
+    _lpTimer = setTimeout(function() {
+      if (_lpActive) { reportSelection(); }
+    }, 600);
+  }, { passive: true });
+  document.addEventListener('touchend', function() {
+    _lpActive = false;
+    clearTimeout(_lpTimer);
+  }, { passive: true });
+  document.addEventListener('touchcancel', function() {
+    _lpActive = false;
+    clearTimeout(_lpTimer);
+  }, { passive: true });
 
   /* On scroll, re-emit position with updated viewport-relative rect */
   var _scrollTimer = null;
   document.addEventListener('scroll', function () {
     clearTimeout(_scrollTimer);
     _scrollTimer = setTimeout(function () {
-      var sel = window.getSelection();
-      if (!sel || sel.isCollapsed || !sel.toString().trim()) return;
-      try {
-        var text = sel.toString().trim();
-        var range = sel.getRangeAt(0);
-        var offsets = rangeToOffsets(range);
-        var rect = range.getBoundingClientRect();
-        /* Force resend by clearing last text so position updates after scroll */
-        _lastSentText = '';
-        _lastSentText = text;
-        post({
-          type: 'selection',
-          text: text,
-          startOffset: offsets.startOffset,
-          endOffset: offsets.endOffset,
-          rect: { x: rect.left, y: rect.top, width: rect.width, height: rect.height },
-          scrollX: window.scrollX,
-          scrollY: window.scrollY
-        });
-      } catch (_) {}
-    }, 150);
+      // Force resend by clearing lastSentText so updated position is emitted
+      _lastSentText = '';
+      reportSelection();
+    }, 200);
   }, { passive: true });
 
   /* ── Offset → Range reconstruction ───────────────────────────── */
@@ -298,6 +287,82 @@ export const SELECTION_BRIDGE_JS = `
     });
     window.getSelection() && window.getSelection().removeAllRanges();
     post({ type: 'annotation_applied', success: ok, id: id, kind: 'strikethrough' });
+  };
+
+  /* ── Search highlighting ─────────────────────────────────────────
+   * Called by MobileRenderer via injectJavaScript:
+   *   window.searchText(query)  — highlight all matches, scroll to first
+   *   window.searchNext()       — advance to next match
+   *   window.searchPrev()       — go to previous match
+   *   window.clearSearch()      — remove all search highlights
+   * Posts { type:'search-count', count, current } back to React Native.
+   * ─────────────────────────────────────────────────────────────── */
+  var __srSpans = [];
+  var __srIdx = 0;
+  var SR_ACTIVE = 'background-color:#FF6F00;color:#fff;border-radius:2px;padding:0 1px;display:inline;';
+  var SR_NORMAL = 'background-color:#FFEB3B;color:#000;border-radius:2px;padding:0 1px;display:inline;';
+
+  function __srClear() {
+    for (var i = 0; i < __srSpans.length; i++) {
+      var sp = __srSpans[i];
+      var p = sp.parentNode;
+      if (p) { p.replaceChild(document.createTextNode(sp.textContent || ''), sp); p.normalize(); }
+    }
+    __srSpans = []; __srIdx = 0;
+  }
+
+  window.searchText = function (query) {
+    __srClear();
+    if (!query || !query.trim()) { post({ type: 'search-count', count: 0, current: 0 }); return; }
+    var q = query.toLowerCase();
+    /* Collect all text nodes up-front before any DOM mutation */
+    var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null, false);
+    var nodes = []; var node;
+    while ((node = walker.nextNode())) nodes.push(node);
+    nodes.forEach(function (n) {
+      var text = n.nodeValue || ''; var lower = text.toLowerCase(); var idx = lower.indexOf(q);
+      if (idx === -1 || !n.parentNode) return;
+      var frag = document.createDocumentFragment(); var last = 0;
+      while (idx !== -1) {
+        if (idx > last) frag.appendChild(document.createTextNode(text.substring(last, idx)));
+        var sp = document.createElement('span');
+        sp.setAttribute('data-pdflab-sr', '1');
+        sp.setAttribute('style', SR_NORMAL);
+        sp.textContent = text.substring(idx, idx + q.length);
+        frag.appendChild(sp); __srSpans.push(sp);
+        last = idx + q.length; idx = lower.indexOf(q, last);
+      }
+      if (last < text.length) frag.appendChild(document.createTextNode(text.substring(last)));
+      n.parentNode.replaceChild(frag, n);
+    });
+    if (__srSpans.length > 0) {
+      __srSpans[0].setAttribute('style', SR_ACTIVE);
+      __srSpans[0].scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+    post({ type: 'search-count', count: __srSpans.length, current: __srSpans.length > 0 ? 1 : 0 });
+  };
+
+  window.searchNext = function () {
+    if (!__srSpans.length) return;
+    __srSpans[__srIdx].setAttribute('style', SR_NORMAL);
+    __srIdx = (__srIdx + 1) % __srSpans.length;
+    __srSpans[__srIdx].setAttribute('style', SR_ACTIVE);
+    __srSpans[__srIdx].scrollIntoView({ behavior: 'smooth', block: 'center' });
+    post({ type: 'search-count', count: __srSpans.length, current: __srIdx + 1 });
+  };
+
+  window.searchPrev = function () {
+    if (!__srSpans.length) return;
+    __srSpans[__srIdx].setAttribute('style', SR_NORMAL);
+    __srIdx = (__srIdx - 1 + __srSpans.length) % __srSpans.length;
+    __srSpans[__srIdx].setAttribute('style', SR_ACTIVE);
+    __srSpans[__srIdx].scrollIntoView({ behavior: 'smooth', block: 'center' });
+    post({ type: 'search-count', count: __srSpans.length, current: __srIdx + 1 });
+  };
+
+  window.clearSearch = function () {
+    __srClear();
+    post({ type: 'search-count', count: 0, current: 0 });
   };
 })();
 `;

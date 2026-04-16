@@ -18,6 +18,7 @@ import React, { useCallback, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  Platform,
   Pressable,
   StyleSheet,
   Text,
@@ -31,6 +32,7 @@ import {
   MobileRenderer,
   type MobileRendererHandle,
 } from "@/components/DocumentViewer/MobileRenderer";
+import { PDFTextExtractor } from "@/components/DocumentViewer/PDFTextExtractor";
 import { SelectionToolbar } from "@/components/DocumentViewer/SelectionToolbar";
 import { ThreeDotsMenu } from "@/components/DocumentViewer/ThreeDotsMenu";
 import { ViewModeToggle } from "@/components/DocumentViewer/ViewModeToggle";
@@ -56,10 +58,10 @@ import {
 } from "@/services/document-manager";
 import { reflowPDF } from "@/services/documentReflowService";
 import {
+  isFavorite as checkIsFavorite,
   deleteFileReference,
   getAllFiles,
   toggleFavorite,
-  isFavorite as checkIsFavorite,
 } from "@/services/fileService";
 import { repairPdfViaBackend } from "@/services/pdfRepairClient";
 import { validatePdfFile } from "@/services/pdfValidationService";
@@ -94,9 +96,20 @@ interface ViewerState {
   showMenu: boolean;
   showSearch: boolean;
   searchQuery: string;
+  /** Pages (1-indexed) that contain the search query — original view only */
+  searchMatchPages: number[];
+  /** Index into searchMatchPages for the currently-highlighted page */
+  searchPageIndex: number;
+  /** True while PDFTextExtractor is extracting text on behalf of a search request */
+  searchExtracting: boolean;
+  /** Match count from MobileRenderer WebView (mobile view) */
+  searchMobileCount: number;
+  /** Current match index (1-based) from MobileRenderer WebView (mobile view) */
+  searchMobileCurrent: number;
   // ── Read Aloud ──
   readAloudActive: boolean;
-  readAloudText: string;
+  /** Per-page text array populated by PDFTextExtractor — independent of mobile view */
+  readAloudPageTexts: string[];
   // ── Star ──
   isStarred: boolean;
   fileId: string | null;
@@ -150,8 +163,13 @@ export default function PdfViewerScreen() {
     showMenu: false,
     showSearch: false,
     searchQuery: "",
+    searchMatchPages: [],
+    searchPageIndex: 0,
+    searchExtracting: false,
+    searchMobileCount: 0,
+    searchMobileCurrent: 0,
     readAloudActive: false,
-    readAloudText: "",
+    readAloudPageTexts: [],
     isStarred: false,
     fileId: null,
     selectionVisible: false,
@@ -163,8 +181,11 @@ export default function PdfViewerScreen() {
   const [passwordInput, setPasswordInput] = useState("");
   const [targetPage, setTargetPage] = useState<number | undefined>(undefined);
   const [showFullscreenIndicator, setShowFullscreenIndicator] = useState(false);
+  const [headerHeight, setHeaderHeight] = useState(0);
   const isMountedRef = useRef(true);
   const mobileRendererRef = useRef<MobileRendererHandle>(null);
+  /** Holds a search query that arrived before text extraction completed. */
+  const pendingSearchQueryRef = useRef<string | null>(null);
 
   // ── Lifecycle ────────────────────────────────────────────────────
   React.useEffect(() => {
@@ -177,7 +198,11 @@ export default function PdfViewerScreen() {
   // Normalize URI + check star on mount
   React.useEffect(() => {
     if (!uri) {
-      setState((prev) => ({ ...prev, loading: false, error: "No PDF file specified" }));
+      setState((prev) => ({
+        ...prev,
+        loading: false,
+        error: "No PDF file specified",
+      }));
       return;
     }
     normalizeUri();
@@ -192,7 +217,11 @@ export default function PdfViewerScreen() {
       if (match) {
         const starred = await checkIsFavorite(match.id);
         if (isMountedRef.current) {
-          setState((prev) => ({ ...prev, isStarred: starred, fileId: match.id }));
+          setState((prev) => ({
+            ...prev,
+            isStarred: starred,
+            fileId: match.id,
+          }));
         }
       }
     } catch {
@@ -232,7 +261,11 @@ export default function PdfViewerScreen() {
         return;
       }
 
-      setState((prev) => ({ ...prev, normalizedUri: normalized, loading: false }));
+      setState((prev) => ({
+        ...prev,
+        normalizedUri: normalized,
+        loading: false,
+      }));
     } catch (error) {
       if (!isMountedRef.current) return;
       setState((prev) => ({
@@ -259,13 +292,22 @@ export default function PdfViewerScreen() {
   // ── PDF callbacks ────────────────────────────────────────────────
   const handlePdfLoadComplete = useCallback((numberOfPages: number) => {
     if (!isMountedRef.current) return;
-    setState((prev) => ({ ...prev, pageInfo: { ...prev.pageInfo, total: numberOfPages } }));
+    setState((prev) => ({
+      ...prev,
+      pageInfo: { ...prev.pageInfo, total: numberOfPages },
+    }));
   }, []);
 
-  const handlePageChanged = useCallback((page: number, numberOfPages: number) => {
-    if (!isMountedRef.current) return;
-    setState((prev) => ({ ...prev, pageInfo: { current: page, total: numberOfPages } }));
-  }, []);
+  const handlePageChanged = useCallback(
+    (page: number, numberOfPages: number) => {
+      if (!isMountedRef.current) return;
+      setState((prev) => ({
+        ...prev,
+        pageInfo: { current: page, total: numberOfPages },
+      }));
+    },
+    [],
+  );
 
   const handlePdfError = useCallback((error: string) => {
     if (!isMountedRef.current) return;
@@ -311,7 +353,22 @@ export default function PdfViewerScreen() {
     async (newMode: ViewMode) => {
       // Switching back to original — immediate, cancel any pending load
       if (newMode === "original") {
-        setState((prev) => ({ ...prev, viewMode: "original", mobileLoading: false }));
+        setState((prev) => ({
+          ...prev,
+          viewMode: "original",
+          mobileLoading: false,
+        }));
+        return;
+      }
+
+      // Android 8/9 ship Chrome-backed WebView that crashes the process on
+      // init when running a recent Chrome build. Android 10+ decouples
+      // WebView from Chrome, so the crash can't happen there.
+      if (Platform.OS === "android" && (Platform.Version as number) < 29) {
+        Alert.alert(
+          "Mobile View Unavailable",
+          "Mobile View requires Android 10 or newer. Your device will continue to work in Normal View.",
+        );
         return;
       }
 
@@ -341,7 +398,10 @@ export default function PdfViewerScreen() {
             mobileLoading: false,
           }));
         } else {
-          Alert.alert("Mobile View", result.message || "Mobile View not available for this PDF.");
+          Alert.alert(
+            "Mobile View",
+            result.message || "Mobile View not available for this PDF.",
+          );
           setState((prev) => ({ ...prev, mobileLoading: false }));
         }
       } catch (err) {
@@ -399,39 +459,120 @@ export default function PdfViewerScreen() {
   }, [uri, name]);
 
   // ── Search ───────────────────────────────────────────────────────
+  // Search is fully independent of Mobile View.
+  // • Original view: extracts per-page text via PDFTextExtractor, then
+  //   navigates to matching pages with page-jump.
+  // • Mobile view: delegates to the MobileRenderer WebView's JS search.
+
   const handleOpenSearch = useCallback(() => {
-    if (state.viewMode === "original") {
-      // Switch to mobile view for search (native PDF viewer has no text search)
-      handleViewModeChange("mobile");
-    }
-    setState((prev) => ({ ...prev, showSearch: true, searchQuery: "" }));
-  }, [state.viewMode, handleViewModeChange]);
+    setState((prev) => ({
+      ...prev,
+      showSearch: true,
+      searchQuery: "",
+      searchMatchPages: [],
+      searchPageIndex: 0,
+      searchExtracting: false,
+      searchMobileCount: 0,
+      searchMobileCurrent: 0,
+    }));
+  }, []);
 
   const handleSearchQuery = useCallback(
     (query: string) => {
       setState((prev) => ({ ...prev, searchQuery: query }));
-      if (mobileRendererRef.current) {
-        mobileRendererRef.current.search(query);
+
+      if (state.viewMode === "mobile") {
+        mobileRendererRef.current?.search(query);
+        return;
+      }
+
+      // ── Original view: page-text search ──────────────────────────
+      if (!query.trim()) {
+        setState((prev) => ({
+          ...prev,
+          searchMatchPages: [],
+          searchPageIndex: 0,
+          searchExtracting: false,
+        }));
+        return;
+      }
+
+      if (state.readAloudPageTexts.length > 0) {
+        // Text already available — search immediately
+        const q = query.toLowerCase();
+        const matchPages = state.readAloudPageTexts.reduce<number[]>(
+          (acc, text, i) => {
+            if (text.toLowerCase().includes(q)) acc.push(i + 1);
+            return acc;
+          },
+          [],
+        );
+        setState((prev) => ({
+          ...prev,
+          searchMatchPages: matchPages,
+          searchPageIndex: 0,
+          searchExtracting: false,
+        }));
+        if (matchPages.length > 0) setTargetPage(matchPages[0]);
+      } else {
+        // Trigger PDFTextExtractor; result handled in onPageTexts callback
+        pendingSearchQueryRef.current = query;
+        setState((prev) => ({
+          ...prev,
+          searchMatchPages: [],
+          searchPageIndex: 0,
+          searchExtracting: true,
+        }));
       }
     },
-    [],
+    [state.viewMode, state.readAloudPageTexts],
   );
 
   const handleCloseSearch = useCallback(() => {
-    setState((prev) => ({ ...prev, showSearch: false, searchQuery: "" }));
-    if (mobileRendererRef.current) {
-      mobileRendererRef.current.clearSearch();
-    }
+    pendingSearchQueryRef.current = null;
+    setState((prev) => ({
+      ...prev,
+      showSearch: false,
+      searchQuery: "",
+      searchMatchPages: [],
+      searchPageIndex: 0,
+      searchExtracting: false,
+      searchMobileCount: 0,
+      searchMobileCurrent: 0,
+    }));
+    mobileRendererRef.current?.clearSearch();
   }, []);
 
-  // ── Read Aloud ───────────────────────────────────────────────────
-  const handleReadAloud = useCallback(() => {
-    if (state.viewMode === "original") {
-      // Switch to mobile view so text can be extracted
-      handleViewModeChange("mobile");
+  const handleSearchNext = useCallback(() => {
+    if (state.viewMode === "mobile") {
+      mobileRendererRef.current?.searchNext();
+      return;
     }
+    if (state.searchMatchPages.length === 0) return;
+    const next = (state.searchPageIndex + 1) % state.searchMatchPages.length;
+    setState((prev) => ({ ...prev, searchPageIndex: next }));
+    setTargetPage(state.searchMatchPages[next]);
+  }, [state.viewMode, state.searchMatchPages, state.searchPageIndex]);
+
+  const handleSearchPrev = useCallback(() => {
+    if (state.viewMode === "mobile") {
+      mobileRendererRef.current?.searchPrev();
+      return;
+    }
+    if (state.searchMatchPages.length === 0) return;
+    const prev =
+      (state.searchPageIndex - 1 + state.searchMatchPages.length) %
+      state.searchMatchPages.length;
+    setState((p) => ({ ...p, searchPageIndex: prev }));
+    setTargetPage(state.searchMatchPages[prev]);
+  }, [state.viewMode, state.searchMatchPages, state.searchPageIndex]);
+
+  // ── Read Aloud ───────────────────────────────────────────────────
+  // Read Aloud is fully decoupled from Mobile View.
+  // PDFTextExtractor (hidden WebView) handles text extraction independently.
+  const handleReadAloud = useCallback(() => {
     setState((prev) => ({ ...prev, readAloudActive: true }));
-  }, [state.viewMode, handleViewModeChange]);
+  }, []);
 
   // ── Chat with File ───────────────────────────────────────────────
   const handleChatWithFile = useCallback(() => {
@@ -445,7 +586,12 @@ export default function PdfViewerScreen() {
   const handleLockFile = useCallback(() => {
     router.push({
       pathname: "/tool-processor",
-      params: { tool: "protect", fileUri: uri, file: name, fileMimeType: "application/pdf" },
+      params: {
+        tool: "protect",
+        fileUri: uri,
+        file: name,
+        fileMimeType: "application/pdf",
+      },
     });
   }, [uri, name]);
 
@@ -453,7 +599,12 @@ export default function PdfViewerScreen() {
   const handleEditFile = useCallback(() => {
     router.push({
       pathname: "/tool-processor",
-      params: { tool: "edit", fileUri: uri, file: name, fileMimeType: "application/pdf" },
+      params: {
+        tool: "edit",
+        fileUri: uri,
+        file: name,
+        fileMimeType: "application/pdf",
+      },
     });
   }, [uri, name]);
 
@@ -509,15 +660,17 @@ export default function PdfViewerScreen() {
 
   // ── Mobile renderer messages ─────────────────────────────────────
   const handleMobileMessage = useCallback((msg: any) => {
-    if (msg.type === "read-aloud-text" && msg.text) {
-      setState((prev) => ({ ...prev, readAloudText: msg.text }));
-    } else if (msg.type === "selection" && msg.text) {
+    if (msg.type === "selection" && msg.text) {
       setState((prev) => ({
         ...prev,
         selectionVisible: true,
         selectionText: msg.text,
+        // Rect is viewport-relative inside the WebView container — no offset needed
         selectionRect: msg.rect ?? null,
-        selectionOffsets: { startOffset: msg.startOffset, endOffset: msg.endOffset },
+        selectionOffsets: {
+          startOffset: msg.startOffset,
+          endOffset: msg.endOffset,
+        },
       }));
     } else if (msg.type === "selection_clear") {
       setState((prev) => ({
@@ -527,21 +680,30 @@ export default function PdfViewerScreen() {
         selectionRect: null,
         selectionOffsets: null,
       }));
+    } else if (msg.type === "search-count") {
+      setState((prev) => ({
+        ...prev,
+        searchMobileCount: msg.count ?? 0,
+        searchMobileCurrent: msg.current ?? 0,
+      }));
     }
   }, []);
 
   // ── Selection toolbar actions ────────────────────────────────────
-  const handleSelectionHighlight = useCallback((colorHex: string) => {
-    const { selectionOffsets, selectionText } = state;
-    if (!selectionOffsets) return;
-    const id = `hl_${Date.now()}`;
-    mobileRendererRef.current?.bridgeHighlight(
-      id,
-      selectionOffsets.startOffset,
-      selectionOffsets.endOffset,
-      colorHex,
-    );
-  }, [state.selectionOffsets, state.selectionText]);
+  const handleSelectionHighlight = useCallback(
+    (colorHex: string) => {
+      const { selectionOffsets, selectionText } = state;
+      if (!selectionOffsets) return;
+      const id = `hl_${Date.now()}`;
+      mobileRendererRef.current?.bridgeHighlight(
+        id,
+        selectionOffsets.startOffset,
+        selectionOffsets.endOffset,
+        colorHex,
+      );
+    },
+    [state.selectionOffsets, state.selectionText],
+  );
 
   const handleSelectionUnderline = useCallback(() => {
     const { selectionOffsets } = state;
@@ -574,10 +736,12 @@ export default function PdfViewerScreen() {
     try {
       const { Share } = await import("react-native");
       await Share.share({ message: state.selectionText });
-    } catch { /* non-critical */ }
+    } catch {
+      /* non-critical */
+    }
   }, [state.selectionText]);
 
-  const handleSelectionAskXumpta = useCallback(() => {
+  const handleSelectionAskAthemi = useCallback(() => {
     if (!state.selectionText) return;
     router.push({ pathname: "/ai", params: { prompt: state.selectionText } });
     setState((prev) => ({ ...prev, selectionVisible: false }));
@@ -638,7 +802,10 @@ export default function PdfViewerScreen() {
             setState((prev) => ({
               ...prev,
               repairing: false,
-              error: err instanceof Error ? err.message : "Repair service unavailable.",
+              error:
+                err instanceof Error
+                  ? err.message
+                  : "Repair service unavailable.",
             }));
           }
           break;
@@ -661,7 +828,12 @@ export default function PdfViewerScreen() {
   // ====================================================================
   if (state.loading && !state.normalizedUri) {
     return (
-      <SafeAreaView style={[styles.container, { backgroundColor: theme.background.primary }]}>
+      <SafeAreaView
+        style={[
+          styles.container,
+          { backgroundColor: theme.background.primary },
+        ]}
+      >
         <Header
           name={name || "PDF"}
           theme={theme}
@@ -675,7 +847,9 @@ export default function PdfViewerScreen() {
         />
         <View style={styles.centerContent}>
           <ActivityIndicator size="large" color={Palette.primary[500]} />
-          <Text style={[styles.loadingText, { color: theme.text.secondary }]}>Preparing PDF...</Text>
+          <Text style={[styles.loadingText, { color: theme.text.secondary }]}>
+            Preparing PDF...
+          </Text>
         </View>
       </SafeAreaView>
     );
@@ -686,7 +860,12 @@ export default function PdfViewerScreen() {
   // ====================================================================
   if (state.passwordRequired) {
     return (
-      <SafeAreaView style={[styles.container, { backgroundColor: theme.background.primary }]}>
+      <SafeAreaView
+        style={[
+          styles.container,
+          { backgroundColor: theme.background.primary },
+        ]}
+      >
         <Header
           name={name || "PDF"}
           theme={theme}
@@ -700,7 +879,9 @@ export default function PdfViewerScreen() {
         />
         <View style={styles.centerContent}>
           <MaterialIcons name="lock" size={64} color={Palette.primary[500]} />
-          <Text style={[styles.errorTitle, { color: theme.text.primary }]}>Password Required</Text>
+          <Text style={[styles.errorTitle, { color: theme.text.primary }]}>
+            Password Required
+          </Text>
           <Text style={[styles.errorMessage, { color: theme.text.secondary }]}>
             This PDF is password protected. Enter the password to view it.
           </Text>
@@ -722,18 +903,41 @@ export default function PdfViewerScreen() {
           />
           <View style={styles.errorActions}>
             <Pressable
-              style={[styles.retryButton, { backgroundColor: Palette.primary[500] }]}
+              style={[
+                styles.retryButton,
+                { backgroundColor: Palette.primary[500] },
+              ]}
               onPress={handlePasswordSubmit}
             >
-              <MaterialIcons name="lock-open" size={20} color={Palette.white} style={{ marginRight: Spacing.sm }} />
+              <MaterialIcons
+                name="lock-open"
+                size={20}
+                color={Palette.white}
+                style={{ marginRight: Spacing.sm }}
+              />
               <Text style={styles.retryButtonText}>Unlock</Text>
             </Pressable>
             <Pressable
-              style={[styles.externalButton, { borderColor: theme.border.default }]}
+              style={[
+                styles.externalButton,
+                { borderColor: theme.border.default },
+              ]}
               onPress={handleOpenWithSystem}
             >
-              <MaterialIcons name="open-in-new" size={20} color={theme.text.primary} style={{ marginRight: Spacing.sm }} />
-              <Text style={[styles.externalButtonText, { color: theme.text.primary }]}>Open Externally</Text>
+              <MaterialIcons
+                name="open-in-new"
+                size={20}
+                color={theme.text.primary}
+                style={{ marginRight: Spacing.sm }}
+              />
+              <Text
+                style={[
+                  styles.externalButtonText,
+                  { color: theme.text.primary },
+                ]}
+              >
+                Open Externally
+              </Text>
             </Pressable>
           </View>
         </View>
@@ -747,7 +951,12 @@ export default function PdfViewerScreen() {
   if (state.error) {
     if (state.showRecovery) {
       return (
-        <SafeAreaView style={[styles.container, { backgroundColor: theme.background.primary }]}>
+        <SafeAreaView
+          style={[
+            styles.container,
+            { backgroundColor: theme.background.primary },
+          ]}
+        >
           <Header
             name={name || "PDF"}
             theme={theme}
@@ -774,7 +983,12 @@ export default function PdfViewerScreen() {
     }
 
     return (
-      <SafeAreaView style={[styles.container, { backgroundColor: theme.background.primary }]}>
+      <SafeAreaView
+        style={[
+          styles.container,
+          { backgroundColor: theme.background.primary },
+        ]}
+      >
         <Header
           name={name || "PDF"}
           theme={theme}
@@ -787,17 +1001,54 @@ export default function PdfViewerScreen() {
           mobileLoading={state.mobileLoading}
         />
         <View style={styles.centerContent}>
-          <MaterialIcons name="error-outline" size={64} color={Palette.error.main} />
-          <Text style={[styles.errorTitle, { color: theme.text.primary }]}>Failed to load PDF</Text>
-          <Text style={[styles.errorMessage, { color: theme.text.secondary }]}>{state.error}</Text>
+          <MaterialIcons
+            name="error-outline"
+            size={64}
+            color={Palette.error.main}
+          />
+          <Text style={[styles.errorTitle, { color: theme.text.primary }]}>
+            Failed to load PDF
+          </Text>
+          <Text style={[styles.errorMessage, { color: theme.text.secondary }]}>
+            {state.error}
+          </Text>
           <View style={styles.errorActions}>
-            <Pressable style={[styles.retryButton, { backgroundColor: Palette.primary[500] }]} onPress={handleRetry}>
-              <MaterialIcons name="refresh" size={20} color={Palette.white} style={{ marginRight: Spacing.sm }} />
+            <Pressable
+              style={[
+                styles.retryButton,
+                { backgroundColor: Palette.primary[500] },
+              ]}
+              onPress={handleRetry}
+            >
+              <MaterialIcons
+                name="refresh"
+                size={20}
+                color={Palette.white}
+                style={{ marginRight: Spacing.sm }}
+              />
               <Text style={styles.retryButtonText}>Try Again</Text>
             </Pressable>
-            <Pressable style={[styles.externalButton, { borderColor: theme.border.default }]} onPress={handleOpenWithSystem}>
-              <MaterialIcons name="open-in-new" size={20} color={theme.text.primary} style={{ marginRight: Spacing.sm }} />
-              <Text style={[styles.externalButtonText, { color: theme.text.primary }]}>Open Externally</Text>
+            <Pressable
+              style={[
+                styles.externalButton,
+                { borderColor: theme.border.default },
+              ]}
+              onPress={handleOpenWithSystem}
+            >
+              <MaterialIcons
+                name="open-in-new"
+                size={20}
+                color={theme.text.primary}
+                style={{ marginRight: Spacing.sm }}
+              />
+              <Text
+                style={[
+                  styles.externalButtonText,
+                  { color: theme.text.primary },
+                ]}
+              >
+                Open Externally
+              </Text>
             </Pressable>
           </View>
         </View>
@@ -818,41 +1069,108 @@ export default function PdfViewerScreen() {
     >
       {/* ── Header (hidden in fullscreen) ──────────────────────── */}
       {!state.fullscreen && (
-        <Header
-          name={name || "PDF"}
-          theme={theme}
-          onClose={handleClose}
-          pageInfo={state.pageInfo.total > 0 ? state.pageInfo : undefined}
-          onPagePress={() => setState((prev) => ({ ...prev, showGoToPage: true }))}
-          viewMode={state.viewMode}
-          onViewModeChange={handleViewModeChange}
-          readingMode={state.readingMode}
-          onToggleReadingMode={toggleReadingMode}
-          onMenuPress={() => setState((prev) => ({ ...prev, showMenu: true }))}
-          mobileLoading={state.mobileLoading}
-        />
+        <View onLayout={(e) => setHeaderHeight(e.nativeEvent.layout.height)}>
+          <Header
+            name={name || "PDF"}
+            theme={theme}
+            onClose={handleClose}
+            pageInfo={state.pageInfo.total > 0 ? state.pageInfo : undefined}
+            onPagePress={() =>
+              setState((prev) => ({ ...prev, showGoToPage: true }))
+            }
+            viewMode={state.viewMode}
+            onViewModeChange={handleViewModeChange}
+            readingMode={state.readingMode}
+            onToggleReadingMode={toggleReadingMode}
+            onMenuPress={() => setState((prev) => ({ ...prev, showMenu: true }))}
+            mobileLoading={state.mobileLoading}
+          />
+        </View>
       )}
 
-      {/* ── Search bar ─────────────────────────────────────────── */}
-      {state.showSearch && isMobileView && (
+      {/* ── Search bar — works in both original and mobile view ─── */}
+      {state.showSearch && (
         <View
           style={[
             styles.searchBar,
-            { backgroundColor: theme.surface.primary, borderBottomColor: theme.border.light },
+            {
+              backgroundColor: theme.surface.primary,
+              borderBottomColor: theme.border.light,
+            },
           ]}
         >
-          <MaterialIcons name="search" size={20} color={theme.text.secondary} />
+          {state.searchExtracting ? (
+            <ActivityIndicator
+              size="small"
+              color={Palette.primary[500]}
+              style={{ marginRight: 4 }}
+            />
+          ) : (
+            <MaterialIcons name="search" size={20} color={theme.text.secondary} />
+          )}
           <TextInput
             value={state.searchQuery}
             onChangeText={handleSearchQuery}
-            placeholder="Search in document..."
+            placeholder={
+              state.searchExtracting
+                ? "Extracting text…"
+                : "Search in document..."
+            }
             placeholderTextColor={theme.text.secondary}
             autoFocus
             style={[styles.searchInput, { color: theme.text.primary }]}
             returnKeyType="search"
+            blurOnSubmit={false}
           />
+          {/* Match indicator */}
+          {state.searchQuery.length > 0 && !state.searchExtracting && (
+            <Text style={[styles.searchCount, { color: theme.text.secondary }]}>
+              {isMobileView
+                ? state.searchMobileCount > 0
+                  ? `${state.searchMobileCurrent}/${state.searchMobileCount}`
+                  : "0 results"
+                : state.searchMatchPages.length > 0
+                  ? `${state.searchPageIndex + 1}/${state.searchMatchPages.length} pg`
+                  : "0 results"}
+            </Text>
+          )}
+          {/* Navigation arrows */}
+          {state.searchQuery.length > 0 && !state.searchExtracting && (
+            (isMobileView
+              ? state.searchMobileCount > 1
+              : state.searchMatchPages.length > 1) && (
+              <>
+                <Pressable
+                  onPress={handleSearchPrev}
+                  style={styles.searchClose}
+                  hitSlop={8}
+                >
+                  <MaterialIcons
+                    name="keyboard-arrow-up"
+                    size={22}
+                    color={theme.text.primary}
+                  />
+                </Pressable>
+                <Pressable
+                  onPress={handleSearchNext}
+                  style={styles.searchClose}
+                  hitSlop={8}
+                >
+                  <MaterialIcons
+                    name="keyboard-arrow-down"
+                    size={22}
+                    color={theme.text.primary}
+                  />
+                </Pressable>
+              </>
+            )
+          )}
           <Pressable onPress={handleCloseSearch} style={styles.searchClose}>
-            <MaterialIcons name="close" size={20} color={theme.text.secondary} />
+            <MaterialIcons
+              name="close"
+              size={20}
+              color={theme.text.secondary}
+            />
           </Pressable>
         </View>
       )}
@@ -861,28 +1179,13 @@ export default function PdfViewerScreen() {
       {state.normalizedUri && (
         <View style={{ flex: 1 }}>
           {isMobileView ? (
-            <>
-              <MobileRenderer
-                ref={mobileRendererRef}
-                html={state.mobileHtml}
-                loading={state.mobileLoading}
-                error={state.mobileError}
-                onMessage={handleMobileMessage}
-              />
-              {/* Selection toolbar — WPS-style, shown on text selection */}
-              <SelectionToolbar
-                visible={state.selectionVisible}
-                selectedText={state.selectionText}
-                rect={state.selectionRect}
-                onHighlight={handleSelectionHighlight}
-                onUnderline={handleSelectionUnderline}
-                onStrikethrough={handleSelectionStrikethrough}
-                onCopy={handleSelectionCopy}
-                onShare={handleSelectionShare}
-                onAskXumpta={handleSelectionAskXumpta}
-                onDismiss={handleSelectionDismiss}
-              />
-            </>
+            <MobileRenderer
+              ref={mobileRendererRef}
+              html={state.mobileHtml}
+              loading={state.mobileLoading}
+              error={state.mobileError}
+              onMessage={handleMobileMessage}
+            />
           ) : (
             <>
               <PdfViewer
@@ -905,19 +1208,46 @@ export default function PdfViewerScreen() {
                 onError={handlePdfError}
               />
               {state.fullscreen && (
-                <Pressable style={styles.fullscreenTapArea} onPress={handleShowFullscreenIndicator} />
+                <Pressable
+                  style={styles.fullscreenTapArea}
+                  onPress={handleShowFullscreenIndicator}
+                />
               )}
               {/* Loading overlay while generating mobile view */}
               {state.mobileLoading && (
                 <View style={styles.mobileLoadingOverlay}>
                   <ActivityIndicator size="large" color={Palette.white} />
-                  <Text style={styles.mobileLoadingText}>Generating Mobile View…</Text>
+                  <Text style={styles.mobileLoadingText}>
+                    Generating Mobile View…
+                  </Text>
                 </View>
               )}
             </>
           )}
         </View>
       )}
+
+      {/* ── Selection toolbar — rendered at SafeAreaView level so it always
+           appears above the WebView on Android (avoids z-index layer issues).
+           Rect y is offset by headerHeight because the toolbar is positioned
+           relative to the SafeAreaView, but the rect is relative to the WebView
+           container (which starts below the header). */}
+      <SelectionToolbar
+        visible={state.selectionVisible && isMobileView}
+        selectedText={state.selectionText}
+        rect={
+          state.selectionRect
+            ? { ...state.selectionRect, y: state.selectionRect.y + headerHeight }
+            : null
+        }
+        onHighlight={handleSelectionHighlight}
+        onUnderline={handleSelectionUnderline}
+        onStrikethrough={handleSelectionStrikethrough}
+        onCopy={handleSelectionCopy}
+        onShare={handleSelectionShare}
+        onAskAthemi={handleSelectionAskAthemi}
+        onDismiss={handleSelectionDismiss}
+      />
 
       {/* ── Fullscreen exit hint ───────────────────────────────── */}
       {state.fullscreen && showFullscreenIndicator && (
@@ -949,7 +1279,9 @@ export default function PdfViewerScreen() {
           totalPages={state.pageInfo.total || 1}
           currentPage={state.pageInfo.current}
           theme={theme}
-          onClose={() => setState((prev) => ({ ...prev, showThumbnails: false }))}
+          onClose={() =>
+            setState((prev) => ({ ...prev, showThumbnails: false }))
+          }
           onSelectPage={handleGoToPage}
         />
       )}
@@ -971,12 +1303,61 @@ export default function PdfViewerScreen() {
         isStarred={state.isStarred}
       />
 
+      {/* ── PDF Text Extractor (hidden) — feeds Read Aloud AND Search,
+           fully independent of Mobile View. Activates when either feature
+           needs text; extracted texts are cached for reuse. */}
+      <PDFTextExtractor
+        uri={state.normalizedUri ?? null}
+        active={state.readAloudActive || state.searchExtracting}
+        onPageTexts={(pageTexts) => {
+          // Resolve any pending search that triggered this extraction
+          const pending = pendingSearchQueryRef.current;
+          pendingSearchQueryRef.current = null;
+
+          let matchPages: number[] = [];
+          if (pending && pending.trim()) {
+            const q = pending.toLowerCase();
+            matchPages = pageTexts.reduce<number[]>((acc, text, i) => {
+              if (text.toLowerCase().includes(q)) acc.push(i + 1);
+              return acc;
+            }, []);
+          }
+
+          setState((prev) => ({
+            ...prev,
+            readAloudPageTexts: pageTexts,
+            searchExtracting: false,
+            ...(pending != null
+              ? { searchMatchPages: matchPages, searchPageIndex: 0 }
+              : {}),
+          }));
+
+          if (matchPages.length > 0) setTargetPage(matchPages[0]);
+        }}
+        onError={(msg) => {
+          if (__DEV__) console.warn("[PDFTextExtractor]", msg);
+          // Clear extraction state so the UI doesn't stay in loading forever
+          pendingSearchQueryRef.current = null;
+          setState((prev) => ({ ...prev, searchExtracting: false }));
+        }}
+      />
+
       {/* ── Read Aloud controller ──────────────────────────────── */}
       <ReadAloudController
-        text={state.readAloudText}
+        pageTexts={
+          state.readAloudPageTexts.length > 0
+            ? state.readAloudPageTexts
+            : undefined
+        }
         colorScheme={colorScheme}
         active={state.readAloudActive}
-        onRequestClose={() => setState((prev) => ({ ...prev, readAloudActive: false }))}
+        onRequestClose={() =>
+          setState((prev) => ({
+            ...prev,
+            readAloudActive: false,
+            readAloudPageTexts: [],
+          }))
+        }
         documentId={uri}
         documentName={name}
       />
@@ -1018,7 +1399,10 @@ function Header({
     <View
       style={[
         styles.header,
-        { backgroundColor: theme.surface.primary, borderBottomColor: theme.border.light },
+        {
+          backgroundColor: theme.surface.primary,
+          borderBottomColor: theme.border.light,
+        },
       ]}
     >
       {/* ── Left: Back / Close ──────────────────────────────────── */}
@@ -1027,7 +1411,10 @@ function Header({
       </Pressable>
 
       {/* ── Center: Filename + page indicator ──────────────────── */}
-      <Pressable style={styles.headerCenter} onPress={pageInfo ? onPagePress : undefined}>
+      <Pressable
+        style={styles.headerCenter}
+        onPress={pageInfo ? onPagePress : undefined}
+      >
         <Text
           style={[styles.headerTitle, { color: theme.text.primary }]}
           numberOfLines={1}
@@ -1035,13 +1422,23 @@ function Header({
         >
           {name}
           {pageInfo ? (
-            <Text style={{ color: theme.text.secondary, fontWeight: Typography.weight.regular }}>
-              {" "}· Page {pageInfo.current}/{pageInfo.total}
+            <Text
+              style={{
+                color: theme.text.secondary,
+                fontWeight: Typography.weight.regular,
+              }}
+            >
+              {" "}
+              · Page {pageInfo.current}/{pageInfo.total}
             </Text>
           ) : null}
         </Text>
         {pageInfo && (
-          <Text style={[styles.headerPageHint, { color: Palette.primary[500] }]}>Tap to jump ▾</Text>
+          <Text
+            style={[styles.headerPageHint, { color: Palette.primary[500] }]}
+          >
+            Tap to jump ▾
+          </Text>
         )}
       </Pressable>
 
@@ -1055,7 +1452,11 @@ function Header({
         />
 
         {/* Continuous / Facing toggle */}
-        <Pressable onPress={onToggleReadingMode} style={styles.headerButton} hitSlop={6}>
+        <Pressable
+          onPress={onToggleReadingMode}
+          style={styles.headerButton}
+          hitSlop={6}
+        >
           <MaterialIcons
             name={readingMode === "continuous" ? "view-day" : "view-carousel"}
             size={22}
@@ -1064,8 +1465,16 @@ function Header({
         </Pressable>
 
         {/* Three dots menu */}
-        <Pressable onPress={onMenuPress} style={styles.headerButton} hitSlop={6}>
-          <MaterialIcons name="more-vert" size={24} color={theme.text.primary} />
+        <Pressable
+          onPress={onMenuPress}
+          style={styles.headerButton}
+          hitSlop={6}
+        >
+          <MaterialIcons
+            name="more-vert"
+            size={24}
+            color={theme.text.primary}
+          />
         </Pressable>
       </View>
     </View>
@@ -1228,5 +1637,9 @@ const styles = StyleSheet.create({
   },
   searchClose: {
     padding: 4,
+  },
+  searchCount: {
+    fontSize: 12,
+    marginHorizontal: 4,
   },
 });

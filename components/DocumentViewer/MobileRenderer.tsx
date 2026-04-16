@@ -327,18 +327,13 @@ export const MobileRenderer = forwardRef<MobileRendererHandle, Props>(
           // Webview render error — surface it
           onMessage?.({ type: "ready" } as any);
         }}
-        // Allow the initial HTML load + CDN resources, prevent external navigation
+        // All vendor scripts are inlined into the HTML, so we never need
+        // network access. Allow only the initial data: / about:blank load
+        // and block every other navigation — this enforces fully offline
+        // operation even if some future edit reintroduces a CDN URL.
         onShouldStartLoadWithRequest={(req) => {
-          // Allow initial about:blank / data: loads
           if (req.url === "about:blank" || req.url.startsWith("data:"))
             return true;
-          // Allow CDN resources (pdf.js, mammoth.js)
-          if (
-            req.url.startsWith("https://cdnjs.cloudflare.com/") ||
-            req.url.startsWith("https://cdn.jsdelivr.net/")
-          )
-            return true;
-          // Block everything else
           return !req.isTopFrame;
         }}
         scrollEnabled
@@ -350,8 +345,8 @@ export const MobileRenderer = forwardRef<MobileRendererHandle, Props>(
         // Performance
         cacheEnabled
         allowsBackForwardNavigationGestures={false}
-        // Allow loading CDN scripts from https when HTML is loaded inline
-        mixedContentMode="always"
+        // Never allow mixed-content loads — all assets are inlined.
+        mixedContentMode="never"
         allowsInlineMediaPlayback
       />
     );

@@ -31,6 +31,7 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   TouchableOpacity,
   View,
   useColorScheme,
@@ -93,11 +94,16 @@ interface WVTocMsg {
 interface WVOtherMsg {
   type: "webview-ready" | "end-of-book" | "start-of-book";
 }
+interface WVSearchMsg {
+  type: "search-result";
+  data: { count: number; current: number };
+}
 type WVMessage =
   | WVReadyMsg
   | WVErrorMsg
   | WVLocationMsg
   | WVTocMsg
+  | WVSearchMsg
   | WVOtherMsg;
 
 // ============================================================================
@@ -135,6 +141,14 @@ export default function EpubViewerScreen() {
   );
   const [webViewReady, setWebViewReady] = useState(false);
   const [dataReady, setDataReady] = useState(false);
+
+  // ── Search ──────────────────────────────────────────────────────────
+  const [showSearch, setShowSearch] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchMatchCount, setSearchMatchCount] = useState(0);
+  const [searchCurrent, setSearchCurrent] = useState(0);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // App settings (loaded once on init)
   const [readAloudEnabled, setReadAloudEnabled] = useState(true);
@@ -387,6 +401,53 @@ export default function EpubViewerScreen() {
             }
           },{passive:true});
 
+          // Highlight search matches in each chapter after it renders
+          rendition.on('rendered',function(){
+            if(!__srQuery) return;
+            setTimeout(function(){
+              try{
+                var contents=rendition.getContents();
+                if(!contents||!contents.length) return;
+                var doc=contents[0].document;
+                if(!doc||!doc.body) return;
+                // Clear old search highlights
+                var old=doc.querySelectorAll('[data-epub-sr]');
+                for(var i=0;i<old.length;i++){
+                  var el=old[i];var p=el.parentNode;
+                  if(p){p.replaceChild(doc.createTextNode(el.textContent||''),el);p.normalize();}
+                }
+                // Walk text nodes and wrap matches
+                var q=__srQuery;
+                var walker=doc.createTreeWalker(doc.body,NodeFilter.SHOW_TEXT,null,false);
+                var nodes=[];var n;
+                while((n=walker.nextNode())) nodes.push(n);
+                var isFirst=true;
+                nodes.forEach(function(nd){
+                  var text=nd.nodeValue||'';var lower=text.toLowerCase();var idx=lower.indexOf(q);
+                  if(idx===-1||!nd.parentNode) return;
+                  var frag=doc.createDocumentFragment();var last=0;
+                  while(idx!==-1){
+                    if(idx>last) frag.appendChild(doc.createTextNode(text.substring(last,idx)));
+                    var sp=doc.createElement('span');
+                    sp.setAttribute('data-epub-sr','1');
+                    sp.style.backgroundColor=isFirst?'#FF6F00':'#FFEB3B';
+                    sp.style.color=isFirst?'#fff':'#000';
+                    sp.style.borderRadius='2px';
+                    sp.style.padding='0 1px';
+                    sp.textContent=text.substring(idx,idx+q.length);
+                    frag.appendChild(sp);isFirst=false;
+                    last=idx+q.length;idx=lower.indexOf(q,last);
+                  }
+                  if(last<text.length) frag.appendChild(doc.createTextNode(text.substring(last)));
+                  nd.parentNode.replaceChild(frag,nd);
+                });
+                // Scroll to first highlight
+                var first=doc.querySelector('[data-epub-sr]');
+                if(first) first.scrollIntoView({behavior:'smooth',block:'center'});
+              }catch(e){}
+            },150);
+          });
+
           // Track location changes
           rendition.on('relocated',function(location){
             if(!location||!location.start) return;
@@ -432,6 +493,70 @@ export default function EpubViewerScreen() {
         setTimeout(waitForBridge,50);
       }
     })();
+
+    // ── Full-text search across all spine sections ─────────────────
+    var __srResults=[];var __srIndex=0;var __srQuery='';
+
+    function epubSearch(query){
+      __srQuery=query?query.toLowerCase():'';
+      __srResults=[];__srIndex=0;
+      if(!__srQuery||!book){sendMsg('search-result',{count:0,current:0});return;}
+      var sections=[];book.spine.each(function(s){sections.push(s);});
+      var pending=sections.length;
+      if(pending===0){sendMsg('search-result',{count:0,current:0});return;}
+      sections.forEach(function(section,idx){
+        section.load(book.load.bind(book)).then(function(doc){
+          var text='';
+          try{text=(doc.documentElement||doc.body||{}).textContent||'';}catch(e){}
+          if(text.toLowerCase().indexOf(__srQuery)!==-1){
+            __srResults.push({href:section.href,index:idx});
+          }
+          pending--;
+          if(pending===0){
+            __srResults.sort(function(a,b){return a.index-b.index;});
+            if(__srResults.length>0){rendition.display(__srResults[0].href);}
+            sendMsg('search-result',{count:__srResults.length,current:__srResults.length>0?1:0});
+          }
+        }).catch(function(){
+          pending--;
+          if(pending===0){
+            __srResults.sort(function(a,b){return a.index-b.index;});
+            if(__srResults.length>0){rendition.display(__srResults[0].href);}
+            sendMsg('search-result',{count:__srResults.length,current:__srResults.length>0?1:0});
+          }
+        });
+      });
+    }
+    function epubSearchNext(){
+      if(__srResults.length===0)return;
+      __srIndex=(__srIndex+1)%__srResults.length;
+      rendition.display(__srResults[__srIndex].href);
+      sendMsg('search-result',{count:__srResults.length,current:__srIndex+1});
+    }
+    function epubSearchPrev(){
+      if(__srResults.length===0)return;
+      __srIndex=(__srIndex-1+__srResults.length)%__srResults.length;
+      rendition.display(__srResults[__srIndex].href);
+      sendMsg('search-result',{count:__srResults.length,current:__srIndex+1});
+    }
+    function epubClearSearch(){
+      __srResults=[];__srIndex=0;__srQuery='';
+      // Clear highlights in the currently displayed chapter
+      try{
+        var contents=rendition.getContents();
+        if(contents&&contents.length){
+          var doc=contents[0].document;
+          if(doc&&doc.body){
+            var old=doc.querySelectorAll('[data-epub-sr]');
+            for(var i=0;i<old.length;i++){
+              var el=old[i];var p=el.parentNode;
+              if(p){p.replaceChild(doc.createTextNode(el.textContent||''),el);p.normalize();}
+            }
+          }
+        }
+      }catch(e){}
+      sendMsg('search-result',{count:0,current:0});
+    }
 
     // Global error handler for debugging
     window.onerror=function(msg){
@@ -506,6 +631,14 @@ export default function EpubViewerScreen() {
           case "end-of-book":
           case "start-of-book":
             break;
+
+          case "search-result": {
+            const sr = (msg as WVSearchMsg).data;
+            setSearchMatchCount(sr.count);
+            setSearchCurrent(sr.current);
+            setSearchLoading(false);
+            break;
+          }
         }
       } catch {
         // ignore
@@ -565,6 +698,51 @@ export default function EpubViewerScreen() {
     },
     [settings],
   );
+
+  // ── Search handlers ──────────────────────────────────────────────
+  const handleOpenSearch = useCallback(() => {
+    setShowSearch(true);
+    setSearchQuery("");
+    setSearchMatchCount(0);
+    setSearchCurrent(0);
+    setSearchLoading(false);
+  }, []);
+
+  const handleSearchQuery = useCallback((text: string) => {
+    setSearchQuery(text);
+    if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
+    if (!text.trim()) {
+      setSearchMatchCount(0);
+      setSearchCurrent(0);
+      setSearchLoading(false);
+      webViewRef.current?.injectJavaScript(`epubClearSearch();true;`);
+      return;
+    }
+    searchDebounceRef.current = setTimeout(() => {
+      setSearchLoading(true);
+      webViewRef.current?.injectJavaScript(
+        `epubSearch(${JSON.stringify(text)});true;`,
+      );
+    }, 400);
+  }, []);
+
+  const handleSearchNext = useCallback(() => {
+    webViewRef.current?.injectJavaScript(`epubSearchNext();true;`);
+  }, []);
+
+  const handleSearchPrev = useCallback(() => {
+    webViewRef.current?.injectJavaScript(`epubSearchPrev();true;`);
+  }, []);
+
+  const handleCloseSearch = useCallback(() => {
+    if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
+    setShowSearch(false);
+    setSearchQuery("");
+    setSearchMatchCount(0);
+    setSearchCurrent(0);
+    setSearchLoading(false);
+    webViewRef.current?.injectJavaScript(`epubClearSearch();true;`);
+  }, []);
 
   // ============================================================================
   // RENDER – Error (before WebView loaded anything)
@@ -660,6 +838,7 @@ export default function EpubViewerScreen() {
         onToggleToc={() => setShowToc(true)}
         onToggleSettings={() => setShowSettings(true)}
         onReadAloud={readAloudEnabled ? () => setShowReadAloud(true) : undefined}
+        onSearchText={handleOpenSearch}
         onChatWithDocument={() => {
           const docUri = normalizedUriRef.current || uri;
           if (!docUri) return;
@@ -673,6 +852,55 @@ export default function EpubViewerScreen() {
           });
         }}
       />
+
+      {/* ── Search bar ──────────────────────────────────────────────── */}
+      {showSearch && (
+        <View
+          style={[
+            styles.searchBar,
+            {
+              backgroundColor: theme.surface.primary,
+              borderBottomColor: theme.border.light,
+            },
+          ]}
+        >
+          {searchLoading ? (
+            <ActivityIndicator size="small" color={Palette.primary[500]} style={{ marginRight: 4 }} />
+          ) : (
+            <MaterialIcons name="search" size={20} color={theme.text.secondary} />
+          )}
+          <TextInput
+            value={searchQuery}
+            onChangeText={handleSearchQuery}
+            placeholder={searchLoading ? "Searching chapters…" : "Search in book..."}
+            placeholderTextColor={theme.text.secondary}
+            autoFocus
+            style={[styles.searchInput, { color: theme.text.primary }]}
+            returnKeyType="search"
+            blurOnSubmit={false}
+          />
+          {searchQuery.length > 0 && !searchLoading && (
+            <Text style={[styles.searchCount, { color: theme.text.secondary }]}>
+              {searchMatchCount > 0
+                ? `${searchCurrent}/${searchMatchCount} ch`
+                : "0 results"}
+            </Text>
+          )}
+          {searchMatchCount > 1 && (
+            <>
+              <Pressable onPress={handleSearchPrev} style={styles.searchBtn} hitSlop={8}>
+                <MaterialIcons name="keyboard-arrow-up" size={22} color={theme.text.primary} />
+              </Pressable>
+              <Pressable onPress={handleSearchNext} style={styles.searchBtn} hitSlop={8}>
+                <MaterialIcons name="keyboard-arrow-down" size={22} color={theme.text.primary} />
+              </Pressable>
+            </>
+          )}
+          <Pressable onPress={handleCloseSearch} style={styles.searchBtn}>
+            <MaterialIcons name="close" size={20} color={theme.text.secondary} />
+          </Pressable>
+        </View>
+      )}
 
       {/* Persistent loading overlay while epub.js parses */}
       {loading && (
@@ -768,6 +996,7 @@ interface HeaderProps {
   onToggleSettings: () => void;
   showTocButton?: boolean;
   onReadAloud?: () => void;
+  onSearchText?: () => void;
   onChatWithDocument?: () => void;
 }
 
@@ -781,6 +1010,7 @@ function Header({
   onToggleSettings,
   showTocButton = true,
   onReadAloud,
+  onSearchText,
   onChatWithDocument,
 }: HeaderProps) {
   const [showOverflow, setShowOverflow] = React.useState(false);
@@ -865,6 +1095,22 @@ function Header({
               },
             ]}
           >
+            {/* Search Text */}
+            {onSearchText && (
+              <Pressable
+                style={styles.overflowItem}
+                onPress={() => {
+                  setShowOverflow(false);
+                  onSearchText();
+                }}
+              >
+                <MaterialIcons name="search" size={20} color={theme.text.primary} />
+                <Text style={[styles.overflowLabel, { color: theme.text.primary }]}>
+                  Search Text
+                </Text>
+              </Pressable>
+            )}
+
             {/* Read Aloud */}
             {onReadAloud && (
               <Pressable
@@ -1216,6 +1462,27 @@ function SettingsModal({
 // ============================================================================
 const styles = StyleSheet.create({
   container: { flex: 1 },
+  // Search bar
+  searchBar: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderBottomWidth: 1,
+    gap: 6,
+  },
+  searchInput: {
+    flex: 1,
+    fontSize: 15,
+    paddingVertical: 4,
+  },
+  searchCount: {
+    fontSize: 12,
+    marginHorizontal: 4,
+  },
+  searchBtn: {
+    padding: 4,
+  },
   // Header
   header: {
     flexDirection: "row",

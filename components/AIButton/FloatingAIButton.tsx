@@ -1,7 +1,7 @@
 /**
  * FloatingAIButton
  *
- * A global floating action button for quick xumpta access, using the techy "/x"
+ * A global floating action button for quick athemi access, using the techy "/a"
  * logo. Features a static multi-tone tech-color aura ring around the logo.
  *
  * No animations — clean, static, polished look.
@@ -14,9 +14,10 @@ import { GradientView } from "@/components/GradientView";
 import { colors as appColors } from "@/constants/theme";
 import { usePathname, useRouter } from "expo-router";
 import React from "react";
-import { Platform, StyleSheet, TouchableOpacity, View } from "react-native";
+import { StyleSheet, TouchableOpacity, View } from "react-native";
 
 import AILogoIcon from "./AILogoIcon";
+import { CircleRing } from "./CircleRing";
 
 // ─── Layout constants ───────────────────────────────────────────────────────
 const BUTTON_SIZE = 36;
@@ -24,6 +25,7 @@ const RING_INSET = 4;
 const RING_SIZE = BUTTON_SIZE + RING_INSET * 2; // 44
 const INNER_SIZE = BUTTON_SIZE - RING_INSET * 2; // 28
 const GLOW_SIZE = BUTTON_SIZE + 28; // 64
+const RING_STROKE = (RING_SIZE - INNER_SIZE) / 2; // 8 — ring thickness
 
 // ─── Static Tech Colors ────────────────────────────────────────────────────
 const NEON_GREEN = "#4dff91";
@@ -36,8 +38,8 @@ export default function FloatingAIButton() {
   const router = useRouter();
   const pathname = usePathname();
 
-  // ── Visibility: all tab screens except Home ────────────────────────────
-  const allowedPaths = ["/tools", "/library", "/download"];
+  // ── Visibility: all tab screens except Home, plus the Folders screen ─
+  const allowedPaths = ["/tools", "/library", "/download", "/folders"];
   const isVisible = allowedPaths.some(
     (p) => pathname === p || pathname === `/(tabs)${p}`,
   );
@@ -48,25 +50,27 @@ export default function FloatingAIButton() {
 
   return (
     <View style={styles.container} pointerEvents="box-none">
-      {/* ── Ring A: primary static gradient ───────────────────────── */}
-      <View style={styles.ringOuter}>
-        <GradientView
-          colors={[NEON_GREEN, CYAN, ELECTRIC_BLUE, MAGENTA, NEON_GREEN]}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-          style={styles.ringGradient}
-        />
-      </View>
+      {/* ── Ring A: primary circle gradient ──────────────────────── */}
+      <CircleRing
+        size={RING_SIZE}
+        strokeWidth={RING_STROKE}
+        opacity={0.9}
+        colors={[NEON_GREEN, CYAN, ELECTRIC_BLUE, MAGENTA, NEON_GREEN]}
+        gradientStart={{ x: 0, y: 0 }}
+        gradientEnd={{ x: 1, y: 1 }}
+        gradientId="fab_ring_a"
+      />
 
-      {/* ── Ring B: secondary static gradient (slightly transparent) ─ */}
-      <View style={[styles.ringOuter, { opacity: 0.5 }]}>
-        <GradientView
-          colors={[CYAN, NEON_GREEN, ELECTRIC_BLUE, CYAN]}
-          start={{ x: 1, y: 0 }}
-          end={{ x: 0, y: 1 }}
-          style={styles.ringGradient}
-        />
-      </View>
+      {/* ── Ring B: secondary circle gradient (softer) ────────────── */}
+      <CircleRing
+        size={RING_SIZE}
+        strokeWidth={RING_STROKE}
+        opacity={0.5}
+        colors={[CYAN, NEON_GREEN, ELECTRIC_BLUE, CYAN]}
+        gradientStart={{ x: 1, y: 0 }}
+        gradientEnd={{ x: 0, y: 1 }}
+        gradientId="fab_ring_b"
+      />
 
       {/* ── Inner mask (app header gradient) ─────────────────────── */}
       <View style={styles.innerMask} pointerEvents="none">
@@ -87,7 +91,7 @@ export default function FloatingAIButton() {
         style={styles.hitArea}
         activeOpacity={0.8}
         onPress={() => router.push("/ai")}
-        accessibilityLabel="Open xumpta"
+        accessibilityLabel="Open athemi"
         accessibilityRole="button"
         hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
       >
@@ -109,31 +113,6 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     zIndex: 9999,
     elevation: 20,
-  },
-
-  ringOuter: {
-    position: "absolute",
-    width: RING_SIZE,
-    height: RING_SIZE,
-    borderRadius: RING_SIZE / 2,
-    overflow: "hidden",
-    opacity: 0.9,
-    ...Platform.select({
-      ios: {
-        shadowColor: NEON_GREEN,
-        shadowOffset: { width: 0, height: 0 },
-        shadowOpacity: 0.35,
-        shadowRadius: 4,
-      },
-      android: {
-        elevation: 6,
-      },
-    }),
-  },
-
-  ringGradient: {
-    flex: 1,
-    borderRadius: RING_SIZE / 2,
   },
 
   innerMask: {

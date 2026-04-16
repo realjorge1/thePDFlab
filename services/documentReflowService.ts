@@ -1,15 +1,19 @@
 /**
  * Document Reflow Service — FULLY OFFLINE
  * Generates self-contained reflow HTML that runs entirely inside the WebView.
- * PDF text extraction uses pdf.js (CDN-cached).
- * DOCX conversion uses Mammoth.js (CDN-cached, same as the original viewer).
- * No backend server required.
+ * PDF text extraction uses pdf.js, bundled from assets/vendor (no CDN).
+ * DOCX conversion uses Mammoth.js, bundled from assets/vendor (no CDN).
  */
 import type {
     ReaderSettings,
     ReflowResponse,
 } from "@/src/types/document-viewer.types";
 import * as FileSystem from "expo-file-system/legacy";
+import { loadMobileViewVendorScripts } from "./mobileViewVendorLoader";
+
+function escapeForScriptTag(js: string): string {
+  return js.replace(/<\/script/gi, "<\\/script");
+}
 
 // ============================================================================
 // THEME PALETTE (mirrors backend reflowService)
@@ -35,7 +39,7 @@ function readerCSS(settings: ReaderSettings): string {
 :root{--fs:${settings.fontSize}px;--lh:${settings.lineHeight};--ff:${settings.fontFamily},-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;--bg:${t.bg};--fg:${t.text};--link:${t.link};--border:${t.border}}
 *{margin:0;padding:0;box-sizing:border-box;-webkit-user-select:text;user-select:text}
 html{font-size:var(--fs);-webkit-text-size-adjust:100%}
-body{font-family:var(--ff);line-height:var(--lh);color:var(--fg);background:var(--bg);padding:0;margin:0;overflow-x:hidden;-webkit-font-smoothing:antialiased;-webkit-touch-callout:default;cursor:text}
+body{font-family:var(--ff);line-height:var(--lh);color:var(--fg);background:var(--bg);padding:0;margin:0;overflow-x:hidden;-webkit-font-smoothing:antialiased;-webkit-touch-callout:none;cursor:text}
 .reader-content{max-width:100%;padding:20px 16px;margin:0 auto}
 p{margin-bottom:1em;text-align:left;word-wrap:break-word;overflow-wrap:break-word}
 h1,h2,h3,h4,h5,h6{margin-top:1.5em;margin-bottom:.5em;font-weight:600;line-height:1.3;color:var(--fg)}
@@ -254,7 +258,7 @@ function readerJS(): string {
 
 /**
  * Generate a self-contained HTML page that:
- * 1. Loads pdf.js from CDN (cached by WebView after first load)
+ * 1. Inlines pdf.js (bundled as a local asset — no network)
  * 2. Decodes the base64 PDF data
  * 3. Extracts text from every page
  * 4. Renders reflowed paragraphs inside .reader-content
@@ -268,6 +272,8 @@ export async function reflowPDF(
     const info = await FileSystem.getInfoAsync(fileUri);
     if (!info.exists) throw new Error("File not found");
 
+    const vendor = await loadMobileViewVendorScripts();
+
     // Read the PDF as base64
     const base64 = await FileSystem.readAsStringAsync(fileUri, {
       encoding: FileSystem.EncodingType.Base64,
@@ -277,6 +283,9 @@ export async function reflowPDF(
     const js = readerJS();
     const theme = settings.theme || "light";
 
+    const pdfMinJs = escapeForScriptTag(vendor.pdfMinJs);
+    const pdfWorkerMinJs = escapeForScriptTag(vendor.pdfWorkerMinJs);
+
     const html = `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -284,7 +293,7 @@ export async function reflowPDF(
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes">
 <title>Mobile View</title>
 <style>${css}</style>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"><\/script>
+<script>${pdfMinJs}<\/script>
 </head>
 <body class="theme-${theme}">
 <!-- Loading indicator -->
@@ -303,6 +312,7 @@ export async function reflowPDF(
 <!-- Reader content populated by JS -->
 <article class="reader-content" id="reader-content" style="display:none"></article>
 
+<script id="pdf-worker-src" type="text/plain">${pdfWorkerMinJs}<\/script>
 <script>
 (function(){
   var BASE64_DATA = ${JSON.stringify(base64)};
@@ -357,13 +367,20 @@ export async function reflowPDF(
     window.ReactNativeWebView && window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'read-aloud-text', text: allText }));
   }
 
-  // Attempt extraction with pdf.js
+  // Attempt extraction with pdf.js (bundled, offline)
   if (typeof pdfjsLib === 'undefined') {
-    showError('Library not loaded', 'pdf.js could not be loaded. Please check your internet for the first use — it will be cached for offline use afterwards.');
+    showError('Library not loaded', 'Mobile View library failed to initialize. Please reopen the document.');
     return;
   }
 
-  pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+  try {
+    var workerSrcEl = document.getElementById('pdf-worker-src');
+    var workerBlob = new Blob([workerSrcEl.textContent], { type: 'application/javascript' });
+    pdfjsLib.GlobalWorkerOptions.workerSrc = URL.createObjectURL(workerBlob);
+  } catch (wErr) {
+    showError('Worker Error', 'Failed to initialize PDF worker.');
+    return;
+  }
 
   try {
     var raw = atob(BASE64_DATA);
@@ -424,7 +441,7 @@ ${js}
 
 /**
  * Generate a self-contained HTML page that:
- * 1. Loads Mammoth.js from CDN (same CDN the original viewer uses)
+ * 1. Inlines Mammoth.js (bundled as a local asset — no network)
  * 2. Decodes the base64 DOCX data
  * 3. Converts DOCX → HTML with Mammoth
  * 4. Renders inside .reader-content with mobile-optimised styles
@@ -438,6 +455,8 @@ export async function reflowDOCX(
     const info = await FileSystem.getInfoAsync(fileUri);
     if (!info.exists) throw new Error("File not found");
 
+    const vendor = await loadMobileViewVendorScripts();
+
     // Read the DOCX as base64
     const base64 = await FileSystem.readAsStringAsync(fileUri, {
       encoding: FileSystem.EncodingType.Base64,
@@ -447,6 +466,8 @@ export async function reflowDOCX(
     const js = readerJS();
     const theme = settings.theme || "light";
 
+    const mammothJs = escapeForScriptTag(vendor.mammothBrowserMinJs);
+
     const html = `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -454,7 +475,7 @@ export async function reflowDOCX(
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes">
 <title>Mobile View</title>
 <style>${css}</style>
-<script src="https://cdn.jsdelivr.net/npm/mammoth@1.11.0/mammoth.browser.min.js"><\/script>
+<script>${mammothJs}<\/script>
 </head>
 <body class="theme-${theme}">
 <!-- Loading indicator -->
@@ -487,7 +508,7 @@ export async function reflowDOCX(
   }
 
   if (typeof mammoth === 'undefined') {
-    showError('Library not loaded', 'Mammoth.js could not be loaded. Please check your internet for the first use — it will be cached for offline use afterwards.');
+    showError('Library not loaded', 'Mobile View library failed to initialize. Please reopen the document.');
     return;
   }
 
@@ -557,5 +578,121 @@ ${js}
       error: error.message || "Failed to process DOCX",
       message: "Could not generate Mobile View for this document.",
     };
+  }
+}
+
+// ============================================================================
+// PDF TEXT EXTRACTION — lightweight, no rendering, used by Read Aloud
+// ============================================================================
+
+/**
+ * Generate a minimal self-contained HTML page that:
+ * 1. Inlines pdf.js (bundled, no CDN)
+ * 2. Decodes the base64 PDF
+ * 3. Extracts text from every page WITHOUT rendering anything
+ * 4. Posts { type: 'pdf-page-texts', pageTexts: string[] } back to RN
+ * 5. Posts { type: 'pdf-text-error', message: string } on failure
+ *
+ * This HTML is intended for a hidden 0-height WebView. It is completely
+ * independent of the Mobile View rendering pipeline.
+ */
+export async function generatePdfTextExtractionHtml(
+  fileUri: string,
+): Promise<{ html: string } | { error: string }> {
+  try {
+    const info = await FileSystem.getInfoAsync(fileUri);
+    if (!info.exists) return { error: "File not found" };
+
+    const vendor = await loadMobileViewVendorScripts();
+    const base64 = await FileSystem.readAsStringAsync(fileUri, {
+      encoding: FileSystem.EncodingType.Base64,
+    });
+
+    const pdfMinJs = escapeForScriptTag(vendor.pdfMinJs);
+    const pdfWorkerMinJs = escapeForScriptTag(vendor.pdfWorkerMinJs);
+
+    const html = `<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"></head>
+<body>
+<script>${pdfMinJs}<\/script>
+<script id="pdf-worker-src" type="text/plain">${pdfWorkerMinJs}<\/script>
+<script>
+(function(){
+  function post(obj){
+    try{ window.ReactNativeWebView && window.ReactNativeWebView.postMessage(JSON.stringify(obj)); }catch(_){}
+  }
+
+  if(typeof pdfjsLib==='undefined'){
+    post({type:'pdf-text-error',message:'pdf.js not loaded'});
+    return;
+  }
+
+  try{
+    var workerEl=document.getElementById('pdf-worker-src');
+    var blob=new Blob([workerEl.textContent],{type:'application/javascript'});
+    pdfjsLib.GlobalWorkerOptions.workerSrc=URL.createObjectURL(blob);
+  }catch(e){
+    post({type:'pdf-text-error',message:'Worker init failed: '+e.message});
+    return;
+  }
+
+  try{
+    var raw=atob(${JSON.stringify(base64)});
+    var uint8=new Uint8Array(raw.length);
+    for(var i=0;i<raw.length;i++) uint8[i]=raw.charCodeAt(i);
+
+    pdfjsLib.getDocument({data:uint8}).promise.then(function(pdf){
+      var total=pdf.numPages;
+      var pageTexts=new Array(total);
+      var done=0;
+
+      if(total===0){
+        post({type:'pdf-page-texts',pageTexts:[]});
+        return;
+      }
+
+      for(var p=1;p<=total;p++){
+        (function(pageNum){
+          pdf.getPage(pageNum).then(function(page){
+            page.getTextContent().then(function(content){
+              var text=content.items.map(function(item){
+                return item.str;
+              }).join(' ');
+              pageTexts[pageNum-1]=text||'';
+              done++;
+              if(done===total){
+                post({type:'pdf-page-texts',pageTexts:pageTexts});
+              }
+            }).catch(function(){
+              pageTexts[pageNum-1]='';
+              done++;
+              if(done===total){
+                post({type:'pdf-page-texts',pageTexts:pageTexts});
+              }
+            });
+          }).catch(function(){
+            pageTexts[pageNum-1]='';
+            done++;
+            if(done===total){
+              post({type:'pdf-page-texts',pageTexts:pageTexts});
+            }
+          });
+        })(p);
+      }
+    }).catch(function(err){
+      post({type:'pdf-text-error',message:err.message||'PDF load failed'});
+    });
+  }catch(e){
+    post({type:'pdf-text-error',message:e.message||'Decode failed'});
+  }
+})();
+<\/script>
+</body>
+</html>`;
+
+    return { html };
+  } catch (err: any) {
+    return { error: err.message || "Failed to generate extraction HTML" };
   }
 }

@@ -4,5 +4,5 @@ export { AIEmptyState } from "./AIEmptyState";
 export { AILanguagePicker } from "./AILanguagePicker";
 export { AIModeSelector } from "./AIModeSelector";
 export { AISessionHistory } from "./AISessionHistory";
-export { XumptaHeader } from "./XumptaHeader";
+export { AthemiHeader } from "./AthemiHeader";
 

@@ -7,7 +7,7 @@ import {
   AIEmptyState,
   AILanguagePicker,
   AISessionHistory,
-  XumptaHeader,
+  AthemiHeader,
 } from "@/components/ai";
 import GenerateDocumentModal from "@/components/ai/GenerateDocumentModal";
 import { LibraryFilePicker } from "@/components/LibraryFilePicker";
@@ -135,7 +135,7 @@ const FEATURE_ICONS: Record<string, React.ComponentType<any>> = {
 export default function AIScreen() {
   const { colors: t, mode } = useTheme();
   const router = useRouter();
-  // "Ask xumpta" deep-link: viewers pass selected text as a route param
+  // "Ask athemi" deep-link: viewers pass selected text as a route param
   const { initialText } = useLocalSearchParams<{ initialText?: string }>();
 
   // ── State ─────────────────────────────────────────────────────────────────
@@ -247,7 +247,7 @@ export default function AIScreen() {
     };
   }, []);
 
-  // ── Pre-populate input from "Ask xumpta" deep-link ─────────────────────────
+  // ── Pre-populate input from "Ask athemi" deep-link ─────────────────────────
   useEffect(() => {
     if (initialText && typeof initialText === "string" && initialText.trim()) {
       // Start a fresh chat session with the highlighted text as the input
@@ -697,7 +697,7 @@ export default function AIScreen() {
   const handleClearAllSessions = useCallback(() => {
     Alert.alert(
       "Clear All History",
-      "This will permanently delete all xumpta conversation history.",
+      "This will permanently delete all athemi conversation history.",
       [
         { text: "Cancel", style: "cancel" },
         {
@@ -862,7 +862,7 @@ export default function AIScreen() {
           behavior={Platform.OS === "ios" ? "padding" : "height"}
         >
           {/* ─── Header ────────────────────────────────────────────── */}
-          <XumptaHeader
+          <AthemiHeader
             onBack={() => router.back()}
             onNewChat={handleNewSession}
             onToggleMenu={() => setShowFeaturesDropdown((p) => !p)}

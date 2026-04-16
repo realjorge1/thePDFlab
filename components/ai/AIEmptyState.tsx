@@ -142,7 +142,7 @@ export const AIEmptyState = React.memo(function AIEmptyState({
         )}
       </View>
       <Text style={[styles.title, { color: t.text }]}>
-        {feature?.name || "xumpta"}
+        {feature?.name || "athemi"}
       </Text>
       <Text style={[styles.subtitle, { color: t.textSecondary }]}>
         {feature?.description || "Select a mode to get started"}

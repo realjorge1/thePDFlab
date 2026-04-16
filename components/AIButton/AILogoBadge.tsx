@@ -11,9 +11,10 @@
 import { GradientView } from "@/components/GradientView";
 import { colors as appColors } from "@/constants/theme";
 import React from "react";
-import { Platform, View } from "react-native";
+import { View } from "react-native";
 
 import AILogoIcon from "./AILogoIcon";
+import { CircleRing } from "./CircleRing";
 
 // ─── Canonical tech colours (shared with FloatingAIButton) ──────────────────
 const NEON_GREEN = "#4dff91";
@@ -28,6 +29,7 @@ const BASE_RING_INSET = 4;
 const BASE_RING = BASE_BUTTON + BASE_RING_INSET * 2; // 44
 const BASE_INNER = BASE_BUTTON - BASE_RING_INSET * 2; // 28
 const BASE_ICON = 16;
+const BASE_RING_STROKE = (BASE_RING - BASE_INNER) / 2; // 8 — ring thickness
 interface AILogoBadgeProps {
   /** Overall badge size in dp (default 64, matching the FAB). */
   size?: number;
@@ -37,6 +39,7 @@ export default function AILogoBadge({ size = BASE }: AILogoBadgeProps) {
   const s = size / BASE; // scale factor
 
   const ringSize = BASE_RING * s;
+  const ringStroke = BASE_RING_STROKE * s;
   const innerSize = BASE_INNER * s;
   const iconSize = BASE_ICON * s;
 
@@ -49,25 +52,27 @@ export default function AILogoBadge({ size = BASE }: AILogoBadgeProps) {
         justifyContent: "center",
       }}
     >
-      {/* ── Ring A — primary gradient ────────────────────────────── */}
-      <View style={ringBox(ringSize, 0.9, s)}>
-        <GradientView
-          colors={[NEON_GREEN, CYAN, ELECTRIC_BLUE, MAGENTA, NEON_GREEN]}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-          style={{ flex: 1, borderRadius: ringSize / 2 }}
-        />
-      </View>
+      {/* ── Ring A — primary circle gradient ─────────────────────── */}
+      <CircleRing
+        size={ringSize}
+        strokeWidth={ringStroke}
+        opacity={0.9}
+        colors={[NEON_GREEN, CYAN, ELECTRIC_BLUE, MAGENTA, NEON_GREEN]}
+        gradientStart={{ x: 0, y: 0 }}
+        gradientEnd={{ x: 1, y: 1 }}
+        gradientId="badge_ring_a"
+      />
 
-      {/* ── Ring B — secondary gradient (softer) ─────────────────── */}
-      <View style={ringBox(ringSize, 0.5, s)}>
-        <GradientView
-          colors={[CYAN, NEON_GREEN, ELECTRIC_BLUE, CYAN]}
-          start={{ x: 1, y: 0 }}
-          end={{ x: 0, y: 1 }}
-          style={{ flex: 1, borderRadius: ringSize / 2 }}
-        />
-      </View>
+      {/* ── Ring B — secondary circle gradient (softer) ────────────── */}
+      <CircleRing
+        size={ringSize}
+        strokeWidth={ringStroke}
+        opacity={0.5}
+        colors={[CYAN, NEON_GREEN, ELECTRIC_BLUE, CYAN]}
+        gradientStart={{ x: 1, y: 0 }}
+        gradientEnd={{ x: 0, y: 1 }}
+        gradientId="badge_ring_b"
+      />
 
       {/* ── Inner mask (app header gradient) ──────────────────────── */}
       <View
@@ -95,27 +100,4 @@ export default function AILogoBadge({ size = BASE }: AILogoBadgeProps) {
       <AILogoIcon size={iconSize} color={NEON_GREEN} animated={false} />
     </View>
   );
-}
-
-/* ── Helper: ring container style ────────────────────────────────────────── */
-function ringBox(ringSize: number, opacity: number, _s: number) {
-  return {
-    position: "absolute" as const,
-    width: ringSize,
-    height: ringSize,
-    borderRadius: ringSize / 2,
-    overflow: "hidden" as const,
-    opacity,
-    ...Platform.select({
-      ios: {
-        shadowColor: NEON_GREEN,
-        shadowOffset: { width: 0, height: 0 },
-        shadowOpacity: 0.35 * opacity,
-        shadowRadius: 4 * _s,
-      },
-      android: {
-        elevation: Math.round(6 * _s),
-      },
-    }),
-  };
 }

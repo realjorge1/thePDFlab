@@ -348,6 +348,15 @@ export default function LibraryScreen() {
             name: file.displayName,
           },
         });
+      } else if (extension === "pptx" || extension === "ppt") {
+        // Navigate to in-app PPT viewer
+        router.push({
+          pathname: "/ppt-viewer",
+          params: {
+            uri: file.uri,
+            name: file.displayName,
+          },
+        });
       } else if (extension === "pdflab") {
         // Legacy encrypted .pdflab file — offer to decrypt
         Alert.alert(

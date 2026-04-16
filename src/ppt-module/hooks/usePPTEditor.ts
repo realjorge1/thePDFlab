@@ -18,7 +18,7 @@ import {
 import { DEFAULT_THEME_ID } from '../themes/pptThemes';
 
 // ─── Default new presentation ────────────────
-function createDefaultPresentation(title = 'New Presentation', themeId: ThemeId = DEFAULT_THEME_ID): PPTPresentation {
+function createDefaultPresentation(title = '', themeId: ThemeId = DEFAULT_THEME_ID): PPTPresentation {
   return {
     id: uuid(),
     title,
@@ -78,8 +78,15 @@ function applyAction(
     case 'SET_PRESENTATION':
       return { ...action.payload, updatedAt: now };
 
-    case 'UPDATE_TITLE':
-      return { ...presentation, title: action.payload, updatedAt: now };
+    case 'UPDATE_TITLE': {
+      const newTitle = action.payload;
+      const slides = presentation.slides.map((s, i) =>
+        i === 0 && s.layout === 'title'
+          ? { ...s, content: { ...s.content, title: newTitle } }
+          : s,
+      );
+      return { ...presentation, title: newTitle, slides, updatedAt: now };
+    }
 
     case 'UPDATE_THEME':
       return { ...presentation, themeId: action.payload, updatedAt: now };
@@ -152,7 +159,7 @@ interface EditorReducerState extends PPTEditorState {
 }
 
 function initialState(initial?: PPTPresentation, initialThemeId?: ThemeId): EditorReducerState {
-  const presentation = initial ?? createDefaultPresentation('New Presentation', initialThemeId);
+  const presentation = initial ?? createDefaultPresentation('', initialThemeId);
   return {
     presentation,
     selectedSlideIndex: 0,

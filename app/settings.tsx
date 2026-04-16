@@ -826,7 +826,7 @@ export default function SettingsScreen() {
                 hideSeparator
               />
               <SettingRow
-                title="Lock AI (xumpta)"
+                title="Lock AI (athemi)"
                 subtitle="Require PIN to access the AI assistant"
                 toggle
                 toggleValue={settings.screenLocks.ai}

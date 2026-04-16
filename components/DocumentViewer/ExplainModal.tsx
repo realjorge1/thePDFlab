@@ -61,11 +61,11 @@ export function ExplainModal({
       setExplanation(
         `This passage discusses key concepts that can be broken down as follows:\n\n` +
           `"${selectedText.substring(0, 120)}${selectedText.length > 120 ? "…" : ""}"\n\n` +
-          `To get a full explanation, open xumpta and paste the text there.` +
+          `To get a full explanation, open athemi and paste the text there.` +
           `\n\nSuggested prompt:\n${prompt}`,
       );
       setKeyPoints([
-        "Open xumpta for a detailed explanation",
+        "Open athemi for a detailed explanation",
         "You can copy the suggested prompt below",
         `Source: ${fileName || "Document"} — Mobile View`,
       ]);
@@ -107,7 +107,7 @@ export function ExplainModal({
         {/* Header */}
         <View style={styles.header}>
           <MaterialIcons name="auto-awesome" size={20} color="#1976D2" />
-          <Text style={styles.headerTitle}>xumpta Explanation</Text>
+          <Text style={styles.headerTitle}>athemi Explanation</Text>
           <Pressable onPress={onClose} style={styles.doneBtn}>
             <Text style={styles.doneBtnText}>Done</Text>
           </Pressable>

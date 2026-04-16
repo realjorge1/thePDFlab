@@ -42,8 +42,10 @@ import { VoicePicker } from "./VoicePicker";
 // Constants
 // ---------------------------------------------------------------------------
 
-/** Max time (ms) to wait for text extraction before declaring "no text". */
-const EXTRACTION_TIMEOUT_MS = 8_000;
+/** Max time (ms) to wait for text extraction before declaring "no text".
+ *  PDFs go through pdf.js extraction inside the WebView (async), which can
+ *  take 20-30+ seconds for large documents.  30 s is a safe upper bound. */
+const EXTRACTION_TIMEOUT_MS = 30_000;
 
 /** Minimum character count to consider text "extractable". */
 const MIN_TEXT_LENGTH = 10;

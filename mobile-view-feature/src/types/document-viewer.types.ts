@@ -149,7 +149,7 @@ export type SelectionAction =
   | "bold"
   | "italic"
   | "underline"
-  | "ask-xumpta"
+  | "ask-athemi"
   | "text-color"
   | "highlight-color";
 

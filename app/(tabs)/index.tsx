@@ -125,7 +125,6 @@ export default function HomeScreen() {
   const [fileTypeOptionsFile, setFileTypeOptionsFile] =
     useState<DisplayFile | null>(null);
 
-
   // Bento box shrink/dim + search results slide-up animation
   const bentoScale = useRef(new RNAnimated.Value(1)).current;
   const bentoOpacity = useRef(new RNAnimated.Value(1)).current;
@@ -373,6 +372,11 @@ export default function HomeScreen() {
       } else if (file.type === "epub") {
         router.push({
           pathname: "/epub-viewer",
+          params: { uri: file.uri, name: file.name },
+        });
+      } else if (file.type === "ppt") {
+        router.push({
+          pathname: "/ppt-viewer",
           params: { uri: file.uri, name: file.name },
         });
       } else if (
@@ -647,7 +651,9 @@ export default function HomeScreen() {
                         >
                           <View style={styles.aiTopRow}>
                             <AILogoBadge size={30} />
-                            <Text style={styles.bentoMediumTitle}>xumpta AI</Text>
+                            <Text style={styles.bentoMediumTitle}>
+                              athemi AI
+                            </Text>
                           </View>
                           <View style={styles.aiFeatureTextArea}>
                             <RNAnimated.Text
@@ -908,7 +914,6 @@ export default function HomeScreen() {
                 )}
               </View>
             )}
-
           </RNAnimated.View>
           {/* end slidingSection */}
         </ScrollView>
@@ -1039,7 +1044,6 @@ export default function HomeScreen() {
     </SafeAreaView>
   );
 }
-
 
 // ============================================================================
 // MEMOIZED FILE CARD (avoids re-rendering all cards on list change)
@@ -1653,7 +1657,6 @@ const styles = StyleSheet.create({
   fileArrow: {
     marginLeft: 4,
   },
-
 
   // Empty State
   loadingContainer: {

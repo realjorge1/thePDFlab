@@ -8,4 +8,8 @@ config.resolver.alias = {
   "@": path.resolve(__dirname),
 };
 
+if (!config.resolver.assetExts.includes("vlib")) {
+  config.resolver.assetExts.push("vlib");
+}
+
 module.exports = config;

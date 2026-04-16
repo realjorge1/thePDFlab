@@ -19,6 +19,7 @@ import {
   Modal,
   Pressable,
   Dimensions,
+  ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTheme } from '@/services/ThemeProvider';
@@ -31,14 +32,14 @@ import { getTheme } from '../../themes/pptThemes';
 import { InteractiveSlideCanvas } from '../../components/PPT/InteractiveSlideCanvas';
 import { SlideThumbnailStrip } from '../../components/PPT/SlideThumbnailStrip';
 import { ThemePicker } from '../../components/PPT/ThemePicker';
-import { ExportModal } from '../../components/PPT/ExportModal';
 import { SlideLayout, ThemeId } from '../../types/ppt.types';
 import { saveFileToDevice, MIME_TYPES, UTI_TYPES } from '@/utils/file-save-utils';
+import { markFileAsCreated } from '@/services/fileService';
 import {
   ArrowLeft,
   RotateCcw,
   RotateCw,
-  Save,
+  Download,
   Palette,
 } from 'lucide-react-native';
 
@@ -66,7 +67,7 @@ export const PPTCreatorScreen: React.FC<PPTCreatorScreenProps> = ({ onGoBack, in
   const { colors: t, mode } = useTheme();
   const editor = usePPTEditor(undefined, initialThemeId);
   const exporter = useExportPPT();
-  const [exportModalVisible, setExportModalVisible] = useState(false);
+  const [isCreating, setIsCreating] = useState(false);
   const [themeModalVisible, setThemeModalVisible] = useState(false);
 
   const pptTheme = getTheme(editor.presentation.themeId);
@@ -74,19 +75,40 @@ export const PPTCreatorScreen: React.FC<PPTCreatorScreenProps> = ({ onGoBack, in
   const uiAccent = mode === 'dark' ? pptTheme.colors.secondary : pptTheme.colors.primary;
   const selectedSlide = editor.presentation.slides[editor.selectedSlideIndex];
 
-  // ─── Save to App (export + show progress modal) ──
-  const handleSaveToApp = useCallback(() => {
-    setExportModalVisible(true);
-    exporter.exportPPTX(editor.presentation);
-  }, [editor.presentation, exporter]);
+  // ─── Create (generate → save to app library → success alert) ──
+  const handleCreate = useCallback(async () => {
+    if (isCreating) return;
+    const title = editor.presentation.title.trim() || 'Untitled Presentation';
+    setIsCreating(true);
+    try {
+      const res = await exporter.exportPPTX({ ...editor.presentation, title });
+      if (res?.success && res.filePath) {
+        const fileUri = res.filePath.startsWith('file://')
+          ? res.filePath
+          : `file://${res.filePath}`;
+        await markFileAsCreated(fileUri, title, 'pptx');
+        Alert.alert('PPT Created', 'Your PPT file has been created successfully!', [
+          { text: 'OK' },
+        ]);
+      } else {
+        Alert.alert('Error', res?.error ?? 'Failed to create presentation.');
+      }
+    } catch (e) {
+      Alert.alert('Error', e instanceof Error ? e.message : 'Failed to create presentation.');
+    } finally {
+      setIsCreating(false);
+      exporter.reset();
+    }
+  }, [editor.presentation, exporter, isCreating]);
 
-  // ─── Save to Device (generate silently → system folder picker) ──
+  // ─── Save to Device (generate silently → system share/save sheet) ──
   const handleSaveToDevice = useCallback(async () => {
-    const res = await exporter.exportPPTX(editor.presentation);
+    const title = editor.presentation.title.trim() || 'Untitled Presentation';
+    const res = await exporter.exportPPTX({ ...editor.presentation, title });
     if (res?.success && res.filePath) {
       await saveFileToDevice({
         sourceUri: res.filePath,
-        fileName: `${editor.presentation.title || 'Presentation'}.pptx`,
+        fileName: `${title}.pptx`,
         mimeType: MIME_TYPES.PPTX,
         uti: UTI_TYPES.PPTX,
         dialogTitle: 'Save Presentation',
@@ -97,26 +119,6 @@ export const PPTCreatorScreen: React.FC<PPTCreatorScreenProps> = ({ onGoBack, in
       exporter.reset();
     }
   }, [editor.presentation, exporter]);
-
-  // ─── Save action sheet ──
-  const handleSave = useCallback(() => {
-    Alert.alert(
-      'Save Presentation',
-      '',
-      [
-        { text: 'Save to App', onPress: handleSaveToApp },
-        { text: 'Save to Device', onPress: handleSaveToDevice },
-        { text: 'Cancel', style: 'cancel' },
-      ],
-    );
-  }, [handleSaveToApp, handleSaveToDevice]);
-
-  // ─── Share from ExportModal success screen ──
-  const handleShare = useCallback(() => {
-    if (exporter.result?.filePath) {
-      exporter.shareFile(exporter.result.filePath, editor.presentation.title);
-    }
-  }, [exporter, editor.presentation.title]);
 
   // ─── Slide management ──
   const handleAddSlide = useCallback(() => {
@@ -178,45 +180,35 @@ export const PPTCreatorScreen: React.FC<PPTCreatorScreenProps> = ({ onGoBack, in
                 style={styles.titleInput}
                 value={editor.presentation.title}
                 onChangeText={editor.updateTitle}
-                placeholder="PPT title"
+                placeholder="Presentation title"
                 placeholderTextColor="rgba(255,255,255,0.5)"
                 returnKeyType="done"
               />
 
               <View style={styles.headerActions}>
+                {/* "Save to Device" secondary icon */}
                 <TouchableOpacity
-                  onPress={editor.undo}
-                  disabled={!editor.canUndo}
                   style={styles.gradientIconBtn}
+                  onPress={handleSaveToDevice}
                   hitSlop={6}
-                >
-                  <RotateCcw
-                    size={15}
-                    color={editor.canUndo ? '#FFFFFF' : 'rgba(255,255,255,0.3)'}
-                    strokeWidth={2.2}
-                  />
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  onPress={editor.redo}
-                  disabled={!editor.canRedo}
-                  style={styles.gradientIconBtn}
-                  hitSlop={6}
-                >
-                  <RotateCw
-                    size={15}
-                    color={editor.canRedo ? '#FFFFFF' : 'rgba(255,255,255,0.3)'}
-                    strokeWidth={2.2}
-                  />
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  style={styles.saveBtn}
-                  onPress={handleSave}
                   activeOpacity={0.85}
                 >
-                  <Save size={14} color="#FFFFFF" strokeWidth={2.5} />
-                  <Text style={styles.saveBtnText}>Save</Text>
+                  <Download size={15} color="#FFFFFF" strokeWidth={2.2} />
+                </TouchableOpacity>
+
+                {/* Primary "Create" button — saves to app library */}
+                <TouchableOpacity
+                  style={[styles.createBtn, isCreating && styles.createBtnDisabled]}
+                  onPress={handleCreate}
+                  disabled={isCreating}
+                  activeOpacity={0.85}
+                >
+                  {isCreating ? (
+                    <ActivityIndicator size={14} color="#FFFFFF" />
+                  ) : null}
+                  <Text style={styles.createBtnText}>
+                    {isCreating ? 'Creating…' : 'Create'}
+                  </Text>
                 </TouchableOpacity>
               </View>
             </View>
@@ -232,6 +224,32 @@ export const PPTCreatorScreen: React.FC<PPTCreatorScreenProps> = ({ onGoBack, in
                 <Palette size={11} color="#FFFFFF" strokeWidth={2.5} />
                 <View style={styles.themeBtnDot} />
                 <Text style={styles.themeBtnText}>{pptTheme.name}</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                onPress={editor.undo}
+                disabled={!editor.canUndo}
+                style={styles.gradientIconBtnSm}
+                hitSlop={6}
+              >
+                <RotateCcw
+                  size={14}
+                  color={editor.canUndo ? '#FFFFFF' : 'rgba(255,255,255,0.3)'}
+                  strokeWidth={2.2}
+                />
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                onPress={editor.redo}
+                disabled={!editor.canRedo}
+                style={styles.gradientIconBtnSm}
+                hitSlop={6}
+              >
+                <RotateCw
+                  size={14}
+                  color={editor.canRedo ? '#FFFFFF' : 'rgba(255,255,255,0.3)'}
+                  strokeWidth={2.2}
+                />
               </TouchableOpacity>
 
               <Text style={styles.slideInfo}>
@@ -335,21 +353,6 @@ export const PPTCreatorScreen: React.FC<PPTCreatorScreenProps> = ({ onGoBack, in
         />
       </KeyboardAvoidingView>
 
-      {/* ─── Export / Save-to-App Modal ─── */}
-      <ExportModal
-        visible={exportModalVisible}
-        status={exporter.status}
-        progress={exporter.progress}
-        filePath={exporter.result?.filePath}
-        error={exporter.result?.error}
-        accentColor={pptTheme.colors.primary}
-        onShare={handleShare}
-        onClose={() => {
-          setExportModalVisible(false);
-          exporter.reset();
-        }}
-      />
-
       {/* ─── Theme Selection Modal ────────────────── */}
       <Modal
         visible={themeModalVisible}
@@ -427,19 +430,26 @@ const styles = StyleSheet.create({
   },
   titleInput: {
     flex: 1,
-    fontSize: 16,
+    fontSize: 17,
     fontWeight: '700',
     padding: 0,
     letterSpacing: -0.2,
     color: '#FFFFFF',
+  },
+  gradientIconBtnSm: {
+    width: 28,
+    height: 28,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.18)',
   },
   headerActions: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
   },
-  // Save button: transparent glass — NOT influenced by PPT theme
-  saveBtn: {
+  createBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 12,
@@ -448,7 +458,10 @@ const styles = StyleSheet.create({
     gap: 5,
     backgroundColor: 'rgba(255,255,255,0.25)',
   },
-  saveBtnText: {
+  createBtnDisabled: {
+    opacity: 0.6,
+  },
+  createBtnText: {
     color: '#FFFFFF',
     fontWeight: '700',
     fontSize: 13,

@@ -64,6 +64,17 @@ function isEpub(ext: string, type?: string, mime?: string): boolean {
   return ext === "epub" || type === "epub" || mime === "application/epub+zip";
 }
 
+function isPpt(ext: string, type?: string, mime?: string): boolean {
+  return (
+    ext === "pptx" ||
+    ext === "ppt" ||
+    type === "ppt" ||
+    type === "pptx" ||
+    mime === "application/vnd.openxmlformats-officedocument.presentationml.presentation" ||
+    mime === "application/vnd.ms-powerpoint"
+  );
+}
+
 const IMAGE_EXTENSIONS = new Set([
   "jpg",
   "jpeg",
@@ -115,6 +126,14 @@ export function openFile(router: Router, params: OpenFileParams): boolean {
   if (isEpub(ext, params.type, params.mimeType)) {
     router.push({
       pathname: "/epub-viewer",
+      params: { uri: params.uri, name: params.name },
+    });
+    return true;
+  }
+
+  if (isPpt(ext, params.type, params.mimeType)) {
+    router.push({
+      pathname: "/ppt-viewer",
       params: { uri: params.uri, name: params.name },
     });
     return true;

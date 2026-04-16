@@ -434,29 +434,35 @@ startxref
   );
 };
 
-// Create PPTX file with proper structure
+// Create PPTX file with proper structure (valid OOXML ZIP archive)
 const createPptxFile = async (uri: string, title: string): Promise<number> => {
-  // Minimal valid PPTX structure (ZIP format with XML)
-  const pptxContent = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
-  <p:sldMasterIdLst>
-    <p:sldMasterId id="2147483648"/>
-  </p:sldMasterIdLst>
-  <p:sldIdLst>
-    <p:sldId id="256"/>
-  </p:sldIdLst>
-  <p:sldSz cx="9144000" cy="6858000"/>
-  <p:notesSz cx="6858000" cy="9144000"/>
-</p:presentation>`;
+  const PptxGenJS = (await import("pptxgenjs")).default;
+  const pptx = new PptxGenJS();
+  pptx.layout = "LAYOUT_WIDE";
 
-  await FileSystem.writeAsStringAsync(uri, pptxContent, {
-    encoding: FileSystem.EncodingType.UTF8,
+  const slide = pptx.addSlide();
+  slide.background = { color: "FFFFFF" };
+  slide.addText(title, {
+    x: 0.5,
+    y: 2.8,
+    w: 12.3,
+    h: 1.2,
+    fontSize: 44,
+    bold: true,
+    color: "111827",
+    align: "center",
+    fontFace: "Calibri",
+  });
+
+  const base64 = (await pptx.write({ outputType: "base64" })) as string;
+
+  await FileSystem.writeAsStringAsync(uri, base64, {
+    encoding: FileSystem.EncodingType.Base64,
   });
 
   const info = await FileSystem.getInfoAsync(uri);
   return (
-    (info.exists && "size" in info ? info.size : pptxContent.length) ||
-    pptxContent.length
+    (info.exists && "size" in info ? info.size : base64.length) || base64.length
   );
 };
 
@@ -524,12 +530,32 @@ export const markFileAsOpened = async (fileId: string): Promise<void> => {
 export const markFileAsCreated = async (
   uri: string,
   fileName: string,
-  fileType: "pdf" | "docx",
+  fileType: "pdf" | "docx" | "pptx",
 ): Promise<void> => {
   try {
     const now = Date.now();
-    const extension = fileType === "pdf" ? ".pdf" : ".docx";
-    // Ensure filename has the correct extension
+    const extensionMap: Record<string, string> = {
+      pdf: ".pdf",
+      docx: ".docx",
+      pptx: ".pptx",
+    };
+    const mimeMap: Record<string, string> = {
+      pdf: "application/pdf",
+      docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    };
+    const indexTypeMap: Record<string, "pdf" | "docx" | "ppt"> = {
+      pdf: "pdf",
+      docx: "docx",
+      pptx: "ppt",
+    };
+    const fileTypeMap: Record<string, string> = {
+      pdf: "pdf",
+      docx: "word",
+      pptx: "ppt",
+    };
+
+    const extension = extensionMap[fileType];
     const finalFileName = fileName.endsWith(extension)
       ? fileName
       : `${fileName}${extension}`;
@@ -559,11 +585,8 @@ export const markFileAsCreated = async (
       name: finalFileName,
       uri,
       size: fileSize,
-      type: fileType === "pdf" ? "pdf" : "word",
-      mimeType:
-        fileType === "pdf"
-          ? "application/pdf"
-          : "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      type: fileTypeMap[fileType],
+      mimeType: mimeMap[fileType],
       lastModified: now,
       dateAdded: now,
       dateModified: now,
@@ -581,7 +604,7 @@ export const markFileAsCreated = async (
     await upsertFileRecord({
       uri,
       name: finalFileName,
-      type: fileType === "pdf" ? "pdf" : "docx",
+      type: indexTypeMap[fileType],
       extension: fileType,
       mimeType: fileInfo.mimeType,
       size: fileSize,

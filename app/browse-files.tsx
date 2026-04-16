@@ -275,6 +275,14 @@ export default function BrowseFilesScreen() {
       return;
     }
 
+    if (ext === "pptx" || ext === "ppt") {
+      router.push({
+        pathname: "/ppt-viewer",
+        params: { uri: file.uri, name },
+      });
+      return;
+    }
+
     // Fall back to system intent for other file types
     if (Platform.OS !== "android") return;
 

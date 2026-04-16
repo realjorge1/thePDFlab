@@ -24,7 +24,7 @@ const PILL_GRADIENT: [string, string] = ["#4F46E5", "#7C3AED"];
 const GRADIENT: [string, string, string] = ["#4F46E5", "#7C3AED", "#EC4899"];
 
 /* ── props ─────────────────────────────────────────────────────────────────── */
-interface XumptaHeaderProps {
+interface AthemiHeaderProps {
   onBack: () => void;
   onNewChat: () => void;
   onToggleMenu: () => void;
@@ -33,7 +33,7 @@ interface XumptaHeaderProps {
 }
 
 /* ── component ─────────────────────────────────────────────────────────────── */
-const XumptaHeaderInner: React.FC<XumptaHeaderProps> = ({
+const AthemiHeaderInner: React.FC<AthemiHeaderProps> = ({
   onBack,
   onNewChat,
   onToggleMenu,
@@ -69,7 +69,7 @@ const XumptaHeaderInner: React.FC<XumptaHeaderProps> = ({
               style={s.pill}
             >
               <Text style={s.title} numberOfLines={1} ellipsizeMode="tail">
-                xumpta AI
+                athemi AI
               </Text>
             </GradientView>
           </View>
@@ -112,8 +112,8 @@ const XumptaHeaderInner: React.FC<XumptaHeaderProps> = ({
   </AppHeaderContainer>
 );
 
-export const XumptaHeader = React.memo(XumptaHeaderInner);
-XumptaHeader.displayName = "XumptaHeader";
+export const AthemiHeader = React.memo(AthemiHeaderInner);
+AthemiHeader.displayName = "AthemiHeader";
 
 /* ── styles ────────────────────────────────────────────────────────────────── */
 const s = StyleSheet.create({
@@ -170,4 +170,4 @@ const s = StyleSheet.create({
   },
 });
 
-export default XumptaHeader;
+export default AthemiHeader;
