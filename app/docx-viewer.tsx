@@ -38,7 +38,18 @@ import { ThreeDotsMenu } from "@/components/DocumentViewer/ThreeDotsMenu";
 import { ViewModeToggle } from "@/components/DocumentViewer/ViewModeToggle";
 import DocxShareOptions from "@/components/DocxShareOptions";
 import { ReadAloudController } from "@/components/ReadAloudController";
-import type { ViewMode } from "@/src/types/document-viewer.types";
+import type { Highlight, Strikethrough, Underline, ViewMode } from "@/src/types/document-viewer.types";
+import {
+  getHighlights,
+  getStrikethroughs,
+  getUnderlines,
+  saveHighlight,
+  saveStrikethrough,
+  saveUnderline,
+  removeHighlight,
+  removeStrikethrough,
+  removeUnderline,
+} from "@/services/viewerStorageService";
 
 import {
   DarkTheme,
@@ -672,6 +683,23 @@ export default function DocxViewerScreen() {
 
         switch (data.type) {
           case "loaded":
+            // Reapply saved annotations to the original DOCX WebView
+            if (uri) {
+              Promise.all([getHighlights(uri), getUnderlines(uri), getStrikethroughs(uri)])
+                .then(([hl, ul, st]) => {
+                  if (!hl.length && !ul.length && !st.length) return;
+                  const annotations = [
+                    ...hl.map((h) => ({ id: h.id, startOffset: h.startOffset ?? 0, endOffset: h.endOffset ?? 0, kind: "highlight", color: h.color })),
+                    ...ul.map((u) => ({ id: u.id, startOffset: u.startOffset, endOffset: u.endOffset, kind: "underline" })),
+                    ...st.map((s) => ({ id: s.id, startOffset: s.startOffset, endOffset: s.endOffset, kind: "strikethrough" })),
+                  ];
+                  webViewRef.current?.injectJavaScript(
+                    `window.__selBridge_reapplyAnnotations(${JSON.stringify(annotations)}); true;`,
+                  );
+                })
+                .catch(() => {});
+            }
+            break;
           case "editor-loaded":
             break;
 
@@ -784,12 +812,20 @@ export default function DocxViewerScreen() {
               selectionOffsets: null,
             }));
             break;
+
+          case "annotation_applied":
+            if (!data.success && data.id && uri) {
+              if (data.kind === "highlight") removeHighlight(uri, data.id);
+              else if (data.kind === "underline") removeUnderline(uri, data.id);
+              else if (data.kind === "strikethrough") removeStrikethrough(uri, data.id);
+            }
+            break;
         }
       } catch {
         // Ignore non-JSON messages
       }
     },
-    [displayName, state.base64Content, state.textContent, state.isValidDocx],
+    [displayName, state.base64Content, state.textContent, state.isValidDocx, uri],
   );
 
   // ── Mobile renderer messages ─────────────────────────────────────
@@ -817,14 +853,37 @@ export default function DocxViewerScreen() {
       }));
     } else if (msg.type === "search-count") {
       setState((prev) => ({ ...prev, searchMatchCount: msg.count ?? 0 }));
+    } else if (msg.type === "annotation_applied" && !msg.success && msg.id && uri) {
+      if (msg.kind === "highlight") removeHighlight(uri, msg.id);
+      else if (msg.kind === "underline") removeUnderline(uri, msg.id);
+      else if (msg.kind === "strikethrough") removeStrikethrough(uri, msg.id);
     }
-  }, []);
+  }, [uri]);
+
+  // ── Reapply saved annotations when MobileRenderer is ready ──────
+  const handleMobileReady = useCallback(async () => {
+    if (!uri) return;
+    try {
+      const [highlights, underlines, strikethroughs] = await Promise.all([
+        getHighlights(uri),
+        getUnderlines(uri),
+        getStrikethroughs(uri),
+      ]);
+      if (highlights.length || underlines.length || strikethroughs.length) {
+        mobileRendererRef.current?.bridgeReapplyAnnotations(
+          highlights,
+          underlines,
+          strikethroughs,
+        );
+      }
+    } catch {}
+  }, [uri]);
 
   // ── Selection toolbar actions ────────────────────────────────────
   const handleSelectionHighlight = useCallback(
     (colorHex: string) => {
-      const { selectionOffsets, viewMode } = state;
-      if (!selectionOffsets) return;
+      const { selectionOffsets, selectionText, viewMode } = state;
+      if (!selectionOffsets || !uri) return;
       const id = `hl_${Date.now()}`;
       if (viewMode === "original") {
         webViewRef.current?.injectJavaScript(
@@ -838,13 +897,22 @@ export default function DocxViewerScreen() {
           colorHex,
         );
       }
+      saveHighlight({
+        id,
+        fileUri: uri,
+        startOffset: selectionOffsets.startOffset,
+        endOffset: selectionOffsets.endOffset,
+        text: selectionText,
+        color: colorHex,
+        createdAt: Date.now(),
+      });
     },
-    [state.selectionOffsets, state.viewMode],
+    [state.selectionOffsets, state.selectionText, state.viewMode, uri],
   );
 
   const handleSelectionUnderline = useCallback(() => {
-    const { selectionOffsets, viewMode } = state;
-    if (!selectionOffsets) return;
+    const { selectionOffsets, selectionText, viewMode } = state;
+    if (!selectionOffsets || !uri) return;
     const id = `ul_${Date.now()}`;
     if (viewMode === "original") {
       webViewRef.current?.injectJavaScript(
@@ -857,11 +925,19 @@ export default function DocxViewerScreen() {
         selectionOffsets.endOffset,
       );
     }
-  }, [state.selectionOffsets, state.viewMode]);
+    saveUnderline({
+      id,
+      fileUri: uri,
+      startOffset: selectionOffsets.startOffset,
+      endOffset: selectionOffsets.endOffset,
+      text: selectionText,
+      createdAt: Date.now(),
+    });
+  }, [state.selectionOffsets, state.selectionText, state.viewMode, uri]);
 
   const handleSelectionStrikethrough = useCallback(() => {
-    const { selectionOffsets, viewMode } = state;
-    if (!selectionOffsets) return;
+    const { selectionOffsets, selectionText, viewMode } = state;
+    if (!selectionOffsets || !uri) return;
     const id = `st_${Date.now()}`;
     if (viewMode === "original") {
       webViewRef.current?.injectJavaScript(
@@ -874,6 +950,14 @@ export default function DocxViewerScreen() {
         selectionOffsets.endOffset,
       );
     }
+    saveStrikethrough({
+      id,
+      fileUri: uri,
+      startOffset: selectionOffsets.startOffset,
+      endOffset: selectionOffsets.endOffset,
+      text: selectionText,
+      createdAt: Date.now(),
+    });
   }, [state.selectionOffsets, state.viewMode]);
 
   const handleSelectionCopy = useCallback(() => {
@@ -883,16 +967,6 @@ export default function DocxViewerScreen() {
       mobileRendererRef.current?.bridgeCopySelection();
     }
   }, [state.viewMode]);
-
-  const handleSelectionShare = useCallback(async () => {
-    if (!state.selectionText) return;
-    try {
-      const { Share } = await import("react-native");
-      await Share.share({ message: state.selectionText });
-    } catch {
-      /* non-critical */
-    }
-  }, [state.selectionText]);
 
   const handleSelectionAskAthemi = useCallback(() => {
     if (!state.selectionText) return;
@@ -1121,6 +1195,7 @@ export default function DocxViewerScreen() {
             loading={state.mobileLoading}
             error={state.mobileError}
             onMessage={handleMobileMessage}
+            onReady={handleMobileReady}
           />
         </View>
       ) : (
@@ -1191,8 +1266,7 @@ export default function DocxViewerScreen() {
         onUnderline={handleSelectionUnderline}
         onStrikethrough={handleSelectionStrikethrough}
         onCopy={handleSelectionCopy}
-        onShare={handleSelectionShare}
-        onAskAthemi={handleSelectionAskAthemi}
+        onSearch={handleSelectionAskAthemi}
         onDismiss={handleSelectionDismiss}
       />
 

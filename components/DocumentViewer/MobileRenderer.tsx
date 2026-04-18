@@ -9,6 +9,7 @@
 import type {
   Highlight,
   ReaderSettings,
+  Strikethrough,
   Underline,
   WebViewMessage,
 } from "@/src/types/document-viewer.types";
@@ -53,10 +54,11 @@ export interface MobileRendererHandle {
   bridgeCopySelection: () => void;
   /** Clear the current browser text selection. */
   bridgeClearSelection: () => void;
-  /** Reapply all annotations (highlights + underlines) after load. */
+  /** Reapply all annotations (highlights + underlines + strikethroughs) after load. */
   bridgeReapplyAnnotations: (
     highlights: Highlight[],
     underlines: Underline[],
+    strikethroughs?: Strikethrough[],
   ) => void;
   /** Remove a single annotation (highlight or underline). */
   bridgeRemoveAnnotation: (id: string) => void;
@@ -206,6 +208,7 @@ export const MobileRenderer = forwardRef<MobileRendererHandle, Props>(
         bridgeReapplyAnnotations(
           highlights: Highlight[],
           underlines: Underline[],
+          strikethroughs?: Strikethrough[],
         ) {
           const annotations = [
             ...highlights.map((h) => ({
@@ -220,6 +223,12 @@ export const MobileRenderer = forwardRef<MobileRendererHandle, Props>(
               startOffset: u.startOffset,
               endOffset: u.endOffset,
               kind: "underline" as const,
+            })),
+            ...(strikethroughs ?? []).map((s) => ({
+              id: s.id,
+              startOffset: s.startOffset,
+              endOffset: s.endOffset,
+              kind: "strikethrough" as const,
             })),
           ];
           inject(

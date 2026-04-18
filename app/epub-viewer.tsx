@@ -40,6 +40,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { WebView } from "react-native-webview";
 
 import { ReadAloudBar } from "@/components/ReadAloudBar";
+import { SelectionToolbar } from "@/components/DocumentViewer/SelectionToolbar";
 import { VoicePicker } from "@/components/VoicePicker";
 import {
   DarkTheme,
@@ -66,6 +67,15 @@ import {
   saveReadingProgress,
 } from "@/services/epubService";
 import { loadSettings } from "@/services/settingsService";
+import {
+  getHighlights,
+  getStrikethroughs,
+  getUnderlines,
+  saveHighlight,
+  saveStrikethrough,
+  saveUnderline,
+} from "@/services/viewerStorageService";
+import type { Highlight, Strikethrough, Underline } from "@/src/types/document-viewer.types";
 
 import {
   EPUBJS_MIN_JS_B64,
@@ -149,6 +159,17 @@ export default function EpubViewerScreen() {
   const [searchCurrent, setSearchCurrent] = useState(0);
   const [searchLoading, setSearchLoading] = useState(false);
   const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // ── Text selection toolbar ──────────────────────────────────────
+  const [selectionVisible, setSelectionVisible] = useState(false);
+  const [selectionText, setSelectionText] = useState("");
+  const [selectionRect, setSelectionRect] = useState<{
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  } | null>(null);
+  const [headerHeight, setHeaderHeight] = useState(0);
 
   // App settings (loaded once on init)
   const [readAloudEnabled, setReadAloudEnabled] = useState(true);
@@ -360,6 +381,7 @@ export default function EpubViewerScreen() {
   <div id="area"></div>
   <script>
     var book=null,rendition=null,currentCfi=null;
+    var __pdflabAnnotations=[];
 
     function sendMsg(type,data){
       window.ReactNativeWebView.postMessage(JSON.stringify({type:type,data:data||{}}));
@@ -400,6 +422,65 @@ export default function EpubViewerScreen() {
               sendMsg('location',{cfi:currentCfi||'',percentage:pct,chapter:0,total:0});
             }
           },{passive:true});
+
+          // ── Text selection bridge for each rendered section ─────
+          rendition.on('rendered',function(){
+            setTimeout(function(){
+              try{
+                var contents=rendition.getContents();
+                if(!contents||!contents.length) return;
+                for(var ci=0;ci<contents.length;ci++){
+                  var c=contents[ci];
+                  var cdoc=c.document;
+                  if(!cdoc||cdoc.__epubSelBridge) continue;
+                  cdoc.__epubSelBridge=true;
+                  (function(d){
+                    var _last='';
+                    function report(){
+                      var sel=d.getSelection?d.getSelection():(d.defaultView?d.defaultView.getSelection():null);
+                      if(!sel||sel.isCollapsed||!sel.toString().trim()){
+                        if(_last){_last='';sendMsg('selection_clear',{});}
+                        return;
+                      }
+                      var text=sel.toString().trim();
+                      if(text===_last) return;
+                      _last=text;
+                      try{
+                        var range=sel.getRangeAt(0);
+                        var rect=range.getBoundingClientRect();
+                        var iframe=d.defaultView?d.defaultView.frameElement:null;
+                        var ox=0,oy=0;
+                        if(iframe){var ir=iframe.getBoundingClientRect();ox=ir.left;oy=ir.top;}
+                        sendMsg('selection',{
+                          text:text,
+                          rect:{x:rect.left+ox,y:rect.top+oy,width:rect.width,height:rect.height}
+                        });
+                      }catch(e){}
+                    }
+                    d.addEventListener('selectionchange',function(){setTimeout(report,120);});
+                    d.addEventListener('touchend',function(){setTimeout(report,120);},{passive:true});
+                    d.addEventListener('mouseup',function(){setTimeout(report,50);});
+                    d.addEventListener('contextmenu',function(e){
+                      var sel=d.getSelection?d.getSelection():(d.defaultView?d.defaultView.getSelection():null);
+                      if(sel&&!sel.isCollapsed&&sel.toString().trim()) e.preventDefault();
+                      setTimeout(report,100);
+                    });
+                    // Long-press polling fallback
+                    var lpt,lpp,lpa=false;
+                    d.addEventListener('touchstart',function(){
+                      lpa=true;clearTimeout(lpt);clearInterval(lpp);
+                      lpt=setTimeout(function(){
+                        if(!lpa)return;report();
+                        lpp=setInterval(function(){if(!lpa){clearInterval(lpp);return;}report();},80);
+                      },350);
+                    },{passive:true});
+                    d.addEventListener('touchend',function(){lpa=false;clearTimeout(lpt);clearInterval(lpp);},{passive:true});
+                    d.addEventListener('touchcancel',function(){lpa=false;clearTimeout(lpt);clearInterval(lpp);},{passive:true});
+                  })(cdoc);
+                }
+              }catch(e){}
+            },100);
+          });
 
           // Highlight search matches in each chapter after it renders
           rendition.on('rendered',function(){
@@ -448,6 +529,62 @@ export default function EpubViewerScreen() {
             },150);
           });
 
+          // ── Reapply persisted annotations on each render ──────
+          rendition.on('rendered',function(){
+            if(!__pdflabAnnotations||!__pdflabAnnotations.length) return;
+            setTimeout(function(){
+              try{
+                var contents=rendition.getContents();
+                if(!contents||!contents.length) return;
+                for(var ci=0;ci<contents.length;ci++){
+                  var d=contents[ci].document;
+                  if(!d||!d.body||d.__pdflabAnnotated) continue;
+                  d.__pdflabAnnotated=true;
+                  for(var ai=0;ai<__pdflabAnnotations.length;ai++){
+                    var ann=__pdflabAnnotations[ai];
+                    var q=ann.text;if(!q) continue;
+                    var walker=d.createTreeWalker(d.body,NodeFilter.SHOW_TEXT,null,false);
+                    var nd;
+                    while((nd=walker.nextNode())){
+                      var txt=nd.nodeValue||'';
+                      var idx=txt.indexOf(q);
+                      if(idx===-1||!nd.parentNode) continue;
+                      try{
+                        var r=d.createRange();
+                        r.setStart(nd,idx);
+                        r.setEnd(nd,Math.min(idx+q.length,txt.length));
+                        var sp=d.createElement('span');
+                        var frag=r.extractContents();
+                        sp.appendChild(frag);
+                        if(ann.kind==='highlight'){
+                          sp.style.backgroundColor=ann.color||'rgba(255,235,59,0.4)';
+                          sp.style.borderRadius='2px';sp.style.padding='0 1px';
+                          sp.className='pdflab-hl';
+                          sp.setAttribute('data-hl-id',ann.id);
+                        }else if(ann.kind==='underline'){
+                          sp.style.textDecoration='underline';
+                          sp.style.textDecorationColor='#1976D2';
+                          sp.style.textDecorationThickness='2px';
+                          sp.style.textUnderlineOffset='3px';
+                          sp.className='pdflab-ul';
+                          sp.setAttribute('data-ul-id',ann.id);
+                        }else if(ann.kind==='strikethrough'){
+                          sp.style.textDecoration='line-through';
+                          sp.style.textDecorationColor='#E53935';
+                          sp.style.textDecorationThickness='2px';
+                          sp.className='pdflab-st';
+                          sp.setAttribute('data-st-id',ann.id);
+                        }
+                        r.insertNode(sp);
+                      }catch(e){}
+                      break;
+                    }
+                  }
+                }
+              }catch(e){}
+            },200);
+          });
+
           // Track location changes
           rendition.on('relocated',function(location){
             if(!location||!location.start) return;
@@ -484,6 +621,7 @@ export default function EpubViewerScreen() {
     function goToHref(href){if(rendition)rendition.display(href);}
     function changeTheme(t){if(rendition)rendition.themes.select(t);document.body.style.background=t==='dark'?'#1a1a1a':t==='sepia'?'#f5f1e8':'#ffffff';}
     function changeFontSize(s){if(rendition)rendition.themes.fontSize(s+"%");}
+    function setAnnotations(anns){__pdflabAnnotations=anns||[];}
 
     // Poll for ReactNativeWebView bridge before signaling ready
     (function waitForBridge(){
@@ -592,7 +730,7 @@ export default function EpubViewerScreen() {
   const handleMessage = useCallback(
     (event: { nativeEvent: { data: string } }) => {
       try {
-        const msg: WVMessage = JSON.parse(event.nativeEvent.data);
+        const msg = JSON.parse(event.nativeEvent.data);
 
         switch (msg.type) {
           case "webview-ready":
@@ -602,6 +740,23 @@ export default function EpubViewerScreen() {
           case "ready":
             setLoading(false);
             setBookInfo((msg as WVReadyMsg).data);
+            // Load and inject saved annotations
+            if (uri) {
+              Promise.all([getHighlights(uri), getUnderlines(uri), getStrikethroughs(uri)])
+                .then(([hl, ul, st]) => {
+                  const annotations = [
+                    ...hl.map((h) => ({ id: h.id, text: h.text, kind: "highlight", color: h.color })),
+                    ...ul.map((u) => ({ id: u.id, text: u.text, kind: "underline" })),
+                    ...st.map((s) => ({ id: s.id, text: s.text, kind: "strikethrough" })),
+                  ];
+                  if (annotations.length) {
+                    webViewRef.current?.injectJavaScript(
+                      `setAnnotations(${JSON.stringify(annotations)}); true;`,
+                    );
+                  }
+                })
+                .catch(() => {});
+            }
             break;
 
           case "error":
@@ -639,6 +794,22 @@ export default function EpubViewerScreen() {
             setSearchLoading(false);
             break;
           }
+
+          // ── Text selection from epub.js iframe ──────────────────
+          case "selection": {
+            const sel = msg.data || msg;
+            if (sel.text) {
+              setSelectionVisible(true);
+              setSelectionText(sel.text);
+              setSelectionRect(sel.rect ?? null);
+            }
+            break;
+          }
+          case "selection_clear":
+            setSelectionVisible(false);
+            setSelectionText("");
+            setSelectionRect(null);
+            break;
         }
       } catch {
         // ignore
@@ -744,6 +915,185 @@ export default function EpubViewerScreen() {
     webViewRef.current?.injectJavaScript(`epubClearSearch();true;`);
   }, []);
 
+  // ── Selection toolbar handlers ────────────────────────────────────
+  const handleSelectionHighlight = useCallback(
+    (colorHex: string) => {
+      if (!selectionText || !uri) return;
+      const id = `hl_${Date.now()}`;
+      const safeColor = JSON.stringify(colorHex);
+      const safeId = JSON.stringify(id);
+      webViewRef.current?.injectJavaScript(`
+        (function(){
+          try{
+            var contents=rendition.getContents();
+            if(!contents||!contents.length) return;
+            for(var i=0;i<contents.length;i++){
+              var d=contents[i].document;
+              var sel=d.getSelection?d.getSelection():(d.defaultView?d.defaultView.getSelection():null);
+              if(sel&&!sel.isCollapsed&&sel.toString().trim()){
+                var range=sel.getRangeAt(0);
+                var span=d.createElement('span');
+                try{
+                  var frag=range.extractContents();
+                  span.appendChild(frag);
+                  span.style.backgroundColor=${safeColor};
+                  span.style.borderRadius='2px';
+                  span.style.padding='0 1px';
+                  span.className='pdflab-hl';
+                  span.setAttribute('data-hl-id',${safeId});
+                  range.insertNode(span);
+                }catch(e){}
+                sel.removeAllRanges();
+                break;
+              }
+            }
+          }catch(e){}
+        })();true;
+      `);
+      saveHighlight({
+        id,
+        fileUri: uri,
+        startOffset: 0,
+        endOffset: 0,
+        text: selectionText,
+        color: colorHex,
+        createdAt: Date.now(),
+      });
+    },
+    [selectionText, uri],
+  );
+
+  const handleSelectionUnderline = useCallback(() => {
+    if (!selectionText || !uri) return;
+    const id = `ul_${Date.now()}`;
+    const safeId = JSON.stringify(id);
+    webViewRef.current?.injectJavaScript(`
+      (function(){
+        try{
+          var contents=rendition.getContents();
+          if(!contents||!contents.length) return;
+          for(var i=0;i<contents.length;i++){
+            var d=contents[i].document;
+            var sel=d.getSelection?d.getSelection():(d.defaultView?d.defaultView.getSelection():null);
+            if(sel&&!sel.isCollapsed&&sel.toString().trim()){
+              var range=sel.getRangeAt(0);
+              var span=d.createElement('span');
+              try{
+                var frag=range.extractContents();
+                span.appendChild(frag);
+                span.style.textDecoration='underline';
+                span.style.textDecorationColor='#1976D2';
+                span.style.textDecorationThickness='2px';
+                span.style.textUnderlineOffset='3px';
+                span.className='pdflab-ul';
+                span.setAttribute('data-ul-id',${safeId});
+                range.insertNode(span);
+              }catch(e){}
+              sel.removeAllRanges();
+              break;
+            }
+          }
+        }catch(e){}
+      })();true;
+    `);
+    saveUnderline({
+      id,
+      fileUri: uri,
+      startOffset: 0,
+      endOffset: 0,
+      text: selectionText,
+      createdAt: Date.now(),
+    });
+  }, [selectionText, uri]);
+
+  const handleSelectionStrikethrough = useCallback(() => {
+    if (!selectionText || !uri) return;
+    const id = `st_${Date.now()}`;
+    const safeId = JSON.stringify(id);
+    webViewRef.current?.injectJavaScript(`
+      (function(){
+        try{
+          var contents=rendition.getContents();
+          if(!contents||!contents.length) return;
+          for(var i=0;i<contents.length;i++){
+            var d=contents[i].document;
+            var sel=d.getSelection?d.getSelection():(d.defaultView?d.defaultView.getSelection():null);
+            if(sel&&!sel.isCollapsed&&sel.toString().trim()){
+              var range=sel.getRangeAt(0);
+              var span=d.createElement('span');
+              try{
+                var frag=range.extractContents();
+                span.appendChild(frag);
+                span.style.textDecoration='line-through';
+                span.style.textDecorationColor='#E53935';
+                span.style.textDecorationThickness='2px';
+                span.className='pdflab-st';
+                span.setAttribute('data-st-id',${safeId});
+                range.insertNode(span);
+              }catch(e){}
+              sel.removeAllRanges();
+              break;
+            }
+          }
+        }catch(e){}
+      })();true;
+    `);
+    saveStrikethrough({
+      id,
+      fileUri: uri,
+      startOffset: 0,
+      endOffset: 0,
+      text: selectionText,
+      createdAt: Date.now(),
+    });
+  }, [selectionText, uri]);
+
+  const handleSelectionCopy = useCallback(() => {
+    if (!selectionText) return;
+    import("react-native").then(({ Clipboard }) => {
+      // Clipboard is deprecated; use @react-native-clipboard if available
+    }).catch(() => {});
+    // Use the WebView's execCommand to copy
+    webViewRef.current?.injectJavaScript(`
+      (function(){
+        try{
+          var contents=rendition.getContents();
+          if(!contents||!contents.length) return;
+          for(var i=0;i<contents.length;i++){
+            var d=contents[i].document;
+            d.execCommand('copy');
+          }
+        }catch(e){}
+      })();true;
+    `);
+  }, [selectionText]);
+
+  const handleSelectionSearch = useCallback(() => {
+    if (!selectionText) return;
+    router.push({ pathname: "/ai", params: { prompt: selectionText } });
+    setSelectionVisible(false);
+  }, [selectionText]);
+
+  const handleSelectionDismiss = useCallback(() => {
+    setSelectionVisible(false);
+    setSelectionText("");
+    setSelectionRect(null);
+    // Clear selection in epub.js iframes
+    webViewRef.current?.injectJavaScript(`
+      (function(){
+        try{
+          var contents=rendition.getContents();
+          if(!contents||!contents.length) return;
+          for(var i=0;i<contents.length;i++){
+            var d=contents[i].document;
+            var sel=d.getSelection?d.getSelection():(d.defaultView?d.defaultView.getSelection():null);
+            if(sel) sel.removeAllRanges();
+          }
+        }catch(e){}
+      })();true;
+    `);
+  }, []);
+
   // ============================================================================
   // RENDER – Error (before WebView loaded anything)
   // ============================================================================
@@ -828,30 +1178,32 @@ export default function EpubViewerScreen() {
       style={[styles.container, { backgroundColor: theme.background.primary }]}
       edges={["top"]}
     >
-      <Header
-        title={bookInfo.title || displayName}
-        subtitle={bookInfo.author}
-        theme={theme}
-        onClose={handleClose}
-        onOpenWithSystem={handleOpenWithSystem}
-        showTocButton={toc.length > 0}
-        onToggleToc={() => setShowToc(true)}
-        onToggleSettings={() => setShowSettings(true)}
-        onReadAloud={readAloudEnabled ? () => setShowReadAloud(true) : undefined}
-        onSearchText={handleOpenSearch}
-        onChatWithDocument={() => {
-          const docUri = normalizedUriRef.current || uri;
-          if (!docUri) return;
-          router.push({
-            pathname: "/chat-with-document",
-            params: {
-              uri: docUri,
-              name: name || "document.epub",
-              mimeType: "application/epub+zip",
-            },
-          });
-        }}
-      />
+      <View onLayout={(e) => setHeaderHeight(e.nativeEvent.layout.height)}>
+        <Header
+          title={bookInfo.title || displayName}
+          subtitle={bookInfo.author}
+          theme={theme}
+          onClose={handleClose}
+          onOpenWithSystem={handleOpenWithSystem}
+          showTocButton={toc.length > 0}
+          onToggleToc={() => setShowToc(true)}
+          onToggleSettings={() => setShowSettings(true)}
+          onReadAloud={readAloudEnabled ? () => setShowReadAloud(true) : undefined}
+          onSearchText={handleOpenSearch}
+          onChatWithDocument={() => {
+            const docUri = normalizedUriRef.current || uri;
+            if (!docUri) return;
+            router.push({
+              pathname: "/chat-with-document",
+              params: {
+                uri: docUri,
+                name: name || "document.epub",
+                mimeType: "application/epub+zip",
+              },
+            });
+          }}
+        />
+      </View>
 
       {/* ── Search bar ──────────────────────────────────────────────── */}
       {showSearch && (
@@ -970,6 +1322,23 @@ export default function EpubViewerScreen() {
         }
         colorScheme={colorScheme}
         onVoicePress={() => setShowVoicePicker(true)}
+      />
+
+      {/* ── Text selection toolbar ────────────────────────────────── */}
+      <SelectionToolbar
+        visible={selectionVisible}
+        selectedText={selectionText}
+        rect={
+          selectionRect
+            ? { ...selectionRect, y: selectionRect.y + headerHeight }
+            : null
+        }
+        onHighlight={handleSelectionHighlight}
+        onUnderline={handleSelectionUnderline}
+        onStrikethrough={handleSelectionStrikethrough}
+        onCopy={handleSelectionCopy}
+        onSearch={handleSelectionSearch}
+        onDismiss={handleSelectionDismiss}
       />
 
       <VoicePicker

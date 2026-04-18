@@ -39,7 +39,7 @@ function readerCSS(settings: ReaderSettings): string {
 :root{--fs:${settings.fontSize}px;--lh:${settings.lineHeight};--ff:${settings.fontFamily},-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;--bg:${t.bg};--fg:${t.text};--link:${t.link};--border:${t.border}}
 *{margin:0;padding:0;box-sizing:border-box;-webkit-user-select:text;user-select:text}
 html{font-size:var(--fs);-webkit-text-size-adjust:100%}
-body{font-family:var(--ff);line-height:var(--lh);color:var(--fg);background:var(--bg);padding:0;margin:0;overflow-x:hidden;-webkit-font-smoothing:antialiased;-webkit-touch-callout:none;cursor:text}
+body{font-family:var(--ff);line-height:var(--lh);color:var(--fg);background:var(--bg);padding:0;margin:0;overflow-x:hidden;-webkit-font-smoothing:antialiased;cursor:text}
 .reader-content{max-width:100%;padding:20px 16px;margin:0 auto}
 p{margin-bottom:1em;text-align:left;word-wrap:break-word;overflow-wrap:break-word}
 h1,h2,h3,h4,h5,h6{margin-top:1.5em;margin-bottom:.5em;font-weight:600;line-height:1.3;color:var(--fg)}

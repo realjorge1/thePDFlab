@@ -20,6 +20,7 @@ import {
   Alert,
   Platform,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -43,7 +44,18 @@ import {
   PdfRecoveryScreen,
 } from "@/components/PdfRecoveryScreen";
 import { ReadAloudController } from "@/components/ReadAloudController";
-import type { ViewMode } from "@/src/types/document-viewer.types";
+import type { Highlight, Strikethrough, Underline, ViewMode } from "@/src/types/document-viewer.types";
+import {
+  getHighlights,
+  getStrikethroughs,
+  getUnderlines,
+  saveHighlight,
+  saveStrikethrough,
+  saveUnderline,
+  removeHighlight,
+  removeStrikethrough,
+  removeUnderline,
+} from "@/services/viewerStorageService";
 
 import {
   DarkTheme,
@@ -349,8 +361,9 @@ export default function PdfViewerScreen() {
   }, [uri]);
 
   // ── View mode toggle (Mobile ↔ Normal) ──────────────────────────
+  /** @param silent When true (e.g. auto-switch on long press), suppress alerts on failure. */
   const handleViewModeChange = useCallback(
-    async (newMode: ViewMode) => {
+    async (newMode: ViewMode, silent = false) => {
       // Switching back to original — immediate, cancel any pending load
       if (newMode === "original") {
         setState((prev) => ({
@@ -365,10 +378,12 @@ export default function PdfViewerScreen() {
       // init when running a recent Chrome build. Android 10+ decouples
       // WebView from Chrome, so the crash can't happen there.
       if (Platform.OS === "android" && (Platform.Version as number) < 29) {
-        Alert.alert(
-          "Mobile View Unavailable",
-          "Mobile View requires Android 10 or newer. Your device will continue to work in Normal View.",
-        );
+        if (!silent) {
+          Alert.alert(
+            "Mobile View Unavailable",
+            "Mobile View requires Android 10 or newer. Your device will continue to work in Normal View.",
+          );
+        }
         return;
       }
 
@@ -398,15 +413,19 @@ export default function PdfViewerScreen() {
             mobileLoading: false,
           }));
         } else {
-          Alert.alert(
-            "Mobile View",
-            result.message || "Mobile View not available for this PDF.",
-          );
+          if (!silent) {
+            Alert.alert(
+              "Mobile View",
+              result.message || "Mobile View not available for this PDF.",
+            );
+          }
           setState((prev) => ({ ...prev, mobileLoading: false }));
         }
       } catch (err) {
         if (!isMountedRef.current) return;
-        Alert.alert("Mobile View", "Failed to generate Mobile View.");
+        if (!silent) {
+          Alert.alert("Mobile View", "Failed to generate Mobile View.");
+        }
         setState((prev) => ({ ...prev, mobileLoading: false }));
       }
     },
@@ -686,14 +705,40 @@ export default function PdfViewerScreen() {
         searchMobileCount: msg.count ?? 0,
         searchMobileCurrent: msg.current ?? 0,
       }));
+    } else if (msg.type === "annotation_applied" && !msg.success && msg.id && uri) {
+      // Bridge failed to apply — remove from storage
+      if (msg.kind === "highlight") removeHighlight(uri, msg.id);
+      else if (msg.kind === "underline") removeUnderline(uri, msg.id);
+      else if (msg.kind === "strikethrough") removeStrikethrough(uri, msg.id);
     }
-  }, []);
+  }, [uri]);
+
+  // ── Reapply saved annotations when MobileRenderer is ready ──────
+  const handleMobileReady = useCallback(async () => {
+    if (!uri) return;
+    try {
+      const [highlights, underlines, strikethroughs] = await Promise.all([
+        getHighlights(uri),
+        getUnderlines(uri),
+        getStrikethroughs(uri),
+      ]);
+      if (highlights.length || underlines.length || strikethroughs.length) {
+        mobileRendererRef.current?.bridgeReapplyAnnotations(
+          highlights,
+          underlines,
+          strikethroughs,
+        );
+      }
+    } catch {
+      // non-critical
+    }
+  }, [uri]);
 
   // ── Selection toolbar actions ────────────────────────────────────
   const handleSelectionHighlight = useCallback(
     (colorHex: string) => {
       const { selectionOffsets, selectionText } = state;
-      if (!selectionOffsets) return;
+      if (!selectionOffsets || !uri) return;
       const id = `hl_${Date.now()}`;
       mobileRendererRef.current?.bridgeHighlight(
         id,
@@ -701,45 +746,60 @@ export default function PdfViewerScreen() {
         selectionOffsets.endOffset,
         colorHex,
       );
+      saveHighlight({
+        id,
+        fileUri: uri,
+        startOffset: selectionOffsets.startOffset,
+        endOffset: selectionOffsets.endOffset,
+        text: selectionText,
+        color: colorHex,
+        createdAt: Date.now(),
+      });
     },
-    [state.selectionOffsets, state.selectionText],
+    [state.selectionOffsets, state.selectionText, uri],
   );
 
   const handleSelectionUnderline = useCallback(() => {
-    const { selectionOffsets } = state;
-    if (!selectionOffsets) return;
+    const { selectionOffsets, selectionText } = state;
+    if (!selectionOffsets || !uri) return;
     const id = `ul_${Date.now()}`;
     mobileRendererRef.current?.bridgeUnderline(
       id,
       selectionOffsets.startOffset,
       selectionOffsets.endOffset,
     );
-  }, [state.selectionOffsets]);
+    saveUnderline({
+      id,
+      fileUri: uri,
+      startOffset: selectionOffsets.startOffset,
+      endOffset: selectionOffsets.endOffset,
+      text: selectionText,
+      createdAt: Date.now(),
+    });
+  }, [state.selectionOffsets, state.selectionText, uri]);
 
   const handleSelectionStrikethrough = useCallback(() => {
-    const { selectionOffsets } = state;
-    if (!selectionOffsets) return;
+    const { selectionOffsets, selectionText } = state;
+    if (!selectionOffsets || !uri) return;
     const id = `st_${Date.now()}`;
     mobileRendererRef.current?.bridgeStrikethrough(
       id,
       selectionOffsets.startOffset,
       selectionOffsets.endOffset,
     );
-  }, [state.selectionOffsets]);
+    saveStrikethrough({
+      id,
+      fileUri: uri,
+      startOffset: selectionOffsets.startOffset,
+      endOffset: selectionOffsets.endOffset,
+      text: selectionText,
+      createdAt: Date.now(),
+    });
+  }, [state.selectionOffsets, state.selectionText, uri]);
 
   const handleSelectionCopy = useCallback(() => {
     mobileRendererRef.current?.bridgeCopySelection();
   }, []);
-
-  const handleSelectionShare = useCallback(async () => {
-    if (!state.selectionText) return;
-    try {
-      const { Share } = await import("react-native");
-      await Share.share({ message: state.selectionText });
-    } catch {
-      /* non-critical */
-    }
-  }, [state.selectionText]);
 
   const handleSelectionAskAthemi = useCallback(() => {
     if (!state.selectionText) return;
@@ -1175,6 +1235,100 @@ export default function PdfViewerScreen() {
         </View>
       )}
 
+      {/* ── Search results panel (original view) — shows text excerpts
+           with matched words highlighted in yellow ────────────────── */}
+      {state.showSearch &&
+        !isMobileView &&
+        state.searchQuery.trim().length > 0 &&
+        !state.searchExtracting &&
+        state.searchMatchPages.length > 0 && (
+          <View
+            style={[
+              styles.searchResultsPanel,
+              {
+                backgroundColor: theme.surface.primary,
+                borderBottomColor: theme.border.light,
+              },
+            ]}
+          >
+            <ScrollView
+              style={styles.searchResultsScroll}
+              keyboardShouldPersistTaps="handled"
+              showsVerticalScrollIndicator
+            >
+              {state.searchMatchPages.map((pageNum, idx) => {
+                const pageText = state.readAloudPageTexts[pageNum - 1] || "";
+                const q = state.searchQuery.toLowerCase();
+                const lowerText = pageText.toLowerCase();
+                const matchIdx = lowerText.indexOf(q);
+                if (matchIdx === -1) return null;
+
+                // Extract a snippet around the first match
+                const snippetStart = Math.max(0, matchIdx - 40);
+                const snippetEnd = Math.min(
+                  pageText.length,
+                  matchIdx + state.searchQuery.length + 40,
+                );
+                const before = pageText.substring(snippetStart, matchIdx);
+                const match = pageText.substring(
+                  matchIdx,
+                  matchIdx + state.searchQuery.length,
+                );
+                const after = pageText.substring(
+                  matchIdx + state.searchQuery.length,
+                  snippetEnd,
+                );
+
+                const isActive = idx === state.searchPageIndex;
+                return (
+                  <Pressable
+                    key={`sr-${pageNum}`}
+                    style={[
+                      styles.searchResultItem,
+                      {
+                        backgroundColor: isActive
+                          ? (colorScheme === "dark"
+                              ? "rgba(255,214,0,0.10)"
+                              : "rgba(255,214,0,0.12)")
+                          : "transparent",
+                      },
+                    ]}
+                    onPress={() => {
+                      setState((prev) => ({
+                        ...prev,
+                        searchPageIndex: idx,
+                      }));
+                      setTargetPage(pageNum);
+                    }}
+                  >
+                    <Text
+                      style={[
+                        styles.searchResultPage,
+                        { color: Palette.primary[500] },
+                      ]}
+                    >
+                      Page {pageNum}
+                    </Text>
+                    <Text
+                      style={[
+                        styles.searchResultSnippet,
+                        { color: theme.text.secondary },
+                      ]}
+                      numberOfLines={2}
+                    >
+                      {snippetStart > 0 ? "…" : ""}
+                      {before}
+                      <Text style={styles.searchResultMatch}>{match}</Text>
+                      {after}
+                      {snippetEnd < pageText.length ? "…" : ""}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+          </View>
+        )}
+
       {/* ── Document content ───────────────────────────────────── */}
       {state.normalizedUri && (
         <View style={{ flex: 1 }}>
@@ -1185,6 +1339,7 @@ export default function PdfViewerScreen() {
               loading={state.mobileLoading}
               error={state.mobileError}
               onMessage={handleMobileMessage}
+              onReady={handleMobileReady}
             />
           ) : (
             <>
@@ -1244,8 +1399,7 @@ export default function PdfViewerScreen() {
         onUnderline={handleSelectionUnderline}
         onStrikethrough={handleSelectionStrikethrough}
         onCopy={handleSelectionCopy}
-        onShare={handleSelectionShare}
-        onAskAthemi={handleSelectionAskAthemi}
+        onSearch={handleSelectionAskAthemi}
         onDismiss={handleSelectionDismiss}
       />
 
@@ -1641,5 +1795,33 @@ const styles = StyleSheet.create({
   searchCount: {
     fontSize: 12,
     marginHorizontal: 4,
+  },
+  // ── Search results panel ──
+  searchResultsPanel: {
+    maxHeight: 180,
+    borderBottomWidth: 1,
+  },
+  searchResultsScroll: {
+    flex: 1,
+  },
+  searchResultItem: {
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: "rgba(128,128,128,0.15)",
+  },
+  searchResultPage: {
+    fontSize: 11,
+    fontWeight: "600" as const,
+    marginBottom: 2,
+  },
+  searchResultSnippet: {
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  searchResultMatch: {
+    backgroundColor: "#FFD600",
+    color: "#000",
+    borderRadius: 2,
   },
 });

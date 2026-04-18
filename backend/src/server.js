@@ -133,6 +133,7 @@ app.use("/api/qrcode", require("./routes/qrcodeRoutes"));
 app.use("/api/header-footer", require("./routes/headerFooterRoutes"));
 app.use("/api/highlight-export", require("./routes/highlightExportRoutes"));
 app.use("/api/citations", require("./routes/citationRoutes"));
+app.use("/api/pptx", require("./routes/pptxRoutes"));
 
 // Serve output files (for tools that return download URLs)
 const { OUTPUTS_DIR, startOutputCleanup } = require("./utils/fileOutputUtils");

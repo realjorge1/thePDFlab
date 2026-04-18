@@ -142,6 +142,18 @@ export interface Underline {
 }
 
 // ============================================================================
+// STRIKETHROUGH ANNOTATIONS
+// ============================================================================
+export interface Strikethrough {
+  id: string;
+  fileUri: string;
+  startOffset: number;
+  endOffset: number;
+  text: string;
+  createdAt: number;
+}
+
+// ============================================================================
 // SELECTION MENU
 // ============================================================================
 export type SelectionAction =

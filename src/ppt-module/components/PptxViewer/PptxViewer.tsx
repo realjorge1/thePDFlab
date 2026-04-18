@@ -1,17 +1,13 @@
 /**
- * PptxViewer.tsx
+ * PptxViewer.tsx — DEPRECATED (kept for reference, not imported anywhere).
  *
- * Drop-in React Native component for rendering PPTX files.
+ * Replaced by the backend-driven render pipeline: the .pptx is uploaded to
+ * /api/pptx/convert, LibreOffice renders it to PDF server-side, and the
+ * mobile app displays the PDF via react-native-pdf (see app/ppt-viewer.tsx
+ * and services/pptxRenderClient.ts).
  *
- * Props:
- *  fileUri   – local file path (content:// or file:// URI)
- *  base64    – raw base64 string of the PPTX file (alternative to fileUri)
- *  onReady   – called once parsing is complete; receives { totalSlides }
- *  onError   – called if parsing fails; receives { message }
- *  onSlideChange – called on each slide transition; receives { currentSlide, totalSlides }
- *  style     – outer container ViewStyle
- *  showControls – show built-in prev/next controls (default: true)
- *  theme     – 'dark' | 'light' (controls UI chrome colour; default: 'dark')
+ * Do NOT reintroduce this WebView-based client parser — it has been retired
+ * due to rendering fidelity issues. If you need preview, use renderPptxAsPdf().
  */
 
 import React, {

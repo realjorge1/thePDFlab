@@ -11,19 +11,21 @@
  *
  * Based on /sleek/SelectionToolbar.js.
  */
-import React, { useEffect, useRef } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   Animated,
   Dimensions,
+  type NativeScrollEvent,
+  type NativeSyntheticEvent,
   ScrollView,
   StyleSheet,
   Text,
   TouchableOpacity,
   View,
 } from "react-native";
+import { LinearGradient } from "expo-linear-gradient";
 
 const { width: SCREEN_WIDTH } = Dimensions.get("window");
-const ARROW_SIZE = 7;
 
 // ── Highlight colour palette (5 colours, matching /sleek) ─────────────────────
 const HIGHLIGHT_COLORS = [
@@ -51,8 +53,7 @@ interface Props {
   onUnderline: () => void;
   onStrikethrough: () => void;
   onCopy: () => void;
-  onShare: () => void;
-  onAskAthemi: () => void;
+  onSearch: () => void;
   onDismiss: () => void;
 }
 
@@ -65,12 +66,26 @@ export function SelectionToolbar({
   onUnderline,
   onStrikethrough,
   onCopy,
-  onShare,
-  onAskAthemi,
+  onSearch,
   onDismiss,
 }: Props) {
   const opacity = useRef(new Animated.Value(0)).current;
   const translateY = useRef(new Animated.Value(8)).current;
+
+  // ── Scroll-indicator state ──────────────────────────────────────────
+  const [canScrollLeft, setCanScrollLeft] = useState(false);
+  const [canScrollRight, setCanScrollRight] = useState(true); // assume scrollable initially
+
+  const handleScroll = useCallback(
+    (e: NativeSyntheticEvent<NativeScrollEvent>) => {
+      const { contentOffset, contentSize, layoutMeasurement } = e.nativeEvent;
+      setCanScrollLeft(contentOffset.x > 4);
+      setCanScrollRight(
+        contentOffset.x < contentSize.width - layoutMeasurement.width - 4,
+      );
+    },
+    [],
+  );
 
   useEffect(() => {
     if (visible) {
@@ -112,7 +127,6 @@ export function SelectionToolbar({
   let toolbarX: number;
   let toolbarY: number;
   let showAbove = false;
-  let arrowLeft = TOOLBAR_WIDTH / 2 - ARROW_SIZE;
 
   if (rect) {
     const selectionMidX = rect.x + rect.width / 2;
@@ -124,16 +138,11 @@ export function SelectionToolbar({
     );
 
     const spaceAbove = rect.y - 12;
-    showAbove = spaceAbove > TOOLBAR_HEIGHT + ARROW_SIZE + 4;
+    showAbove = spaceAbove > TOOLBAR_HEIGHT + 4;
 
     toolbarY = showAbove
-      ? rect.y - TOOLBAR_HEIGHT - ARROW_SIZE - 8
-      : rect.y + rect.height + ARROW_SIZE + 8;
-
-    arrowLeft = Math.max(
-      8,
-      Math.min(selectionMidX - toolbarX - ARROW_SIZE, TOOLBAR_WIDTH - 16),
-    );
+      ? rect.y - TOOLBAR_HEIGHT - 8
+      : rect.y + rect.height + 8;
   } else {
     // Fallback: float above the keyboard area at bottom of screen
     toolbarX = (SCREEN_WIDTH - TOOLBAR_WIDTH) / 2;
@@ -154,14 +163,6 @@ export function SelectionToolbar({
       ]}
       pointerEvents="box-none"
     >
-      {/* Arrow pointing toward selection */}
-      {rect && showAbove && (
-        <View style={[styles.arrowDown, { left: arrowLeft }]} />
-      )}
-      {rect && !showAbove && (
-        <View style={[styles.arrowUp, { left: arrowLeft }]} />
-      )}
-
       <View
         style={[
           styles.toolbar,
@@ -173,6 +174,12 @@ export function SelectionToolbar({
           showsHorizontalScrollIndicator={false}
           contentContainerStyle={styles.scrollContent}
           keyboardShouldPersistTaps="always"
+          onScroll={handleScroll}
+          scrollEventThrottle={16}
+          onContentSizeChange={(_w, _h) => {
+            // Re-check if content is wider than the container on mount
+            setCanScrollRight(_w > TOOLBAR_WIDTH);
+          }}
         >
           {/* ── "Highlight" label + 5 colour circles ── */}
           <View style={styles.sectionLabel}>
@@ -212,15 +219,18 @@ export function SelectionToolbar({
             <Text style={styles.actionLabel}>Underline</Text>
           </TouchableOpacity>
 
-          {/* ── Ask athemi ── */}
+          {/* ── Copy ── */}
           <TouchableOpacity
-            onPress={onAskAthemi}
+            onPress={() => {
+              onCopy();
+              onDismiss();
+            }}
             style={styles.actionBtn}
             hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
-            accessibilityLabel="Ask athemi"
+            accessibilityLabel="Copy"
           >
-            <Text style={[styles.actionIcon, { color: "#A78BFA" }]}>✦</Text>
-            <Text style={styles.actionLabel}>Ask athemi</Text>
+            <Text style={styles.actionIcon}>⎘</Text>
+            <Text style={styles.actionLabel}>Copy</Text>
           </TouchableOpacity>
 
           {/* ── Cross Out (strikethrough) ── */}
@@ -237,32 +247,15 @@ export function SelectionToolbar({
             <Text style={styles.actionLabel}>Cross Out</Text>
           </TouchableOpacity>
 
-          {/* ── Copy ── */}
+          {/* ── Search (opens AI chat for selected text) ── */}
           <TouchableOpacity
-            onPress={() => {
-              onCopy();
-              onDismiss();
-            }}
+            onPress={onSearch}
             style={styles.actionBtn}
             hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
-            accessibilityLabel="Copy"
+            accessibilityLabel="Search"
           >
-            <Text style={styles.actionIcon}>⎘</Text>
-            <Text style={styles.actionLabel}>Copy</Text>
-          </TouchableOpacity>
-
-          {/* ── Share ── */}
-          <TouchableOpacity
-            onPress={() => {
-              onShare();
-              onDismiss();
-            }}
-            style={styles.actionBtn}
-            hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
-            accessibilityLabel="Share"
-          >
-            <Text style={styles.actionIcon}>↗</Text>
-            <Text style={styles.actionLabel}>Share</Text>
+            <Text style={[styles.actionIcon, { color: "#A78BFA" }]}>⌕</Text>
+            <Text style={styles.actionLabel}>Search</Text>
           </TouchableOpacity>
 
           <View style={styles.divider} />
@@ -278,6 +271,26 @@ export function SelectionToolbar({
             <Text style={styles.actionLabel}>Cancel</Text>
           </TouchableOpacity>
         </ScrollView>
+
+        {/* ── Scroll-fade indicators ── */}
+        {canScrollLeft && (
+          <LinearGradient
+            colors={["#1E1E2E", "transparent"]}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 0 }}
+            style={styles.fadeLeft}
+            pointerEvents="none"
+          />
+        )}
+        {canScrollRight && (
+          <LinearGradient
+            colors={["transparent", "#1E1E2E"]}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 0 }}
+            style={styles.fadeRight}
+            pointerEvents="none"
+          />
+        )}
       </View>
     </Animated.View>
   );
@@ -365,29 +378,26 @@ const styles = StyleSheet.create({
     marginTop: 1,
   },
 
-  // Arrow indicators
-  arrowUp: {
+  // Scroll-fade gradient overlays
+  fadeLeft: {
     position: "absolute",
-    top: -(ARROW_SIZE * 2 - 1),
-    width: 0,
-    height: 0,
-    borderLeftWidth: ARROW_SIZE,
-    borderRightWidth: ARROW_SIZE,
-    borderBottomWidth: ARROW_SIZE * 2,
-    borderLeftColor: "transparent",
-    borderRightColor: "transparent",
-    borderBottomColor: "#1E1E2E",
+    left: 0,
+    top: 0,
+    bottom: 0,
+    width: 24,
+    borderTopLeftRadius: 12,
+    borderBottomLeftRadius: 12,
+    zIndex: 2,
   },
-  arrowDown: {
+  fadeRight: {
     position: "absolute",
-    bottom: -(ARROW_SIZE * 2 - 1),
-    width: 0,
-    height: 0,
-    borderLeftWidth: ARROW_SIZE,
-    borderRightWidth: ARROW_SIZE,
-    borderTopWidth: ARROW_SIZE * 2,
-    borderLeftColor: "transparent",
-    borderRightColor: "transparent",
-    borderTopColor: "#1E1E2E",
+    right: 0,
+    top: 0,
+    bottom: 0,
+    width: 24,
+    borderTopRightRadius: 12,
+    borderBottomRightRadius: 12,
+    zIndex: 2,
   },
+
 });

@@ -5,6 +5,7 @@
 import type {
     Highlight,
     ReaderSettings,
+    Strikethrough,
     Underline,
     ViewMode
 } from "@/src/types/document-viewer.types";
@@ -17,6 +18,7 @@ const KEYS = {
   PAGE: "@viewer_page_",
   HIGHLIGHTS: "@viewer_highlights_",
   UNDERLINES: "@viewer_underlines_",
+  STRIKETHROUGHS: "@viewer_strikethroughs_",
   READER_SETTINGS: "@viewer_reader_settings",
   SEARCH_HISTORY: "@viewer_search_history",
 };
@@ -263,5 +265,54 @@ export async function clearUnderlines(fileUri: string): Promise<void> {
     await AsyncStorage.removeItem(KEYS.UNDERLINES + fileUri);
   } catch (e) {
     console.warn("[ViewerStorage] clearUnderlines error:", e);
+  }
+}
+
+// ============================================================================
+// STRIKETHROUGHS (per-file)
+// ============================================================================
+export async function getStrikethroughs(fileUri: string): Promise<Strikethrough[]> {
+  try {
+    const raw = await AsyncStorage.getItem(KEYS.STRIKETHROUGHS + fileUri);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+export async function saveStrikethrough(strikethrough: Strikethrough): Promise<void> {
+  try {
+    const existing = await getStrikethroughs(strikethrough.fileUri);
+    existing.push(strikethrough);
+    await AsyncStorage.setItem(
+      KEYS.STRIKETHROUGHS + strikethrough.fileUri,
+      JSON.stringify(existing),
+    );
+  } catch (e) {
+    console.warn("[ViewerStorage] saveStrikethrough error:", e);
+  }
+}
+
+export async function removeStrikethrough(
+  fileUri: string,
+  strikethroughId: string,
+): Promise<void> {
+  try {
+    const existing = await getStrikethroughs(fileUri);
+    const filtered = existing.filter((s) => s.id !== strikethroughId);
+    await AsyncStorage.setItem(
+      KEYS.STRIKETHROUGHS + fileUri,
+      JSON.stringify(filtered),
+    );
+  } catch (e) {
+    console.warn("[ViewerStorage] removeStrikethrough error:", e);
+  }
+}
+
+export async function clearStrikethroughs(fileUri: string): Promise<void> {
+  try {
+    await AsyncStorage.removeItem(KEYS.STRIKETHROUGHS + fileUri);
+  } catch (e) {
+    console.warn("[ViewerStorage] clearStrikethroughs error:", e);
   }
 }

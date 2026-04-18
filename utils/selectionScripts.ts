@@ -92,14 +92,14 @@ export const SELECTION_BRIDGE_JS = `
     } catch (_) {}
   }
 
-  /* ── Selection change listener (debounced 250ms) ─────────────── */
-  var handleSelectionChange = debounce(reportSelection, 250);
+  /* ── Selection change listener (debounced 120ms) ─────────────── */
+  var handleSelectionChange = debounce(reportSelection, 120);
   document.addEventListener('selectionchange', handleSelectionChange);
 
   /* touchend — fire after the user lifts their finger.
-   * 250ms gives Android time to commit the selection. */
+   * 120ms gives Android time to commit the selection. */
   document.addEventListener('touchend', function() {
-    setTimeout(reportSelection, 250);
+    setTimeout(reportSelection, 120);
   }, { passive: true });
 
   document.addEventListener('mouseup', function() {
@@ -107,32 +107,48 @@ export const SELECTION_BRIDGE_JS = `
   });
 
   /* contextmenu fires on Android long-press — prevent the native popup
-   * and read the selection after a delay that covers both fast and slow
-   * Android WebView implementations (300ms is reliably after selection). */
+   * only when there is an active selection (so it doesn't interfere with
+   * Android WebView initiating the text selection in the first place).
+   * Read the selection after a short delay. */
   document.addEventListener('contextmenu', function(e) {
-    e.preventDefault();
-    setTimeout(reportSelection, 300);
+    var sel = window.getSelection();
+    if (sel && !sel.isCollapsed && sel.toString().trim()) {
+      e.preventDefault();
+    }
+    setTimeout(reportSelection, 100);
   });
 
   /* ── Long-press detection via touchstart + timer ─────────────── *
-   * Fallback for devices where contextmenu doesn't fire. After 600ms
-   * of sustained touch (i.e. a long-press), poll for a selection. */
+   * Fallback for devices where contextmenu doesn't fire. After 350ms
+   * of sustained touch (i.e. a long-press), start polling for a
+   * selection every 80ms until we find one or the finger lifts. */
   var _lpTimer = null;
+  var _lpPollTimer = null;
   var _lpActive = false;
   document.addEventListener('touchstart', function() {
     _lpActive = true;
     clearTimeout(_lpTimer);
+    clearInterval(_lpPollTimer);
     _lpTimer = setTimeout(function() {
-      if (_lpActive) { reportSelection(); }
-    }, 600);
+      if (!_lpActive) return;
+      reportSelection();
+      /* Poll every 80ms — Android WebView may commit the selection after
+         a variable delay; polling catches it quickly without a fixed wait. */
+      _lpPollTimer = setInterval(function() {
+        if (!_lpActive) { clearInterval(_lpPollTimer); return; }
+        reportSelection();
+      }, 80);
+    }, 350);
   }, { passive: true });
   document.addEventListener('touchend', function() {
     _lpActive = false;
     clearTimeout(_lpTimer);
+    clearInterval(_lpPollTimer);
   }, { passive: true });
   document.addEventListener('touchcancel', function() {
     _lpActive = false;
     clearTimeout(_lpTimer);
+    clearInterval(_lpPollTimer);
   }, { passive: true });
 
   /* On scroll, re-emit position with updated viewport-relative rect */
@@ -236,6 +252,8 @@ export const SELECTION_BRIDGE_JS = `
         window.__selBridge_highlight(a.id, a.startOffset, a.endOffset, a.color || 'rgba(255,235,59,0.4)');
       } else if (a.kind === 'underline') {
         window.__selBridge_underline(a.id, a.startOffset, a.endOffset);
+      } else if (a.kind === 'strikethrough') {
+        window.__selBridge_strikethrough(a.id, a.startOffset, a.endOffset);
       }
     }
   };
