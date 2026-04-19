@@ -23,6 +23,7 @@ import {
   Layers,
   MonitorPlay,
   ScanLine,
+  Sheet as SheetIcon,
 } from "lucide-react-native";
 import React, { useCallback, useMemo, useRef, useState } from "react";
 import {
@@ -128,6 +129,17 @@ const CREATION_OPTIONS: CreationOption[] = [
     iconColor: "#D24726",
     bgColor: "#FEF3EE",
     accentColor: "#D24726",
+    fileType: null,
+    method: "blank",
+  },
+  {
+    id: "blank-xlsx",
+    title: "Spreadsheet",
+    subtitle: "Create an .xlsx workbook",
+    icon: SheetIcon,
+    iconColor: "#107C41",
+    bgColor: "#E6F4EA",
+    accentColor: "#107C41",
     fileType: null,
     method: "blank",
   },
@@ -294,6 +306,10 @@ export default function CreateFileScreen() {
       // Blank documents → navigate to editor immediately
       if (option.id === "blank-ppt") {
         router.push("/ppt-studio" as any);
+        return;
+      }
+      if (option.id === "blank-xlsx") {
+        router.push("/xlsx-viewer" as any);
         return;
       }
       if (option.method === "blank" && option.fileType === "pdf") {
