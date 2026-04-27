@@ -52,11 +52,10 @@ export function getAIProvider(): AIProvider {
  * Safe to call multiple times – only the first successful probe sticks.
  */
 export async function initAIProvider(): Promise<void> {
+  // Once successfully switched to backend, skip all future probes.
   if (_providerInitialized) return;
-  _providerInitialized = true;
 
   try {
-    // Use dynamic import to avoid circular deps with config/api
     const { API_ENDPOINTS } = require("@/config/api");
     const statusUrl = API_ENDPOINTS.AI.CHAT.replace("/chat", "/status");
 
@@ -68,14 +67,16 @@ export async function initAIProvider(): Promise<void> {
 
     if (res.ok) {
       const data = await res.json();
-      // Backend responds with { success: true, currentProvider: "gemini", ... }
       if (data.success && data.currentProvider) {
         _provider = new BackendAIProvider();
+        // Only mark as initialized on success so failed attempts allow retries.
+        _providerInitialized = true;
         return;
       }
     }
   } catch {
-    // Backend unreachable — stay on mock
+    // Backend unreachable — stay on mock, do NOT set _providerInitialized
+    // so the next call will retry (e.g. after the backend wakes up).
   }
 }
 
@@ -140,7 +141,6 @@ export function createSession(
     translate: "Translation",
     summarize: "Summary",
     "extract-text": "Text Extraction",
-    "extract-data": "Data Extraction",
     analyze: "Analysis",
     tasks: "Task Extraction",
     "fill-form": "Form Fill",
@@ -245,18 +245,6 @@ export async function translate(
   });
 }
 
-export async function extractData(
-  text: string,
-  dataType?: string,
-  documentName?: string,
-): Promise<AIResponse> {
-  return _provider.extractData({
-    text: prepareText(text),
-    dataType,
-    documentName,
-  });
-}
-
 export async function analyze(
   text: string,
   analysisType?: string,
@@ -308,24 +296,129 @@ export async function highlightKeyPoints(
   return _provider.highlight({ text: prepareText(text), documentName });
 }
 
+/**
+ * Ask the backend to produce a meta summary (bullets + keyThemes) over a list
+ * of already-extracted highlights. Falls back to a local digest when the
+ * backend is unavailable.
+ */
+export async function summarizeHighlights(
+  highlights: import("./ai.types").HighlightItem[],
+  documentName?: string,
+): Promise<{ summary: string[]; keyThemes: string[] }> {
+  try {
+    const { API_ENDPOINTS } = require("@/config/api");
+    const res = await fetch(API_ENDPOINTS.AI.HIGHLIGHT_SUMMARY, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ highlights, documentName }),
+    });
+    if (res.ok) {
+      const json = await res.json();
+      const data = json?.data ?? {};
+      return {
+        summary: Array.isArray(data.summary) ? data.summary : [],
+        keyThemes: Array.isArray(data.keyThemes) ? data.keyThemes : [],
+      };
+    }
+  } catch (e) {
+    console.warn("[AI] summarizeHighlights failed, using local fallback", e);
+  }
+
+  // Local fallback: use top critical/high reasons as the summary
+  const topN = highlights
+    .slice()
+    .sort((a, b) => {
+      const rank = { critical: 0, high: 1, medium: 2 } as const;
+      return (rank[a.importance] ?? 3) - (rank[b.importance] ?? 3);
+    })
+    .slice(0, 5)
+    .map((h) => h.reason || h.text)
+    .filter(Boolean);
+  const themes = Array.from(
+    new Set(highlights.map((h) => formatCategory(h.category)).filter(Boolean)),
+  ).slice(0, 6);
+  return { summary: topN, keyThemes: themes };
+}
+
+/**
+ * Convert a highlight (text + optional reason/context) into a structured task
+ * by reusing the backend's task extractor. Returns a task-like object or null.
+ */
+export async function convertHighlightToTask(
+  highlightText: string,
+  context?: string,
+  documentName?: string,
+): Promise<Record<string, unknown> | null> {
+  try {
+    const { API_ENDPOINTS } = require("@/config/api");
+    const res = await fetch(API_ENDPOINTS.AI.CONVERT_TO_TASK, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: highlightText, context, documentName }),
+    });
+    if (res.ok) {
+      const json = await res.json();
+      if (json?.data && typeof json.data === "object") return json.data;
+    }
+  } catch (e) {
+    console.warn("[AI] convertHighlightToTask failed, using local fallback", e);
+  }
+  // Fallback: build a minimal task locally
+  return {
+    action: highlightText,
+    owner: "Unassigned",
+    deadline: "Not specified",
+    priority: "medium",
+    context: context || documentName || "",
+    category: "follow-up",
+  };
+}
+
+function formatCategory(raw: string | undefined): string {
+  if (!raw) return "";
+  return raw
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
 export async function explainText(
   text: string,
-  mode?: "plain" | "legal" | "medical" | "technical",
+  mode?:
+    | "simple"
+    | "plain"
+    | "professional"
+    | "legal"
+    | "medical"
+    | "technical"
+    | "bullet",
+  depth?: "short" | "medium" | "deep",
 ): Promise<AIResponse> {
-  return _provider.explain({ text: prepareText(text), mode });
+  return _provider.explain({ text: prepareText(text), mode, depth });
 }
 
 export async function generateQuiz(
   text: string,
-  quizType?: "quiz" | "comprehension" | "flashcards",
-  count?: number,
+  questionType?: "mcq" | "true_false" | "short" | "mixed",
+  length?: "quick" | "standard" | "deep",
+  difficulty?: "easy" | "medium" | "hard" | "adaptive",
   documentName?: string,
+  weakTopics?: string[],
+  /** Document reference to look up the backend extraction docId for true RAG grounding. */
+  docRef?: AIDocumentRef,
 ): Promise<AIResponse> {
+  // Re-probe the backend every time (no-op if already switched).
+  // This handles the common case where the backend wasn't ready at app startup
+  // but became available by the time the user actually runs a quiz.
+  await initAIProvider();
+  const docId = (docRef as AIDocumentRefInternal | undefined)?._extractionDocId;
   return _provider.quiz({
     text: prepareText(text),
-    quizType,
-    count,
+    docId,
+    questionType,
+    length,
+    difficulty,
     documentName,
+    weakTopics,
   });
 }
 
@@ -448,16 +541,55 @@ export async function extractDocumentText(
     if (
       doc.mimeType ===
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ||
-      doc.name.toLowerCase().endsWith(".docx")
-    ) {
-      return `[DOCX document: "${doc.name}" – ${formatFileSize(doc.size)}]\n\nFull text extraction for Word documents will be available when the backend is connected. For now, you can paste the document text below and I'll work with that.`;
-    }
-
-    if (
+      doc.name.toLowerCase().endsWith(".docx") ||
       doc.mimeType === "application/epub+zip" ||
-      doc.name.toLowerCase().endsWith(".epub")
+      doc.name.toLowerCase().endsWith(".epub") ||
+      doc.mimeType ===
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation" ||
+      doc.name.toLowerCase().endsWith(".pptx") ||
+      doc.mimeType ===
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" ||
+      doc.name.toLowerCase().endsWith(".xlsx")
     ) {
-      return `[EPUB document: "${doc.name}" – ${formatFileSize(doc.size)}]\n\nFull text extraction for EPUB files will be available when the backend is connected. For now, you can paste the document text below and I'll work with that.`;
+      try {
+        const { API_ENDPOINTS, wakeUpBackend } = require("@/config/api");
+        await wakeUpBackend();
+
+        const formData = new FormData();
+        formData.append("file", {
+          uri: doc.uri,
+          type: doc.mimeType || "application/octet-stream",
+          name: doc.name,
+        } as any);
+
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 120000);
+        const response = await fetch(API_ENDPOINTS.AI.EXTRACT_DOCUMENT, {
+          method: "POST",
+          body: formData,
+          signal: controller.signal,
+        });
+        clearTimeout(timeout);
+
+        if (response.ok) {
+          const result = await response.json();
+          if (result.docId) {
+            doc.extractedText = result.fullText || result.preview || "";
+            const internal = doc as AIDocumentRefInternal;
+            internal._extractionDocId = result.docId;
+            internal._extractionMeta = {
+              totalPages: result.totalPages,
+              scannedPages: result.scannedPages || 0,
+              chunkCount: result.chunkCount,
+            };
+          }
+          return result.fullText || result.preview || `[${doc.name} — no text extracted]`;
+        }
+        console.warn("[AI] Document extraction backend error:", response.status);
+      } catch (extractErr) {
+        console.warn("[AI] Document extraction failed:", extractErr);
+      }
+      return `[Document: "${doc.name}" – ${formatFileSize(doc.size)}]\n\nExtraction failed. You can paste the text manually.`;
     }
 
     return `[Document: "${doc.name}" – ${formatFileSize(doc.size)}]\n\nText extraction is not available for this format yet. You can paste the document text manually.`;

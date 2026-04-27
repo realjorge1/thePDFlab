@@ -80,15 +80,16 @@ function legacyFields(task, result) {
       return { summary: text };
     case "translate":
       return { translatedText: text };
-    case "extract-data":
-      return { extractedData: text };
     case "chat":
       return { response: text };
     case "analyze":
-      return { analysis: text };
+      return { analysis: text, data: result.data?.json || null };
     case "tasks":
     case "extract-tasks":
-      return { tasks: result.data?.tasks || text };
+      return {
+        tasks: result.data?.tasks || text,
+        data: result.data?.json || null,
+      };
     case "fill-form":
       return { filledFormUrl: result.data?.json || text };
     case "classify":
@@ -198,25 +199,6 @@ router.post("/translate", async (req, res) => {
   }
 });
 
-// POST /api/ai/extract-data
-router.post("/extract-data", async (req, res) => {
-  try {
-    const file = req.files?.document || req.files?.file || null;
-    const { dataType, text } = req.body || {};
-    validateLength(text, "text");
-
-    const result = await aiService.run("extract-data", {
-      text,
-      file,
-      dataType,
-    });
-
-    res.json({ ...result, extractedData: result.data.text });
-  } catch (err) {
-    sendError(res, "extract-data", err);
-  }
-});
-
 // POST /api/ai/chat
 router.post("/chat", async (req, res) => {
   try {
@@ -251,7 +233,11 @@ router.post("/analyze", async (req, res) => {
       analysisType,
     });
 
-    res.json({ ...result, analysis: result.data.text });
+    res.json({
+      ...result,
+      analysis: result.data.text,
+      data: result.data.json || null,
+    });
   } catch (err) {
     sendError(res, "analyze", err);
   }
@@ -268,7 +254,11 @@ router.post("/extract-tasks", async (req, res) => {
       file,
     });
 
-    res.json({ ...result, tasks: result.data.tasks || result.data.text });
+    res.json({
+      ...result,
+      tasks: result.data.tasks || result.data.text,
+      data: result.data.json || null,
+    });
   } catch (err) {
     sendError(res, "extract-tasks", err);
   }
@@ -332,15 +322,100 @@ router.post("/highlight", async (req, res) => {
   }
 });
 
+// POST /api/ai/highlight-summary — generate a meta summary from a list of
+// already-extracted highlights (no source doc required).
+router.post("/highlight-summary", async (req, res) => {
+  try {
+    const { highlights, documentName, options } = req.body || {};
+    if (!Array.isArray(highlights) || highlights.length === 0) {
+      return sendError(
+        res,
+        "highlight-summary",
+        Object.assign(
+          new Error("highlights array is required and must be non-empty"),
+          { code: "VALIDATION_ERROR" },
+        ),
+      );
+    }
+
+    const result = await aiService.summarizeHighlights({
+      highlights,
+      documentName,
+      options,
+    });
+
+    res.json({ ...result, data: result.data.json || result.data.text });
+  } catch (err) {
+    sendError(res, "highlight-summary", err);
+  }
+});
+
+// POST /api/ai/convert-to-task — convert a single highlight (or sentence) into
+// a structured task suitable for the app's task system.
+router.post("/convert-to-task", async (req, res) => {
+  try {
+    const { text, context, documentName } = req.body || {};
+    validateLength(text, "text");
+    if (!text) {
+      return sendError(
+        res,
+        "convert-to-task",
+        Object.assign(new Error("text is required"), {
+          code: "VALIDATION_ERROR",
+        }),
+      );
+    }
+
+    // Reuse the task extractor with the highlight text + optional context as
+    // the "document", yielding a single structured task record.
+    const body = context
+      ? `Source document: ${documentName || "document"}\n\nContext: ${context}\n\nPassage: ${text}`
+      : text;
+
+    const result = await aiService.run("tasks", { text: body });
+    const tasks = result.data?.json?.tasks || result.data?.tasks || [];
+    const first = Array.isArray(tasks) && tasks.length > 0 ? tasks[0] : null;
+
+    res.json({
+      ...result,
+      data: first || { action: text, priority: "medium", category: "follow-up" },
+    });
+  } catch (err) {
+    sendError(res, "convert-to-task", err);
+  }
+});
+
+// POST /api/ai/generate-document
+router.post("/generate-document", async (req, res) => {
+  try {
+    const { prompt, fileType, category, tone, wordCount, audience } = req.body || {};
+    validateLength(prompt, "prompt");
+
+    const result = await aiService.run("generate-document", {
+      prompt,
+      fileType,
+      category,
+      tone,
+      wordCount,
+      audience,
+    });
+
+    res.json({ ...result, generatedText: result.data.text });
+  } catch (err) {
+    sendError(res, "generate-document", err);
+  }
+});
+
 // POST /api/ai/explain
 router.post("/explain", async (req, res) => {
   try {
-    const { text, mode } = req.body || {};
+    const { text, mode, depth } = req.body || {};
     validateLength(text, "text");
 
     const result = await aiService.run("explain", {
       text,
       explainMode: mode,
+      explainDepth: depth,
     });
 
     res.json({ ...result, explanation: result.data.text });
@@ -353,19 +428,125 @@ router.post("/explain", async (req, res) => {
 router.post("/quiz", async (req, res) => {
   try {
     const file = req.files?.document || req.files?.file || null;
-    const { text, quizType, count } = req.body || {};
+    const { text, docId, questionType, length, difficulty, weakTopics } = req.body || {};
     validateLength(text, "text");
+
+    // Map length label → question count
+    const countMap = { quick: 5, standard: 10, deep: 15 };
+    const quizCount = countMap[length] || 10;
+
+    // Prefer retrieval from stored chunks when a docId is provided —
+    // this gives the LLM the real document as grounding context.
+    let retrievedContext = "";
+    if (docId && typeof docId === "string") {
+      const doc = getDocument(docId);
+      if (doc) {
+        retrievedContext = aiService.buildRetrievalContext(doc, {
+          weakTopics: Array.isArray(weakTopics) ? weakTopics : [],
+          budgetChars: 14000,
+        });
+      } else {
+        logger.warn(`[quiz] docId provided but not found in store: ${docId}`);
+      }
+    }
 
     const result = await aiService.run("quiz", {
       text,
       file,
-      quizType: quizType || "quiz",
-      quizCount: count || 5,
+      questionType: questionType || "mixed",
+      quizCount,
+      quizDifficulty: difficulty || "adaptive",
+      weakTopics: Array.isArray(weakTopics) ? weakTopics : [],
+      retrievedContext,
     });
 
     res.json({ ...result, data: result.data.json || result.data.text });
   } catch (err) {
     sendError(res, "quiz", err);
+  }
+});
+
+// ============================================
+// POST /api/ai/ocr-scan — Image OCR + optional AI enhancement
+// ============================================
+router.post("/ocr-scan", async (req, res) => {
+  let worker = null;
+  try {
+    const file = req.files?.image || req.files?.file;
+    if (!file) {
+      return res.status(400).json({ success: false, error: "No image file uploaded." });
+    }
+
+    const mode = req.body?.mode || "fast"; // 'fast' | 'enhanced'
+
+    const fs = require("fs").promises;
+    const imageBuffer = file.data?.length ? file.data : await fs.readFile(file.tempFilePath);
+
+    logger.info(`[ocr-scan] Starting OCR: ${file.name || "image"} (${imageBuffer.length} bytes), mode=${mode}`);
+
+    // Step 1: Tesseract OCR (always runs locally on the server, no external AI for OCR)
+    const { createWorker } = require("tesseract.js");
+    worker = await createWorker("eng", 1, { logger: () => {} });
+    const { data: { text: rawText } } = await worker.recognize(imageBuffer);
+    await worker.terminate();
+    worker = null;
+
+    const trimmedRaw = (rawText || "").trim();
+    logger.info(`[ocr-scan] OCR done, extracted ${trimmedRaw.length} chars`);
+
+    if (!trimmedRaw) {
+      return res.json({
+        success: false,
+        text: "",
+        rawText: "",
+        enhanced: false,
+        mode,
+        error: "No readable text found in image",
+      });
+    }
+
+    let finalText = trimmedRaw;
+    let enhanced = false;
+
+    // Step 2: AI enhancement (enhanced mode only — AI cleans OCR text, no image is sent to AI)
+    if (mode === "enhanced") {
+      try {
+        const enhancePrompt =
+          "The following text was extracted from an image via OCR. " +
+          "Fix spelling/grammar errors caused by OCR noise, remove garbled characters, " +
+          "reconstruct broken paragraphs, detect and label obvious headings, " +
+          "and preserve the original meaning strictly. " +
+          "Do NOT add new content or invent information. " +
+          "Return only the cleaned text, nothing else.\n\nOCR TEXT:\n" + trimmedRaw;
+
+        const result = await aiService.run("chat", {
+          text: trimmedRaw,
+          prompt: enhancePrompt,
+        });
+
+        if (result?.data?.text && result.data.text.trim().length > 10) {
+          finalText = result.data.text.trim();
+          enhanced = true;
+        }
+      } catch (aiErr) {
+        logger.warn("[ocr-scan] AI enhancement failed, falling back to raw OCR:", aiErr.message);
+        // finalText stays as trimmedRaw (raw OCR output)
+      }
+    }
+
+    res.json({
+      success: true,
+      text: finalText,
+      rawText: trimmedRaw,
+      enhanced,
+      mode,
+    });
+  } catch (err) {
+    if (worker) {
+      try { await worker.terminate(); } catch (_) {}
+    }
+    logger.error("[ocr-scan] Error:", { error: err.message });
+    res.status(500).json({ success: false, error: "OCR processing failed.", detail: err.message });
   }
 });
 
@@ -418,7 +599,7 @@ router.post("/extract-pdf", async (req, res) => {
 
     const filename = file.name || "document.pdf";
     const fs = require("fs").promises;
-    const pdfBuffer = file.data || (await fs.readFile(file.tempFilePath));
+    const pdfBuffer = file.data?.length ? file.data : await fs.readFile(file.tempFilePath);
 
     logger.info(
       `[extract-pdf] Starting extraction: ${filename} (${pdfBuffer.length} bytes)`,
@@ -558,7 +739,7 @@ router.post("/extract-document", async (req, res) => {
     const filename = file.name || "document";
     const ext = path.extname(filename).toLowerCase();
     const mimeType = (file.mimetype || "").toLowerCase();
-    const fileBuffer = file.data || (await fs.readFile(file.tempFilePath));
+    const fileBuffer = file.data?.length ? file.data : await fs.readFile(file.tempFilePath);
 
     logger.info(
       `[extract-document] Starting: ${filename} (${fileBuffer.length} bytes, type=${ext})`,
@@ -630,6 +811,105 @@ router.post("/extract-document", async (req, res) => {
         hasScannedContent: false,
         filename,
         fileType: "epub",
+        extractedAt: new Date().toISOString(),
+      };
+    }
+    // ── PPTX extraction ─────────────────────────────────────────
+    else if (
+      ext === ".pptx" ||
+      mimeType === "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+    ) {
+      const AdmZip = require("adm-zip");
+      const zip = new AdmZip(fileBuffer);
+      const slideEntries = zip
+        .getEntries()
+        .filter((e) => /^ppt\/slides\/slide\d+\.xml$/.test(e.entryName))
+        .sort((a, b) => a.entryName.localeCompare(b.entryName));
+
+      const slideTexts = slideEntries.map((entry, idx) => {
+        const xml = entry.getData().toString("utf8");
+        const texts = [];
+        const rx = /<a:t[^>]*>([^<]+)<\/a:t>/g;
+        let m;
+        while ((m = rx.exec(xml)) !== null) {
+          const t = m[1].trim();
+          if (t) texts.push(t);
+        }
+        return `[Slide ${idx + 1}]\n${texts.join(" ")}`;
+      });
+
+      const rawText = slideTexts.filter((s) => s.trim()).join("\n\n");
+      const CHARS_PER_PAGE = 2000;
+      pages = [];
+      for (let i = 0; i < rawText.length; i += CHARS_PER_PAGE) {
+        const pageText = rawText.slice(i, i + CHARS_PER_PAGE);
+        pages.push({ page: pages.length + 1, text: pageText, wasOcr: false, charCount: pageText.length });
+      }
+      if (pages.length === 0) {
+        pages = [{ page: 1, text: rawText || "(No text found in slides)", wasOcr: false, charCount: 0 }];
+      }
+      pages = cleanAllPages(pages);
+      meta = {
+        totalPages: pages.length,
+        scannedPages: 0,
+        hasScannedContent: false,
+        filename,
+        fileType: "pptx",
+        extractedAt: new Date().toISOString(),
+      };
+    }
+    // ── XLSX extraction ─────────────────────────────────────────
+    else if (
+      ext === ".xlsx" ||
+      mimeType === "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    ) {
+      const AdmZip = require("adm-zip");
+      const zip = new AdmZip(fileBuffer);
+
+      // Shared strings table holds all text cell values
+      const ssEntry = zip.getEntry("xl/sharedStrings.xml");
+      const strings = [];
+      if (ssEntry) {
+        const xml = ssEntry.getData().toString("utf8");
+        const rx = /<t[^>]*>([^<]*)<\/t>/g;
+        let m;
+        while ((m = rx.exec(xml)) !== null) {
+          if (m[1].trim()) strings.push(m[1]);
+        }
+      }
+
+      // Also pull inline strings directly from worksheets
+      const sheetEntries = zip
+        .getEntries()
+        .filter((e) => /^xl\/worksheets\/sheet\d*\.xml$/.test(e.entryName));
+      const inlineTexts = [];
+      for (const entry of sheetEntries) {
+        const xml = entry.getData().toString("utf8");
+        const rx = /<is>[\s\S]*?<t[^>]*>([^<]+)<\/t>[\s\S]*?<\/is>/g;
+        let m;
+        while ((m = rx.exec(xml)) !== null) {
+          if (m[1].trim()) inlineTexts.push(m[1]);
+        }
+      }
+
+      const allStrings = [...strings, ...inlineTexts];
+      const rawText = allStrings.join(" ");
+      const CHARS_PER_PAGE = 2000;
+      pages = [];
+      for (let i = 0; i < rawText.length; i += CHARS_PER_PAGE) {
+        const pageText = rawText.slice(i, i + CHARS_PER_PAGE);
+        pages.push({ page: pages.length + 1, text: pageText, wasOcr: false, charCount: pageText.length });
+      }
+      if (pages.length === 0) {
+        pages = [{ page: 1, text: "(No text content found in spreadsheet)", wasOcr: false, charCount: 0 }];
+      }
+      pages = cleanAllPages(pages);
+      meta = {
+        totalPages: pages.length,
+        scannedPages: 0,
+        hasScannedContent: false,
+        filename,
+        fileType: "xlsx",
         extractedAt: new Date().toISOString(),
       };
     }

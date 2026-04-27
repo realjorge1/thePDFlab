@@ -79,13 +79,27 @@ export default function ChatWithDocumentScreen() {
   const [showLibraryPicker, setShowLibraryPicker] = useState(false);
 
   const scrollRef = useRef<ScrollView>(null);
+  const contentHeightRef = useRef<number>(0);
+  // y-offset to scroll to once the latest assistant content has rendered.
+  const pendingTopRef = useRef<number | null>(null);
 
-  // ── Auto-scroll on new messages ───────────────────────────────────────────
+  // ── Smart scroll on new messages ──────────────────────────────────────────
+  // For assistant responses, anchor the START of the response at the top of
+  // the viewport so users naturally read top-to-bottom. For user messages,
+  // scroll to the bottom so the input area is in view.
+  const lastMessage = messages[messages.length - 1];
   useEffect(() => {
-    if (messages.length > 0) {
-      setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 150);
+    if (!lastMessage) return;
+    if (lastMessage.role === "assistant") {
+      // pendingTopRef will be filled in by the request flow; nothing to do here
+      // if it's already set. As a safety net, if a fresh assistant message lands
+      // without a pre-recorded top (e.g. system intro message), do nothing —
+      // the user is already at the top because the screen just opened.
+    } else {
+      setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 100);
     }
-  }, [messages.length]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lastMessage?.id, lastMessage?.role]);
 
   // ── Initialize on mount ───────────────────────────────────────────────────
   useEffect(() => {
@@ -214,6 +228,9 @@ export default function ChatWithDocumentScreen() {
         answerText = "⚠️ " + answerText;
       }
 
+      // Capture the current content height; the new assistant message will
+      // start at this y-offset, which is where we want the viewport to land.
+      pendingTopRef.current = contentHeightRef.current;
       const assistantMsg = createMessage("assistant", answerText);
       setMessages((prev) => [...prev, assistantMsg]);
     } catch (err) {
@@ -470,6 +487,18 @@ export default function ChatWithDocumentScreen() {
           style={styles.flex}
           contentContainerStyle={styles.chatContent}
           keyboardShouldPersistTaps="handled"
+          onContentSizeChange={(_w, h) => {
+            contentHeightRef.current = h;
+            if (pendingTopRef.current !== null) {
+              const y = pendingTopRef.current;
+              pendingTopRef.current = null;
+              // Anchor the start of the assistant's response at the top of
+              // the viewport so users naturally read top-to-bottom.
+              setTimeout(() => {
+                scrollRef.current?.scrollTo({ y, animated: true });
+              }, 50);
+            }
+          }}
         >
           {messages.map((msg) => (
             <AIChatBubble key={msg.id} message={msg} />

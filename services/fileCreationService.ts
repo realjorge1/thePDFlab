@@ -1,4 +1,5 @@
 import { createBlankDocx } from "@/utils/docx-utils";
+import { saveDocxFromHtml } from "@/utils/docxGenerator";
 import {
     generateFileName,
     MIME_TYPES,
@@ -7,6 +8,7 @@ import {
     shareFile as shareFileUtil,
     UTI_TYPES,
 } from "@/utils/file-save-utils";
+import * as FileSystem from "expo-file-system/legacy";
 import * as ImagePicker from "expo-image-picker";
 
 // Dynamic import helper for expo-print to avoid native module errors
@@ -14,6 +16,9 @@ const getPrintModule = async () => {
   const Print = await import("expo-print");
   return Print;
 };
+
+// Max pixel width for embedded images — balances quality vs. file size/speed.
+const MAX_IMAGE_WIDTH = 1080;
 
 export type FileType = "pdf" | "docx";
 export type CreationMethod = "blank" | "image" | "camera";
@@ -23,6 +28,123 @@ export interface CreateFileResult {
   uri?: string;
   fileName?: string;
   error?: string;
+}
+
+export interface PickImagesResult {
+  success: boolean;
+  uris?: string[];
+  error?: string;
+  cancelled?: boolean;
+}
+
+/**
+ * Launch gallery picker and return selected image URIs.
+ * Callers should then navigate to a preview screen.
+ */
+export async function pickImagesFromLibrary(): Promise<PickImagesResult> {
+  try {
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== "granted") {
+      return {
+        success: false,
+        error: "Photo library access is required to pick images",
+      };
+    }
+
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ["images"],
+      allowsMultipleSelection: true,
+      quality: 1,
+      selectionLimit: 0,
+    });
+
+    if (result.canceled) {
+      return { success: false, cancelled: true };
+    }
+
+    const uris = result.assets.map((a) => a.uri);
+    if (uris.length === 0) {
+      return { success: false, error: "No images selected" };
+    }
+    return { success: true, uris };
+  } catch (error) {
+    return {
+      success: false,
+      error: `Failed to pick images: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+}
+
+/**
+ * Launch camera and return the captured image URI.
+ */
+export async function pickImageFromCamera(): Promise<PickImagesResult> {
+  try {
+    const { status } = await ImagePicker.requestCameraPermissionsAsync();
+    if (status !== "granted") {
+      return {
+        success: false,
+        error: "Camera access is required to capture images",
+      };
+    }
+
+    const result = await ImagePicker.launchCameraAsync({
+      mediaTypes: ["images"],
+      allowsEditing: false,
+      quality: 1,
+    });
+
+    if (result.canceled) {
+      return { success: false, cancelled: true };
+    }
+
+    const uris = result.assets.map((a) => a.uri);
+    if (uris.length === 0) {
+      return { success: false, error: "No image captured" };
+    }
+    return { success: true, uris };
+  } catch (error) {
+    return {
+      success: false,
+      error: `Failed to capture image: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+}
+
+/**
+ * Resize an image to MAX_IMAGE_WIDTH (if larger) then return a
+ * base64 data URI encoded as JPEG.  Falls back to reading the
+ * original file when the native manipulator module is unavailable
+ * (e.g. Expo Go, web, or simulator without the native module linked).
+ */
+async function resizeAndEncode(uri: string): Promise<string> {
+  try {
+    const mod = await import("expo-image-manipulator");
+    // SaveFormat may be a named export or on the default depending on version
+    const SaveFormat: { JPEG: string } =
+      (mod as any).SaveFormat ?? (mod as any).default?.SaveFormat;
+    if (!SaveFormat?.JPEG) throw new Error("SaveFormat unavailable");
+
+    const manipulateAsync: Function =
+      (mod as any).manipulateAsync ?? (mod as any).default?.manipulateAsync;
+    const manipResult = await manipulateAsync(
+      uri,
+      [{ resize: { width: MAX_IMAGE_WIDTH } }],
+      { compress: 0.82, format: SaveFormat.JPEG },
+    );
+    const base64 = await FileSystem.readAsStringAsync(manipResult.uri, {
+      encoding: FileSystem.EncodingType.Base64,
+    });
+    return `data:image/jpeg;base64,${base64}`;
+  } catch {
+    // Native module unavailable — embed the original image without resizing.
+    const base64 = await FileSystem.readAsStringAsync(uri, {
+      encoding: FileSystem.EncodingType.Base64,
+    });
+    const ext = uri.split(".").pop()?.toLowerCase() ?? "jpeg";
+    const mime = ext === "png" ? "image/png" : "image/jpeg";
+    return `data:${mime};base64,${base64}`;
+  }
 }
 
 /**
@@ -105,54 +227,31 @@ export async function createPdfFromBlank(
 }
 
 /**
- * Create a PDF from images
+ * Create a PDF from a list of image URIs with a user-supplied title.
  */
-export async function createPdfFromImages(): Promise<CreateFileResult> {
+export async function createPdfFromImageUris(
+  uris: string[],
+  title: string,
+): Promise<CreateFileResult> {
   try {
-    // Request permissions
-    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-
-    if (status !== "granted") {
-      return {
-        success: false,
-        error: "Photo library access is required to create PDF from images",
-      };
+    if (!uris || uris.length === 0) {
+      return { success: false, error: "No images provided" };
     }
 
-    // Launch image picker
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ["images"],
-      allowsMultipleSelection: true,
-      quality: 1,
-    });
-
-    if (result.canceled) {
-      return {
-        success: false,
-        error: "Image selection cancelled",
-      };
-    }
-
-    // Get selected image URIs
-    const selectedImages = result.assets.map((asset) => asset.uri);
-
-    if (selectedImages.length === 0) {
-      return {
-        success: false,
-        error: "No images selected",
-      };
-    }
-
-    // Build HTML with images
-    const imagesHtml = selectedImages
+    const dataUris = await Promise.all(uris.map(resizeAndEncode));
+    const imagesHtml = dataUris
       .map(
-        (uri) => `
-      <div style="page-break-after: always; text-align: center;">
-        <img src="${uri}" style="max-width: 100%; max-height: 100vh; object-fit: contain;" />
-      </div>
-    `,
+        (src, idx) => `
+      <div style="page-break-after: ${idx === dataUris.length - 1 ? "auto" : "always"}; text-align: center;">
+        <img src="${src}" style="max-width: 100%; max-height: 100vh; object-fit: contain;" />
+      </div>`,
       )
       .join("");
+
+    const safeTitle = (title ?? "").trim();
+    const titleHtml = safeTitle
+      ? `<h1 style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size: 28px; font-weight: 700; margin: 0 0 24px 0; padding: 60px 50px 0 50px;">${safeTitle.replace(/</g, "&lt;").replace(/>/g, "&gt;")}</h1>`
+      : "";
 
     const html = `
       <!DOCTYPE html>
@@ -161,138 +260,30 @@ export async function createPdfFromImages(): Promise<CreateFileResult> {
           <meta charset="utf-8">
           <meta name="viewport" content="width=device-width, initial-scale=1.0">
           <style>
-            * {
-              margin: 0;
-              padding: 0;
-              box-sizing: border-box;
-            }
-            body {
-              font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            }
-            @media print {
-              body {
-                margin: 0;
-              }
-            }
+            * { margin: 0; padding: 0; box-sizing: border-box; }
+            body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+            @media print { body { margin: 0; } }
           </style>
         </head>
         <body>
+          ${titleHtml}
           ${imagesHtml}
         </body>
       </html>
     `;
 
     const Print = await getPrintModule();
-    const { uri } = await Print.printToFileAsync({
-      html,
-      base64: false,
-    });
+    const { uri } = await Print.printToFileAsync({ html, base64: false });
 
-    const fileName = generateFileName("Images_PDF", "pdf");
+    const fileName = generateFileName(safeTitle || "Images_PDF", "pdf");
     console.log("PDF from images created at:", uri);
 
-    return {
-      success: true,
-      uri,
-      fileName,
-    };
+    return { success: true, uri, fileName };
   } catch (error) {
     console.error("PDF from images error:", error);
     return {
       success: false,
       error: `Failed to create PDF from images: ${error instanceof Error ? error.message : String(error)}`,
-    };
-  }
-}
-
-/**
- * Create a PDF from camera photo
- */
-export async function createPdfFromCamera(): Promise<CreateFileResult> {
-  try {
-    // Request permissions
-    const { status } = await ImagePicker.requestCameraPermissionsAsync();
-
-    if (status !== "granted") {
-      return {
-        success: false,
-        error: "Camera access is required to create PDF from photos",
-      };
-    }
-
-    // Launch camera
-    const result = await ImagePicker.launchCameraAsync({
-      mediaTypes: ["images"],
-      allowsEditing: false,
-      quality: 1,
-    });
-
-    if (result.canceled) {
-      return {
-        success: false,
-        error: "Photo capture cancelled",
-      };
-    }
-
-    // Get captured photo URI
-    const photoUri = result.assets[0].uri;
-
-    const html = `
-      <!DOCTYPE html>
-      <html>
-        <head>
-          <meta charset="utf-8">
-          <meta name="viewport" content="width=device-width, initial-scale=1.0">
-          <style>
-            * {
-              margin: 0;
-              padding: 0;
-              box-sizing: border-box;
-            }
-            body {
-              font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-              display: flex;
-              justify-content: center;
-              align-items: center;
-              min-height: 100vh;
-            }
-            img {
-              max-width: 100%;
-              max-height: 100vh;
-              object-fit: contain;
-            }
-            @media print {
-              body {
-                margin: 0;
-              }
-            }
-          </style>
-        </head>
-        <body>
-          <img src="${photoUri}" />
-        </body>
-      </html>
-    `;
-
-    const Print = await getPrintModule();
-    const { uri } = await Print.printToFileAsync({
-      html,
-      base64: false,
-    });
-
-    const fileName = generateFileName("Scanned_Document", "pdf");
-    console.log("PDF from camera created at:", uri);
-
-    return {
-      success: true,
-      uri,
-      fileName,
-    };
-  } catch (error) {
-    console.error("PDF from camera error:", error);
-    return {
-      success: false,
-      error: `Failed to create PDF from camera: ${error instanceof Error ? error.message : String(error)}`,
     };
   }
 }
@@ -337,123 +328,44 @@ export async function createDocxFromBlank(
 }
 
 /**
- * Create a DOCX from images
- * Note: This is a simplified version that creates a text file with image paths
- * For full DOCX with embedded images, consider using the 'docx' library
+ * Create a DOCX from a list of image URIs with a user-supplied title.
  */
-export async function createDocxFromImages(): Promise<CreateFileResult> {
+export async function createDocxFromImageUris(
+  uris: string[],
+  title: string,
+): Promise<CreateFileResult> {
   try {
-    // Request permissions
-    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-
-    if (status !== "granted") {
-      return {
-        success: false,
-        error:
-          "Photo library access is required to create document from images",
-      };
+    if (!uris || uris.length === 0) {
+      return { success: false, error: "No images provided" };
     }
 
-    // Launch image picker
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ["images"],
-      allowsMultipleSelection: true,
-      quality: 1,
+    const dataUris = await Promise.all(uris.map(resizeAndEncode));
+    const imgTags = dataUris.map((src) => `<p><img src="${src}" /></p>`).join("");
+    const safeTitle = (title ?? "").trim() || "Images Document";
+
+    // Do NOT include <h1> here — generateDocxFromHtml always adds its own
+    // title heading, so putting one in the HTML would duplicate the title.
+    const html = imgTags;
+    const timestamp = Date.now();
+    const saved = await saveDocxFromHtml({
+      html,
+      title: safeTitle,
+      fileName: `${safeTitle.replace(/[^a-zA-Z0-9_-]/g, "_")}_${timestamp}`,
     });
 
-    if (result.canceled) {
-      return {
-        success: false,
-        error: "Image selection cancelled",
-      };
+    if (!saved.success || !saved.uri) {
+      return { success: false, error: saved.error ?? "Failed to create DOCX" };
     }
 
-    const selectedImages = result.assets.map((asset) => asset.uri);
+    const fileName = generateFileName(safeTitle, "docx");
+    console.log("DOCX from images created at:", saved.uri);
 
-    if (selectedImages.length === 0) {
-      return {
-        success: false,
-        error: "No images selected",
-      };
-    }
-
-    // Create document with image references
-    const heading = "Document with Images";
-    const content = `This document contains ${selectedImages.length} image(s):\n\n${selectedImages.map((uri, idx) => `${idx + 1}. ${uri}`).join("\n")}`;
-
-    // Use unique filename with timestamp
-    const timestamp = Date.now();
-    const uniqueFileName = `Images_Document_${timestamp}`;
-    const uri = await createBlankDocx(heading, content, uniqueFileName);
-    const fileName = generateFileName("Images_Document", "docx");
-    console.log("DOCX from images created at:", uri);
-
-    return {
-      success: true,
-      uri,
-      fileName,
-    };
+    return { success: true, uri: saved.uri, fileName };
   } catch (error) {
     console.error("DOCX from images error:", error);
     return {
       success: false,
       error: `Failed to create DOCX from images: ${error instanceof Error ? error.message : String(error)}`,
-    };
-  }
-}
-
-/**
- * Create a DOCX from camera photo
- */
-export async function createDocxFromCamera(): Promise<CreateFileResult> {
-  try {
-    // Request permissions
-    const { status } = await ImagePicker.requestCameraPermissionsAsync();
-
-    if (status !== "granted") {
-      return {
-        success: false,
-        error: "Camera access is required to create document from photos",
-      };
-    }
-
-    // Launch camera
-    const result = await ImagePicker.launchCameraAsync({
-      mediaTypes: ["images"],
-      allowsEditing: false,
-      quality: 1,
-    });
-
-    if (result.canceled) {
-      return {
-        success: false,
-        error: "Photo capture cancelled",
-      };
-    }
-
-    const photoUri = result.assets[0].uri;
-
-    // Create document with photo reference
-    const heading = "Document with Camera Photo";
-    const content = `This document contains a photo captured from camera:\n\n${photoUri}`;
-
-    // Use unique filename with timestamp
-    const timestamp = Date.now();
-    const uniqueFileName = `Scanned_Document_${timestamp}`;
-    const uri = await createBlankDocx(heading, content, uniqueFileName);
-    const fileName = generateFileName("Scanned_Document", "docx");
-    console.log("DOCX from camera created at:", uri);
-
-    return {
-      success: true,
-      uri,
-      fileName,
-    };
-  } catch (error) {
-    console.error("DOCX from camera error:", error);
-    return {
-      success: false,
-      error: `Failed to create DOCX from camera: ${error instanceof Error ? error.message : String(error)}`,
     };
   }
 }

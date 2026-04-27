@@ -2,20 +2,12 @@ import { AppHeaderContainer } from "@/components/AppHeaderContainer";
 import { GradientView } from "@/components/GradientView";
 import { colors } from "@/constants/theme";
 import {
-  createDocxFromCamera,
-  createDocxFromImages,
-  createPdfFromCamera,
-  createPdfFromImages,
   FileType,
-  saveFile,
-  shareFile as shareCreatedFile,
+  pickImagesFromLibrary,
 } from "@/services/fileCreationService";
-import { markFileAsCreated } from "@/services/fileService";
 import { useTheme } from "@/services/ThemeProvider";
-import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import {
-  Camera,
   ChevronLeft,
   File,
   FileText,
@@ -50,7 +42,7 @@ interface CreationOption {
   bgColor: string;
   accentColor: string;
   fileType: FileType | null;
-  method: "blank" | "image" | "camera" | "merge";
+  method: "blank" | "image" | "scan" | "merge";
 }
 
 // ─── Creation Options Data ──────────────────────────────────────────────────
@@ -102,24 +94,24 @@ const CREATION_OPTIONS: CreationOption[] = [
   {
     id: "scan-to-pdf",
     title: "Scan to PDF",
-    subtitle: "Use camera to capture pages",
+    subtitle: "OCR image to text-based PDF",
     icon: ScanLine,
     iconColor: "#EC4899",
     bgColor: "#FCE7F3",
     accentColor: "#EC4899",
     fileType: "pdf",
-    method: "camera",
+    method: "scan",
   },
   {
     id: "scan-to-docx",
     title: "Scan to Word",
-    subtitle: "Capture and save as Word",
-    icon: Camera,
+    subtitle: "OCR image to editable Word doc",
+    icon: ScanLine,
     iconColor: colors.accent,
     bgColor: "#CFFAFE",
     accentColor: colors.accent,
     fileType: "docx",
-    method: "camera",
+    method: "scan",
   },
   {
     id: "blank-ppt",
@@ -172,8 +164,8 @@ const SECTIONS: Section[] = [
     items: CREATION_OPTIONS.filter((o) => o.method === "image"),
   },
   {
-    title: "From Camera",
-    items: CREATION_OPTIONS.filter((o) => o.method === "camera"),
+    title: "Scan to Text",
+    items: CREATION_OPTIONS.filter((o) => o.method === "scan"),
   },
   {
     title: "Quick Actions",
@@ -330,62 +322,42 @@ export default function CreateFileScreen() {
         return;
       }
 
-      // Image/camera creation → async process
-      setIsProcessing(true);
-      try {
-        let result;
-        if (option.fileType === "pdf" && option.method === "image") {
-          result = await createPdfFromImages();
-        } else if (option.fileType === "pdf" && option.method === "camera") {
-          result = await createPdfFromCamera();
-        } else if (option.fileType === "docx" && option.method === "image") {
-          result = await createDocxFromImages();
-        } else if (option.fileType === "docx" && option.method === "camera") {
-          result = await createDocxFromCamera();
-        }
+      // Scan → navigate to OCR scan-to-text screen
+      if (option.method === "scan" && (option.fileType === "pdf" || option.fileType === "docx")) {
+        router.push({
+          pathname: "/scan-to-text",
+          params: { fileType: option.fileType },
+        });
+        return;
+      }
 
-        if (result?.success && result.uri) {
-          Alert.alert("Success", "File created successfully!", [
-            {
-              text: "Save",
-              onPress: async () => {
-                await saveFile(option.fileType!, result.uri!, result.fileName);
-                await markFileAsCreated(
-                  result.uri!,
-                  result.fileName || `Document_${Date.now()}`,
-                  option.fileType!,
-                );
-                router.back();
-              },
+      // Image → pick first, then navigate to preview screen
+      if (option.method === "image" && (option.fileType === "pdf" || option.fileType === "docx")) {
+        setIsProcessing(true);
+        try {
+          const pickResult = await pickImagesFromLibrary();
+
+          if (pickResult.cancelled) return;
+          if (!pickResult.success || !pickResult.uris || pickResult.uris.length === 0) {
+            if (pickResult.error) Alert.alert("Error", pickResult.error);
+            return;
+          }
+
+          router.push({
+            pathname: "/image-to-file-preview",
+            params: {
+              uris: JSON.stringify(pickResult.uris),
+              fileType: option.fileType,
             },
-            {
-              text: "Share",
-              onPress: async () => {
-                await shareCreatedFile(
-                  option.fileType!,
-                  result.uri!,
-                  result.fileName,
-                );
-                await markFileAsCreated(
-                  result.uri!,
-                  result.fileName || `Document_${Date.now()}`,
-                  option.fileType!,
-                );
-                router.back();
-              },
-            },
-            { text: "Close", style: "cancel" },
-          ]);
-        } else if (result?.error) {
-          Alert.alert("Error", result.error);
+          });
+        } catch (error) {
+          Alert.alert(
+            "Error",
+            `Failed to pick images: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        } finally {
+          setIsProcessing(false);
         }
-      } catch (error) {
-        Alert.alert(
-          "Error",
-          `Failed to create file: ${error instanceof Error ? error.message : String(error)}`,
-        );
-      } finally {
-        setIsProcessing(false);
       }
     },
     [router],
@@ -399,7 +371,10 @@ export default function CreateFileScreen() {
         label: "Scan",
         color: "#EC4899",
         onPress: () =>
-          handleCreation(CREATION_OPTIONS.find((o) => o.id === "scan-to-pdf")!),
+          router.push({
+            pathname: "/scan-to-text",
+            params: { fileType: "pdf" },
+          }),
       },
       {
         icon: Images,

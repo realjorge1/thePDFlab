@@ -60,30 +60,6 @@ export class AIService {
     }
   }
 
-  static async extractData(
-    file: any,
-    dataType?: string,
-  ): Promise<{ extractedData: any }> {
-    try {
-      await wakeUpBackend();
-
-      const response = await uploadFile(
-        API_ENDPOINTS.AI.EXTRACT_DATA,
-        file,
-        "document",
-        dataType ? { dataType } : undefined,
-      );
-
-      const result = await response.json();
-      return result;
-    } catch (error) {
-      console.error("Extract data error:", error);
-      const errorMessage =
-        error instanceof Error ? error.message : "Unknown error occurred";
-      throw new Error(`Failed to extract data: ${errorMessage}`);
-    }
-  }
-
   static async chatWithDocument(
     file: any | null,
     message: string,

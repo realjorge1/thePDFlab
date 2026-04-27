@@ -794,22 +794,9 @@ export default function LibraryScreen() {
       return (
         <Pressable
           style={({ pressed }) => [
-            styles.fileCard,
-            {
-              backgroundColor: isSelected
-                ? t.primary + "18"
-                : pressed
-                  ? t.card + "CC"
-                  : t.card,
-              borderColor: isSelected
-                ? t.primary
-                : item.cacheValid === false
-                  ? colors.error
-                  : t.borderLight,
-              borderWidth: isSelected ? 2 : 1,
-              opacity: pressed ? 0.85 : 1,
-            },
-            item.cacheValid === false && !isSelected && styles.expiredBorder,
+            styles.flatFileRow,
+            isSelected && { backgroundColor: t.primary + "18" },
+            pressed && !isSelected && { opacity: 0.7 },
           ]}
           onPress={() =>
             markMode ? handleToggleSelect(item.id) : handleFilePress(item)
@@ -1109,7 +1096,7 @@ export default function LibraryScreen() {
   const renderSkeletons = () => (
     <View style={styles.skeletonContainer}>
       {[1, 2, 3, 4, 5].map((i) => (
-        <View key={i} style={[styles.fileCard, { backgroundColor: t.border }]}>
+        <View key={i} style={styles.flatFileRow}>
           <View
             style={[
               styles.skeletonIcon,
@@ -2144,8 +2131,15 @@ const styles = StyleSheet.create({
     fontWeight: "700",
   },
   listContent: {
-    paddingHorizontal: 10,
+    paddingHorizontal: 0,
     paddingBottom: 150,
+  },
+  flatFileRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    height: 72,
   },
   fileCard: {
     flexDirection: "row",

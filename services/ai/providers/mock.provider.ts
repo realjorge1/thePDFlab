@@ -9,7 +9,6 @@ import type {
     AIChatRequest,
     AIClassifyRequest,
     AIExplainRequest,
-    AIExtractDataRequest,
     AIGenerateDocumentRequest,
     AIHighlightRequest,
     AIQuizRequest,
@@ -62,13 +61,13 @@ export class MockAIProvider implements AIProvider {
     if (msg.includes("hello") || msg.includes("hi") || msg.includes("hey")) {
       return {
         content:
-          "Hello! I'm athemi, your assistant. I can help you with:\n\n• Summarizing documents\n• Translating text\n• Extracting data and tasks\n• Analyzing content\n• Filling forms\n• Answering questions about documents\n\nHow can I help you today?",
+          "Hello! I'm athemi, your assistant. I can help you with:\n\n• Summarizing documents\n• Translating text\n• Extracting tasks and action items\n• Analyzing content\n• Filling forms\n• Answering questions about documents\n\nHow can I help you today?",
       };
     }
     if (msg.includes("help")) {
       return {
         content:
-          "Here's what I can do for you:\n\n📄 **Summarize** – Get concise summaries of documents\n🌍 **Translate** – Convert text to 15+ languages\n📊 **Extract Data** – Pull structured information from documents\n🔍 **Analyze** – Deep analysis with sentiment and readability scores\n✅ **Tasks** – Find action items and to-dos\n📝 **Fill Form** – Auto-fill form fields using AI\n💬 **Chat with File** – Ask questions about any PDF, DOCX, or EPUB\n\nJust select a mode from the tabs above, or ask me anything here!",
+          "Here's what I can do for you:\n\n📄 **Summarize** – Get concise summaries of documents\n🌍 **Translate** – Convert text to 15+ languages\n🔍 **Analyze** – Deep analysis with sentiment and readability scores\n✅ **Tasks** – Find action items and to-dos\n📝 **Fill Form** – Auto-fill form fields using AI\n💬 **Chat with File** – Ask questions about any PDF, DOCX, or EPUB\n\nJust select a mode from the tabs above, or ask me anything here!",
       };
     }
     if (msg.includes("thank")) {
@@ -138,141 +137,69 @@ export class MockAIProvider implements AIProvider {
     return { content: translated };
   }
 
-  // ── Extract Data ────────────────────────────────────────────────────────────
-  async extractData(req: AIExtractDataRequest): Promise<AIResponse> {
-    await delay();
-
-    const docLabel = req.documentName
-      ? `"${req.documentName}"`
-      : "the provided text";
-
-    const structured = {
-      documentName: req.documentName || "Untitled",
-      extractionType: req.dataType || "all",
-      entities: {
-        persons: ["John Smith", "Sarah Johnson", "Mike Chen"],
-        organizations: ["Acme Corp", "Global Industries", "TechStart Inc."],
-        locations: ["New York", "San Francisco", "London"],
-        dates: ["January 15, 2026", "March 3, 2026", "Q2 2026"],
-      },
-      keyValuePairs: [
-        { key: "Project Name", value: "Digital Transformation Initiative" },
-        { key: "Budget", value: "$2.4 million" },
-        { key: "Timeline", value: "18 months" },
-        { key: "Status", value: "In Progress" },
-        { key: "Priority", value: "High" },
-      ],
-      tables: [
-        {
-          title: "Team Allocation",
-          headers: ["Department", "Members", "Role"],
-          rows: [
-            ["Engineering", "12", "Development"],
-            ["Design", "4", "UX/UI"],
-            ["QA", "6", "Testing"],
-            ["Management", "3", "Oversight"],
-          ],
-        },
-      ],
-      statistics: {
-        wordCount: req.text.split(/\s+/).length,
-        entitiesFound: 12,
-        tablesDetected: 1,
-        keyValuePairsFound: 5,
-      },
-    };
-
-    const humanReadable = `📊 **Extracted Data from ${docLabel}**
-
-**Entities Found:**
-• People: John Smith, Sarah Johnson, Mike Chen
-• Organizations: Acme Corp, Global Industries, TechStart Inc.
-• Locations: New York, San Francisco, London
-• Dates: January 15, 2026; March 3, 2026; Q2 2026
-
-**Key-Value Pairs:**
-| Key | Value |
-|-----|-------|
-| Project Name | Digital Transformation Initiative |
-| Budget | $2.4 million |
-| Timeline | 18 months |
-| Status | In Progress |
-| Priority | High |
-
-**Table: Team Allocation**
-| Department | Members | Role |
-|-----------|---------|------|
-| Engineering | 12 | Development |
-| Design | 4 | UX/UI |
-| QA | 6 | Testing |
-| Management | 3 | Oversight |
-
-**Extraction Statistics:**
-• Words processed: ${req.text.split(/\s+/).length}
-• Entities found: 12
-• Tables detected: 1
-• Key-value pairs: 5`;
-
-    return {
-      content: humanReadable,
-      structuredData: structured as unknown as Record<string, unknown>,
-    };
-  }
-
   // ── Analyze ─────────────────────────────────────────────────────────────────
   async analyze(req: AIAnalyzeRequest): Promise<AIResponse> {
     await delay();
 
-    const wordCount = req.text.split(/\s+/).length;
-    const sentenceCount = req.text.split(/[.!?]+/).filter(Boolean).length;
-    const avgWordsPerSentence =
-      sentenceCount > 0 ? Math.round(wordCount / sentenceCount) : 0;
-    const docLabel = req.documentName
-      ? `"${req.documentName}"`
-      : "the provided text";
+    // Match the InsightRenderer schema
+    const structured = {
+      summary:
+        "This document outlines a strategic plan with clear objectives, supporting data, and actionable recommendations for the next quarter.",
+      sentiment: "positive",
+      sentimentScore: 0.62,
+      insights: [
+        {
+          title: "Strong growth trajectory",
+          detail:
+            "Revenue projections show consistent double-digit growth, supported by historical trend data.",
+          sourceQuote:
+            "Revenue increased 23% year-over-year, driven by product expansion.",
+        },
+        {
+          title: "Risk in vendor concentration",
+          detail:
+            "More than 60% of supply chain relies on two vendors, creating a material single-point-of-failure risk.",
+          sourceQuote: "Top two vendors account for 62% of procurement spend.",
+        },
+        {
+          title: "Clear recommendations",
+          detail:
+            "The document closes with five actionable recommendations, each with an owner and a target date.",
+        },
+        {
+          title: "Data-backed claims",
+          detail:
+            "Key assertions are supported by internal metrics and third-party research citations.",
+          sourceQuote:
+            "According to McKinsey's 2026 industry report, our segment grew 18%.",
+        },
+      ],
+      strengths: [
+        "Well-structured executive summary",
+        "Quantitative support for claims",
+        "Clear ownership on recommendations",
+      ],
+      weaknesses: [
+        "Vendor concentration risk under-addressed",
+        "Limited discussion of competitive threats",
+        "No scenario planning for downside cases",
+      ],
+      recommendations: [
+        "Diversify supplier base within the next 2 quarters",
+        "Add a competitor landscape section",
+        "Model low/mid/high revenue scenarios",
+        "Assign measurable KPIs to each initiative",
+      ],
+      topics: ["Strategy", "Finance", "Operations", "Risk"],
+      readability: {
+        level: "moderate",
+        notes: "Clear prose, occasional technical jargon — suitable for managers.",
+      },
+    };
 
     return {
-      content: `🔍 **Document Analysis: ${docLabel}**
-
-**📏 Document Statistics:**
-• Word count: ${wordCount}
-• Sentence count: ${sentenceCount}
-• Average words per sentence: ${avgWordsPerSentence}
-• Estimated reading time: ${Math.max(1, Math.round(wordCount / 200))} minutes
-• Paragraph count: ${Math.max(1, Math.floor(wordCount / 80))}
-
-**😊 Sentiment Analysis:**
-• Overall tone: Professional / Neutral
-• Confidence: 87%
-• Emotional markers: Informative (45%), Persuasive (30%), Descriptive (25%)
-
-**📖 Readability Scores:**
-• Flesch Reading Ease: 62.3 (Standard / Fairly Easy)
-• Flesch-Kincaid Grade: 8.2 (8th Grade Level)
-• Gunning Fog Index: 10.1
-• Recommendation: Suitable for general audience
-
-**🏗️ Structure Analysis:**
-• Document type: ${wordCount > 1000 ? "Long-form report" : wordCount > 300 ? "Article / Memo" : "Short note / Abstract"}
-• Has introduction: Yes
-• Has conclusion: ${wordCount > 200 ? "Yes" : "Not detected"}
-• Section count: ${Math.max(1, Math.floor(wordCount / 150))}
-• Lists/bullet points: ${Math.floor(Math.random() * 5) + 1} detected
-
-**💡 Insights:**
-1. The document is well-structured with clear topic progression
-2. Language complexity is appropriate for the target audience
-3. Key arguments are supported with data and examples
-4. Consider adding more transitional phrases between sections
-5. The conclusion could be strengthened with a stronger call to action`,
-      structuredData: {
-        wordCount,
-        sentenceCount,
-        avgWordsPerSentence,
-        readingTimeMinutes: Math.max(1, Math.round(wordCount / 200)),
-        sentiment: { overall: "neutral", confidence: 0.87 },
-        readability: { fleschEase: 62.3, gradeLevel: 8.2 },
-      },
+      content: `Comprehensive analysis of ${req.documentName ? `"${req.documentName}"` : "the provided text"}.`,
+      structuredData: structured as unknown as Record<string, unknown>,
     };
   }
 
@@ -280,87 +207,62 @@ export class MockAIProvider implements AIProvider {
   async extractTasks(req: AITasksRequest): Promise<AIResponse> {
     await delay();
 
-    const docLabel = req.documentName
-      ? `"${req.documentName}"`
-      : "the provided text";
-
+    // Match TaskRenderer schema: { tasks: [{ action, owner, deadline, priority, context, category }] }
     const structured = {
       tasks: [
         {
-          id: 1,
-          title: "Review and approve project proposal",
-          priority: "High",
-          dueDate: "2026-02-20",
-          assignee: "Team Lead",
-          status: "pending",
+          action: "Review and approve the project proposal",
+          owner: "Team Lead",
+          deadline: "Feb 20, 2026",
+          priority: "high",
+          context: "Board needs a decision before the Q1 kickoff.",
+          category: "decision",
         },
         {
-          id: 2,
-          title: "Schedule stakeholder meeting for Q1 review",
-          priority: "High",
-          dueDate: "2026-02-25",
-          assignee: "Project Manager",
-          status: "pending",
+          action: "Schedule the stakeholder meeting for Q1 review",
+          owner: "Project Manager",
+          deadline: "Feb 25, 2026",
+          priority: "high",
+          context: "Align all departments on Q1 goals and resourcing.",
+          category: "communication",
         },
         {
-          id: 3,
-          title: "Update documentation with latest changes",
-          priority: "Medium",
-          dueDate: "2026-03-01",
-          assignee: "Technical Writer",
-          status: "pending",
+          action: "Update documentation with the latest API changes",
+          owner: "Technical Writer",
+          deadline: "Mar 1, 2026",
+          priority: "medium",
+          context: "Keep customer-facing docs in sync with the new release.",
+          category: "deliverable",
         },
         {
-          id: 4,
-          title: "Conduct user testing for new features",
-          priority: "Medium",
-          dueDate: "2026-03-05",
-          assignee: "QA Team",
-          status: "pending",
+          action: "Conduct user testing for the new onboarding flow",
+          owner: "QA Team",
+          deadline: "Mar 5, 2026",
+          priority: "medium",
+          context: "Validate the redesign before the public rollout.",
+          category: "review",
         },
         {
-          id: 5,
-          title: "Prepare monthly progress report",
-          priority: "Low",
-          dueDate: "2026-03-10",
-          assignee: "Analyst",
-          status: "pending",
+          action: "Prepare the monthly progress report",
+          owner: "Analyst",
+          deadline: "Mar 10, 2026",
+          priority: "low",
+          context: "Standard monthly reporting cadence.",
+          category: "follow-up",
         },
         {
-          id: 6,
-          title: "Follow up on vendor contracts",
-          priority: "Medium",
-          dueDate: "2026-03-15",
-          assignee: "Procurement",
-          status: "pending",
+          action: "Follow up on vendor contract renewals",
+          owner: "Procurement",
+          deadline: "Mar 15, 2026",
+          priority: "medium",
+          context: "Three contracts expire this quarter and need review.",
+          category: "follow-up",
         },
       ],
     };
 
     return {
-      content: `✅ **Tasks Extracted from ${docLabel}**
-
-Found **6 action items**:
-
-🔴 **High Priority:**
-1. ☐ Review and approve project proposal
-   → Assignee: Team Lead | Due: Feb 20, 2026
-2. ☐ Schedule stakeholder meeting for Q1 review
-   → Assignee: Project Manager | Due: Feb 25, 2026
-
-🟡 **Medium Priority:**
-3. ☐ Update documentation with latest changes
-   → Assignee: Technical Writer | Due: Mar 1, 2026
-4. ☐ Conduct user testing for new features
-   → Assignee: QA Team | Due: Mar 5, 2026
-5. ☐ Follow up on vendor contracts
-   → Assignee: Procurement | Due: Mar 15, 2026
-
-🟢 **Low Priority:**
-6. ☐ Prepare monthly progress report
-   → Assignee: Analyst | Due: Mar 10, 2026
-
-**Summary:** 2 high, 3 medium, 1 low priority tasks identified.`,
+      content: `Extracted 6 action items from ${req.documentName ? `"${req.documentName}"` : "the provided text"}.`,
       structuredData: structured as unknown as Record<string, unknown>,
     };
   }
@@ -472,67 +374,117 @@ _Note: In the full version, the document will be analyzed by AI for accurate cla
         {
           text: "The total budget allocation for Q2 is $4.2 million, a 15% increase from last quarter.",
           importance: "critical",
-          reason: "Key financial figure",
           category: "financial",
+          reason:
+            "Directly impacts Q2 planning and signals a 15% expansion in spending capacity — forecasts and approvals will shift.",
+          confidence: 96,
+          sourceReference: {
+            page: 2,
+            section: "Financial Overview",
+            paragraphIndex: 3,
+            snippet: "total budget allocation for Q2 is $4.2 million",
+          },
         },
         {
           text: "All department heads must submit their quarterly reports by March 31st.",
           importance: "critical",
-          reason: "Mandatory deadline",
           category: "important_date",
+          reason:
+            "Hard deadline that blocks downstream reporting cycles if missed — add to task system immediately.",
+          confidence: 94,
+          sourceReference: {
+            page: 3,
+            section: "Deadlines",
+            paragraphIndex: 1,
+            snippet: "submit their quarterly reports by March 31st",
+          },
         },
         {
           text: "The board has approved the merger with Global Industries pending regulatory review.",
           importance: "high",
-          reason: "Major strategic decision",
           category: "key_finding",
+          reason:
+            "Strategic decision that reshapes the company's competitive position and may trigger new compliance obligations.",
+          confidence: 88,
+          sourceReference: {
+            page: 4,
+            section: "Strategic Initiatives",
+            paragraphIndex: 2,
+            snippet: "approved the merger with Global Industries",
+          },
         },
         {
           text: "Failure to comply with the new data retention policy may result in significant penalties.",
           importance: "high",
-          reason: "Compliance risk",
           category: "risk",
+          reason:
+            "Compliance exposure with direct financial consequences — needs legal/security review before the policy takes effect.",
+          confidence: 91,
+          sourceReference: {
+            page: 6,
+            section: "Compliance",
+            paragraphIndex: 0,
+            snippet: "Failure to comply with the new data retention policy",
+          },
         },
         {
           text: "The study concludes that remote work has improved employee satisfaction by 23%.",
           importance: "high",
-          reason: "Primary research conclusion",
           category: "conclusion",
+          reason:
+            "Evidence-backed conclusion supporting ongoing remote work policy — cite in upcoming workforce decisions.",
+          confidence: 83,
+          sourceReference: {
+            page: 8,
+            section: "Findings",
+            paragraphIndex: 1,
+            snippet: "remote work has improved employee satisfaction by 23%",
+          },
         },
         {
           text: "Action item: Legal team to review all vendor contracts before renewal.",
           importance: "medium",
-          reason: "Pending action required",
           category: "action_required",
+          reason:
+            "Actionable next step with a clear owner — convert to a task and assign before renewal cycle begins.",
+          confidence: 85,
+          sourceReference: {
+            page: 9,
+            section: "Action Items",
+            paragraphIndex: 0,
+            snippet: "Legal team to review all vendor contracts",
+          },
         },
       ],
+      meta: {
+        summary: [
+          "Q2 budget expanded 15% to $4.2M, enabling broader initiatives.",
+          "Key deadline: quarterly reports due March 31st from all department heads.",
+          "Board-approved Global Industries merger introduces strategic and regulatory considerations.",
+          "New data retention policy creates material compliance risk if unaddressed.",
+          "Remote work correlates with 23% satisfaction improvement — supports current policy.",
+        ],
+        keyThemes: [
+          "Budget & Finance",
+          "Compliance Risk",
+          "Strategic Decisions",
+          "Deadlines",
+          "Workforce",
+        ],
+        documentType: "report",
+        pageDensity: [
+          { page: 2, count: 1 },
+          { page: 3, count: 1 },
+          { page: 4, count: 1 },
+          { page: 6, count: 1 },
+          { page: 8, count: 1 },
+          { page: 9, count: 1 },
+        ],
+      },
     };
 
     return {
-      content: `🔍 **Key Highlights from ${docLabel}**
-
-Found **6 key points**:
-
-🔴 **Critical:**
-1. "The total budget allocation for Q2 is $4.2 million, a 15% increase from last quarter."
-   → Key financial figure | Category: Financial
-
-2. "All department heads must submit their quarterly reports by March 31st."
-   → Mandatory deadline | Category: Important Date
-
-🟠 **High:**
-3. "The board has approved the merger with Global Industries pending regulatory review."
-   → Major strategic decision | Category: Key Finding
-
-4. "Failure to comply with the new data retention policy may result in significant penalties."
-   → Compliance risk | Category: Risk
-
-5. "The study concludes that remote work has improved employee satisfaction by 23%."
-   → Primary research conclusion | Category: Conclusion
-
-🟡 **Medium:**
-6. "Action item: Legal team to review all vendor contracts before renewal."
-   → Pending action required | Category: Action Required`,
+      content: `Found ${structured.highlights.length} key highlight${structured.highlights.length === 1 ? "" : "s"} from ${docLabel}.`,
       structuredData: structured as unknown as Record<string, unknown>,
     };
   }
@@ -541,10 +493,49 @@ Found **6 key points**:
   async explain(req: AIExplainRequest): Promise<AIResponse> {
     await delay();
 
-    const mode = req.mode || "plain";
+    const mode = req.mode || "simple";
+    const depth = (req as any).depth || "medium";
     const textPreview = preview(req.text, 100);
 
     const mockExplanations: Record<string, string> = {
+      simple: `**Simple Explanation**
+
+In plain words, this text is about ${textPreview}. Think of it like a set of clear steps: someone has to do something, by a certain time, to get a specific result.
+
+**The main idea:**
+• There's a clear goal
+• A few important rules to follow
+• And a timeline to keep things on track
+
+Anyone can follow this — no special background needed.`,
+      professional: `**Professional Rewrite**
+
+**Overview**
+This content outlines an initiative with defined objectives, responsibilities, and deliverables. It is structured for clarity and aimed at informed stakeholders.
+
+**Key points**
+• The scope and objectives are stated explicitly
+• Accountability is mapped to specific owners
+• Milestones are time-bound and measurable
+
+**Implication**
+Teams should align their execution plans to the stated milestones and report progress on the defined cadence.`,
+      bullet: `**Quick Breakdown**
+
+## Main idea
+• Short, focused: someone does X, by Y date, to achieve Z.
+
+## Who's involved
+• Owners, reviewers, and approvers are named.
+
+## What matters most
+• The deadline
+• The deliverable
+• The quality bar
+
+## Watch out for
+• Missing owner on at least one line
+• Ambiguous deadlines ("soon", "TBD")`,
       plain: `**Simplified Explanation**
 
 Here's what this means in plain language:
@@ -601,182 +592,179 @@ This approach makes things faster, more reliable, and easier to manage — just 
     };
 
     return {
-      content: mockExplanations[mode] || mockExplanations.plain,
+      content: mockExplanations[mode] || mockExplanations.simple || mockExplanations.plain,
+      structuredData: {
+        __kind: "explain",
+        mode,
+        depth,
+        originalText: req.text,
+      },
     };
   }
 
   // ── Quiz ──────────────────────────────────────────────────────────────────
   async quiz(req: AIQuizRequest): Promise<AIResponse> {
-    await delay();
+    await delay(900 + Math.random() * 600);
 
-    const quizType = req.quizType || "quiz";
-    const count = req.count || 5;
-    const docLabel = req.documentName
-      ? `"${req.documentName}"`
-      : "the provided text";
+    const qType = req.questionType || "mixed";
+    const docLabel = req.documentName ? `"${req.documentName}"` : "the document";
+    const rawText = req.text || "";
 
-    if (quizType === "flashcards") {
-      const structured = {
-        cards: [
-          {
-            front: "What is the primary purpose of the document?",
-            back: "The document outlines strategic planning initiatives and resource allocation for the upcoming quarter.",
-            category: "Overview",
-          },
-          {
-            front: "What is the proposed budget increase?",
-            back: "A 15% increase from the previous quarter, bringing the total to $4.2 million.",
-            category: "Financial",
-          },
-          {
-            front: "Who are the key stakeholders mentioned?",
-            back: "The Board of Directors, department heads, and the Strategic Planning Committee.",
-            category: "People",
-          },
-        ],
-        type: "flashcards",
-        count: 3,
-      };
+    // Only generate document-based questions when we have real extracted text.
+    // Placeholder strings begin with "[" (e.g. "[PDF document: ..." or "[Document: ...").
+    const hasRealText =
+      rawText.trim().length > 120 &&
+      !rawText.trim().startsWith("[");
 
-      return {
-        content: `📚 **Study Flashcards from ${docLabel}**
+    const countTarget =
+      req.length === "quick" ? 5 : req.length === "deep" ? 15 : 10;
 
-Generated **3 flashcards**:
-
----
-**Card 1** (Overview)
-**Front:** What is the primary purpose of the document?
-**Back:** The document outlines strategic planning initiatives and resource allocation for the upcoming quarter.
-
----
-**Card 2** (Financial)
-**Front:** What is the proposed budget increase?
-**Back:** A 15% increase from the previous quarter, bringing the total to $4.2 million.
-
----
-**Card 3** (People)
-**Front:** Who are the key stakeholders mentioned?
-**Back:** The Board of Directors, department heads, and the Strategic Planning Committee.`,
-        structuredData: structured as unknown as Record<string, unknown>,
-      };
+    if (hasRealText) {
+      const questions = buildDocumentQuestions(rawText, docLabel, countTarget, qType);
+      if (questions.length >= 3) {
+        return {
+          content: `Generated ${questions.length} questions from ${docLabel}.`,
+          structuredData: {
+            questions,
+            insufficient: false,
+          } as unknown as Record<string, unknown>,
+        };
+      }
     }
 
-    if (quizType === "comprehension") {
-      const structured = {
-        questions: [
-          {
-            question: "What is the main argument presented in the document?",
-            sampleAnswer:
-              "The document argues that strategic resource reallocation is necessary to meet the organization's growth targets for the upcoming fiscal year.",
-            difficulty: "medium",
-            topic: "Main Argument",
-          },
-          {
-            question:
-              "How does the document support its claims about efficiency improvements?",
-            sampleAnswer:
-              "The document cites internal metrics showing a 23% improvement in operational efficiency following the implementation of new processes in Q4.",
-            difficulty: "hard",
-            topic: "Evidence",
-          },
-        ],
-        type: "comprehension",
-        count: 2,
-      };
-
-      return {
-        content: `📝 **Comprehension Questions from ${docLabel}**
-
-Generated **2 questions**:
-
-**Q1** (Medium - Main Argument)
-What is the main argument presented in the document?
-
-**Sample Answer:** The document argues that strategic resource reallocation is necessary to meet the organization's growth targets for the upcoming fiscal year.
-
----
-
-**Q2** (Hard - Evidence)
-How does the document support its claims about efficiency improvements?
-
-**Sample Answer:** The document cites internal metrics showing a 23% improvement in operational efficiency following the implementation of new processes in Q4.`,
-        structuredData: structured as unknown as Record<string, unknown>,
-      };
-    }
-
-    // Default: multiple-choice quiz
-    const structured = {
-      questions: [
-        {
-          question:
-            "What is the total budget allocation mentioned in the document?",
-          options: {
-            A: "$2.1 million",
-            B: "$4.2 million",
-            C: "$6.3 million",
-            D: "$8.4 million",
-          },
-          correctAnswer: "B",
-          explanation:
-            "The document states the total budget allocation for Q2 is $4.2 million.",
-          difficulty: "easy",
-        },
-        {
-          question:
-            "By what percentage has employee satisfaction improved according to the study?",
-          options: { A: "10%", B: "15%", C: "23%", D: "30%" },
-          correctAnswer: "C",
-          explanation:
-            "The study concludes that remote work has improved employee satisfaction by 23%.",
-          difficulty: "medium",
-        },
-        {
-          question: "What is the deadline for quarterly report submissions?",
-          options: {
-            A: "February 28th",
-            B: "March 15th",
-            C: "March 31st",
-            D: "April 15th",
-          },
-          correctAnswer: "C",
-          explanation:
-            "Department heads must submit their quarterly reports by March 31st.",
-          difficulty: "easy",
-        },
-      ],
-      type: "quiz",
-      count: 3,
-    };
-
+    // No backend, and not enough real document text to ground questions —
+    // refuse to fabricate generic textbook questions. This mirrors the
+    // backend's STRICT DOCUMENT-GROUNDED behaviour.
     return {
-      content: `🧠 **Quiz from ${docLabel}**
-
-Generated **3 multiple-choice questions**:
-
-**Q1** (Easy)
-What is the total budget allocation mentioned in the document?
-A) $2.1 million
-B) $4.2 million ✓
-C) $6.3 million
-D) $8.4 million
-→ The document states the total budget allocation for Q2 is $4.2 million.
-
-**Q2** (Medium)
-By what percentage has employee satisfaction improved according to the study?
-A) 10%
-B) 15%
-C) 23% ✓
-D) 30%
-→ The study concludes that remote work has improved employee satisfaction by 23%.
-
-**Q3** (Easy)
-What is the deadline for quarterly report submissions?
-A) February 28th
-B) March 15th
-C) March 31st ✓
-D) April 15th
-→ Department heads must submit their quarterly reports by March 31st.`,
-      structuredData: structured as unknown as Record<string, unknown>,
+      content: "",
+      structuredData: {
+        questions: [],
+        insufficient: true,
+        reason:
+          "This document does not contain enough clear information to generate a full quiz. Try a different file or reduce quiz length.",
+      } as unknown as Record<string, unknown>,
     };
   }
 }
+
+// ── Helpers for document-aware mock questions ────────────────────────────────
+
+function _shuffleArr<T>(arr: T[]): T[] {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+/**
+ * Derive a short topic label from a sentence (first long capitalised word, else first word).
+ */
+function _topicFrom(sentence: string): string {
+  const words = sentence.split(/\s+/);
+  const cap = words.find((w) => w.length > 4 && /^[A-Z]/.test(w));
+  const raw = cap || words[0] || "Content";
+  return raw.replace(/[^a-zA-Z\s]/g, "").trim().slice(0, 22) || "Document Content";
+}
+
+const DIFF_CYCLE: Array<"easy" | "medium" | "hard"> = [
+  "easy", "easy", "medium", "medium", "hard",
+];
+
+/**
+ * Build document-aware questions from extracted text.
+ * Uses a simple sentence-extraction approach (no LLM needed).
+ */
+function buildDocumentQuestions(
+  text: string,
+  docLabel: string,
+  maxCount: number,
+  qType: string,
+): any[] {
+  // Strip page markers and normalise whitespace
+  const clean = text
+    .replace(/\[Page \d+\]\n?/g, "")
+    .replace(/\[Slide \d+\]\n?/g, "")
+    .replace(/\[Sheet \d+\]\n?/g, "")
+    .replace(/\[Document truncated[^\]]*\]/g, "");
+
+  // Split into sentences
+  const sentences = clean
+    .split(/(?<=[.!?])\s+|\n{2,}/)
+    .map((s) => s.replace(/\s+/g, " ").trim())
+    .filter((s) => s.length >= 55 && s.length <= 280 && /[a-zA-Z]{4,}/.test(s));
+
+  if (sentences.length < 3) return [];
+
+  const shuffled = _shuffleArr(sentences);
+  // Keep a pool big enough for MCQ wrong-option candidates
+  const pool = shuffled.slice(0, Math.min(maxCount + 6, shuffled.length));
+  const selected = pool.slice(0, maxCount);
+
+  const TYPES: Array<"mcq" | "true_false" | "short"> = ["mcq", "true_false", "short"];
+
+  return selected.map((sentence, i) => {
+    const diff = DIFF_CYCLE[i % DIFF_CYCLE.length];
+    const type: "mcq" | "true_false" | "short" =
+      qType === "mixed"
+        ? TYPES[i % 3]
+        : (["mcq", "true_false", "short"].includes(qType) ? (qType as any) : TYPES[i % 3]);
+    const topic = _topicFrom(sentence);
+
+    if (type === "true_false") {
+      return {
+        id: `q${i + 1}`,
+        type: "true_false",
+        question: `True or False: The following appears in ${docLabel} — "${sentence}"`,
+        answer: "True",
+        explanation: `This sentence is taken directly from ${docLabel}.`,
+        source_text: sentence,
+        source_reference: { snippet: sentence.slice(0, 80) },
+        difficulty: diff,
+        topic,
+      };
+    }
+
+    if (type === "short") {
+      const words = sentence.split(/\s+/);
+      const pivot = Math.max(3, Math.ceil(words.length * 0.45));
+      const stem = words.slice(0, pivot).join(" ");
+      return {
+        id: `q${i + 1}`,
+        type: "short",
+        question: `According to ${docLabel}, complete or explain: "${stem}…"`,
+        answer: sentence,
+        explanation: `The full statement from the document: "${sentence}"`,
+        source_text: sentence,
+        source_reference: { snippet: sentence.slice(0, 80) },
+        difficulty: diff,
+        topic,
+      };
+    }
+
+    // MCQ — correct answer is the real sentence; distractors are other sentences from the pool
+    const distractors = _shuffleArr(
+      pool.filter((s) => s !== sentence),
+    ).slice(0, 3);
+    // Pad with shortened variants if not enough distractors
+    while (distractors.length < 3) {
+      const fallback = distractors[0] ?? sentence;
+      distractors.push(fallback.split(/\s+/).reverse().slice(0, 8).join(" ") + "…");
+    }
+    const options = _shuffleArr([sentence, ...distractors]);
+    return {
+      id: `q${i + 1}`,
+      type: "mcq",
+      question: `Which of the following statements appears in ${docLabel}?`,
+      options,
+      answer: sentence,
+      explanation: `"${sentence.slice(0, 80)}…" is taken directly from the document.`,
+      source_text: sentence,
+      source_reference: { snippet: sentence.slice(0, 80) },
+      difficulty: diff,
+      topic,
+    };
+  });
+}
+

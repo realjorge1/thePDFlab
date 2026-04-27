@@ -113,7 +113,7 @@ router.post("/pdf-reflow", async (req, res) => {
     }
 
     const file = req.files.file;
-    const buffer = file.data || require("fs").readFileSync(file.tempFilePath);
+    const buffer = file.data?.length ? file.data : require("fs").readFileSync(file.tempFilePath);
     const options = {
       fontSize: parseInt(req.body.fontSize) || 16,
       lineHeight: parseFloat(req.body.lineHeight) || 1.6,
@@ -149,7 +149,7 @@ router.post("/docx-reflow", async (req, res) => {
     }
 
     const file = req.files.file;
-    const buffer = file.data || require("fs").readFileSync(file.tempFilePath);
+    const buffer = file.data?.length ? file.data : require("fs").readFileSync(file.tempFilePath);
     const options = {
       fontSize: parseInt(req.body.fontSize) || 16,
       lineHeight: parseFloat(req.body.lineHeight) || 1.6,
@@ -184,7 +184,7 @@ router.post("/extract-text", async (req, res) => {
     }
 
     const file = req.files.file;
-    const buffer = file.data || require("fs").readFileSync(file.tempFilePath);
+    const buffer = file.data?.length ? file.data : require("fs").readFileSync(file.tempFilePath);
     const result = await reflowService.extractPDFText(buffer);
     res.json(result);
   } catch (error) {

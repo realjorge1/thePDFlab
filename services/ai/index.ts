@@ -5,13 +5,13 @@ export {
     askPdfQuestion,
     classifyDocument,
     clearAllSessions,
+    convertHighlightToTask,
     copyToClipboard,
     createMessage,
     createSession,
     deleteSession,
     deriveSessionTitle,
     explainText,
-    extractData,
     extractDocumentText,
     extractTasks,
     generateDocument,
@@ -25,6 +25,7 @@ export {
     sendChat,
     setAIProvider,
     summarize,
+    summarizeHighlights,
     translate
 } from "./ai.service";
 export type { AskPdfResult } from "./ai.service";

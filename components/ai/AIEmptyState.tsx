@@ -55,8 +55,8 @@ export const AIEmptyState = React.memo(function AIEmptyState({
   const hints: Record<AIAction, string[]> = {
     chat: [
       "Ask me any question",
-      'Try "Help me write an email"',
-      "I can brainstorm ideas with you",
+      'Try "Help me write a document"',
+      "I can help with writing, editing, and analysis",
     ],
     summarize: [
       "Paste text or attach a document",
@@ -72,11 +72,6 @@ export const AIEmptyState = React.memo(function AIEmptyState({
       "Attach a PDF document",
       "I'll extract all readable text page by page",
       "Copy the result to use anywhere",
-    ],
-    "extract-data": [
-      "I'll find entities, tables, and key-value pairs",
-      "Paste text or attach a document",
-      "Returns structured data you can copy",
     ],
     analyze: [
       "Get sentiment, readability, and structure analysis",

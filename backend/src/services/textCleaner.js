@@ -40,9 +40,15 @@ function cleanPageText(rawText) {
  * @returns {Array<{page: number, text: string}>}
  */
 function removeRepeatedHeadersFooters(pages) {
-  const lineCounts = new Map();
   const totalPages = pages.length;
 
+  // Header/footer detection is only meaningful when there are enough pages for
+  // "repetition" to carry signal. On short documents every line appears on
+  // 100% of pages by construction — applying the 40% threshold would wipe the
+  // entire document. Skip cleanup in that regime.
+  if (totalPages < 3) return pages;
+
+  const lineCounts = new Map();
   for (const { text } of pages) {
     const lines = text.split("\n");
     const uniqueLines = new Set(
@@ -53,7 +59,10 @@ function removeRepeatedHeadersFooters(pages) {
     }
   }
 
-  const threshold = totalPages * 0.4;
+  // A line must appear on at least 60% of pages AND on at least 3 pages.
+  // Using 0.4 / min-2 was too aggressive: any line on 2 of 5 pages got wiped,
+  // which destroyed real content in 3–10 page documents.
+  const threshold = Math.max(3, Math.ceil(totalPages * 0.6));
   const repeatedLines = new Set(
     [...lineCounts.entries()]
       .filter(([, count]) => count >= threshold)

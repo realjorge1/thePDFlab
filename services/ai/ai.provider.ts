@@ -8,7 +8,6 @@ import type {
     AIChatRequest,
     AIClassifyRequest,
     AIExplainRequest,
-    AIExtractDataRequest,
     AIGenerateDocumentRequest,
     AIHighlightRequest,
     AIQuizRequest,
@@ -31,9 +30,6 @@ export interface AIProvider {
 
   /** Translate text to a target language. */
   translate(req: AITranslateRequest): Promise<AIResponse>;
-
-  /** Extract structured data from text. */
-  extractData(req: AIExtractDataRequest): Promise<AIResponse>;
 
   /** Analyze text for sentiment, readability, etc. */
   analyze(req: AIAnalyzeRequest): Promise<AIResponse>;

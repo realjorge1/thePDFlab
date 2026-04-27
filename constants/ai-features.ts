@@ -27,12 +27,6 @@ export const aiFeatures = [
     color: "#059669",
   },
   {
-    id: "extract-data",
-    name: "Extract Data",
-    description: "Pull structured data via AI",
-    color: "#10B981",
-  },
-  {
     id: "analyze",
     name: "Analyze",
     description: "Deep analysis & insights",
@@ -73,5 +67,11 @@ export const aiFeatures = [
     name: "Quiz",
     description: "Generate study materials",
     color: "#A855F7",
+  },
+  {
+    id: "workspace",
+    name: "Workspace",
+    description: "Notes, math & charts in one doc",
+    color: "#8B5CF6",
   },
 ];

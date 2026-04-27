@@ -69,7 +69,6 @@ export const API_ENDPOINTS = {
   AI: {
     SUMMARIZE: `${API_BASE_URL}/ai/summarize`,
     TRANSLATE: `${API_BASE_URL}/ai/translate`,
-    EXTRACT_DATA: `${API_BASE_URL}/ai/extract-data`,
     CHAT: `${API_BASE_URL}/ai/chat`,
     ANALYZE: `${API_BASE_URL}/ai/analyze`,
     EXTRACT_TASKS: `${API_BASE_URL}/ai/extract-tasks`,
@@ -80,8 +79,11 @@ export const API_ENDPOINTS = {
     CHAT_DOCUMENT: `${API_BASE_URL}/ai/chat-document`,
     CLASSIFY: `${API_BASE_URL}/ai/classify`,
     HIGHLIGHT: `${API_BASE_URL}/ai/highlight`,
+    HIGHLIGHT_SUMMARY: `${API_BASE_URL}/ai/highlight-summary`,
+    CONVERT_TO_TASK: `${API_BASE_URL}/ai/convert-to-task`,
     EXPLAIN: `${API_BASE_URL}/ai/explain`,
     QUIZ: `${API_BASE_URL}/ai/quiz`,
+    OCR_SCAN: `${API_BASE_URL}/ai/ocr-scan`,
   },
 
   // Document Operations

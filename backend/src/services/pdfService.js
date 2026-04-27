@@ -263,7 +263,12 @@ class PDFService {
 
       const dict = obj.dict;
       const subtype = dict.lookupMaybe(PDFName.of("Subtype"), PDFName);
-      const filter = dict.lookupMaybe(PDFName.of("Filter"), PDFName);
+      // Filter can be a bare PDFName (/DCTDecode) or a PDFArray ([/DCTDecode]).
+      // Use dict.get + context.lookup to avoid lookupMaybe's unconditional throw.
+      const resolvedFilter = context.lookup(dict.get(PDFName.of("Filter")));
+      const filter = resolvedFilter instanceof PDFArray
+        ? resolvedFilter.get(0)
+        : resolvedFilter;
 
       if (subtype?.toString() !== "/Image") continue;
       if (!filter || filter.toString() !== "/DCTDecode") continue;

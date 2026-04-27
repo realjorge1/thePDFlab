@@ -8,7 +8,6 @@ export type AIAction =
   | "translate"
   | "summarize"
   | "extract-text"
-  | "extract-data"
   | "analyze"
   | "tasks"
   | "fill-form"
@@ -25,7 +24,7 @@ export interface AIChatMessage {
   role: "user" | "assistant" | "system";
   content: string;
   timestamp: number; // epoch ms
-  /** Optional structured data attached to the message (for extract-data, fill-form, etc.) */
+  /** Optional structured data attached to the message (for fill-form, classify, etc.) */
   structuredData?: Record<string, unknown>;
 }
 
@@ -60,12 +59,6 @@ export interface AISummarizeRequest {
 export interface AITranslateRequest {
   text: string;
   targetLanguage: string;
-  documentName?: string;
-}
-
-export interface AIExtractDataRequest {
-  text: string;
-  dataType?: string; // "tables" | "entities" | "key-value" | "all"
   documentName?: string;
 }
 
@@ -106,16 +99,102 @@ export interface AIHighlightRequest {
   documentName?: string;
 }
 
+// ─── Highlight-specific types ────────────────────────────────────────────────
+
+export type HighlightImportance = "critical" | "high" | "medium";
+
+export interface HighlightSourceReference {
+  page?: number;
+  section?: string;
+  paragraphIndex?: number;
+  snippet?: string;
+}
+
+export interface HighlightItem {
+  text: string;
+  importance: HighlightImportance;
+  category: string;
+  reason: string;
+  confidence?: number; // 0-100
+  sourceReference?: HighlightSourceReference;
+}
+
+export interface HighlightMeta {
+  summary?: string[];
+  keyThemes?: string[];
+  documentType?: string;
+  /** Number of highlights per page — populated when sourceReferences include page numbers. */
+  pageDensity?: Array<{ page: number; count: number }>;
+}
+
+export interface HighlightData {
+  highlights: HighlightItem[];
+  meta?: HighlightMeta;
+}
+
+export interface AIHighlightSummaryRequest {
+  highlights: HighlightItem[];
+  documentName?: string;
+}
+
+export type ExplainMode =
+  | "simple"
+  | "plain"
+  | "professional"
+  | "legal"
+  | "medical"
+  | "technical"
+  | "bullet";
+
+export type ExplainDepth = "short" | "medium" | "deep";
+
 export interface AIExplainRequest {
   text: string;
-  mode?: "plain" | "legal" | "medical" | "technical";
+  mode?: ExplainMode;
+  depth?: ExplainDepth;
+}
+
+// ─── Quiz-specific types ──────────────────────────────────────────────────────
+
+export type QuizQuestionType = "mcq" | "true_false" | "short";
+export type QuizDifficulty = "easy" | "medium" | "hard" | "adaptive";
+export type QuizLength = "quick" | "standard" | "deep";
+
+export interface QuizSourceReference {
+  page?: number;
+  slide?: number;
+  section?: string;
+  paragraphIndex?: number;
+  snippet?: string;
+}
+
+export interface QuizQuestion {
+  id: string;
+  type: QuizQuestionType;
+  question: string;
+  /** Option strings – only present for MCQ type. */
+  options?: string[];
+  /** For MCQ: exact option text; for true_false: "True"/"False"; for short: sample answer. */
+  answer: string;
+  explanation: string;
+  /** Verbatim passage copied from the document that proves the answer. Required for grounded output. */
+  source_text?: string;
+  /** Backend-validated location info for source_text (page/slide/section). */
+  source_reference?: QuizSourceReference | string;
+  difficulty: "easy" | "medium" | "hard";
+  topic: string;
 }
 
 export interface AIQuizRequest {
   text: string;
-  quizType?: "quiz" | "comprehension" | "flashcards";
-  count?: number;
+  /** Backend docId from a prior extract-pdf/extract-document call. Enables true RAG grounding. */
+  docId?: string;
+  questionType?: QuizQuestionType | "mixed";
+  length?: QuizLength;
+  difficulty?: QuizDifficulty;
   documentName?: string;
+  /** Topics the user struggled with (for Practice Weak Areas). */
+  weakTopics?: string[];
 }
 
 export interface AIResponse {
@@ -258,15 +337,6 @@ export const AI_FEATURES: AIFeatureMeta[] = [
     icon: "file-text",
     requiresDocument: true,
     inputPlaceholder: "Attach a PDF to extract text...",
-  },
-  {
-    id: "extract-data",
-    name: "Extract Data",
-    description: "Pull structured data from documents",
-    color: "#10B981",
-    icon: "file-search",
-    requiresDocument: false,
-    inputPlaceholder: "Paste text or attach file...",
   },
   {
     id: "analyze",

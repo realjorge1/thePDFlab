@@ -6,7 +6,6 @@ import { useTheme } from "@/services/ThemeProvider";
 import {
   BookOpen,
   Brain,
-  FileSearch,
   FileSignature,
   FileText,
   Languages,
@@ -31,7 +30,6 @@ interface AIFeatureCardProps {
 const iconMap: Record<string, React.ComponentType<{ color: string; size: number }>> = {
   summarize: BookOpen,
   translate: Languages,
-  "extract-data": FileSearch,
   chat: MessageSquare,
   analyze: Brain,
   tasks: ListChecks,

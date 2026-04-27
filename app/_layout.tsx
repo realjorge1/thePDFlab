@@ -119,6 +119,8 @@ export default function RootLayout() {
             name="create-blank-docx"
             options={{ animation: "none" }}
           />
+          <Stack.Screen name="image-to-file-preview" />
+          <Stack.Screen name="ai-generated-preview" />
           <Stack.Screen name="settings" />
           <Stack.Screen name="privacy-policy" />
           <Stack.Screen name="terms-of-service" />

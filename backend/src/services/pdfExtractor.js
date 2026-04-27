@@ -11,12 +11,17 @@ const Tesseract = require("tesseract.js");
 // Threshold: pages with fewer non-whitespace chars than this are treated as scanned
 const SCANNED_CHAR_THRESHOLD = 30;
 
-// Lazy-loaded pdfjs reference (avoid crash if canvas is not installed)
+// Lazy-loaded pdfjs reference — pdfjs-dist v4 is ESM-only, so we use dynamic import()
 let _pdfjsLib = null;
 
-function getPdfjs() {
+async function getPdfjs() {
   if (!_pdfjsLib) {
-    _pdfjsLib = require("pdfjs-dist/legacy/build/pdf.js");
+    const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
+    // On Windows, absolute paths must be file:// URLs for the ESM loader (c:\ is not a valid URL scheme)
+    const { pathToFileURL } = require("url");
+    const workerPath = require.resolve("pdfjs-dist/legacy/build/pdf.worker.mjs");
+    pdfjs.GlobalWorkerOptions.workerSrc = pathToFileURL(workerPath).href;
+    _pdfjsLib = pdfjs;
   }
   return _pdfjsLib;
 }
@@ -27,7 +32,7 @@ function getPdfjs() {
  * @returns {Promise<{ pages: Array, meta: Object }>}
  */
 async function extractPdfText(pdfBuffer) {
-  const pdfjsLib = getPdfjs();
+  const pdfjsLib = await getPdfjs();
   const uint8Array = new Uint8Array(pdfBuffer);
 
   const loadingTask = pdfjsLib.getDocument({
@@ -80,14 +85,19 @@ async function extractPageText(page, pageNum) {
         charCount: ocrText.length,
       };
     } catch (ocrErr) {
-      // OCR failed (canvas not installed, etc.) — return whatever text we have
+      // OCR failed (canvas not installed, etc.).
+      // Return only whatever text PDF.js found — do NOT add a placeholder string.
+      // A placeholder fools downstream filters into thinking the page has content,
+      // causing the quiz to attempt generation and then drop every question.
+      // An empty/near-empty text correctly signals "no extractable content" and
+      // produces an actionable "insufficient content" message for the user.
       console.warn(
-        `[pdfExtractor] OCR failed for page ${pageNum}:`,
+        `[pdfExtractor] OCR unavailable for page ${pageNum} (install 'canvas' for scanned PDFs):`,
         ocrErr.message,
       );
       return {
         page: pageNum,
-        text: rawText || `[Page ${pageNum}: scanned content — OCR unavailable]`,
+        text: rawText,
         wasOcr: false,
         charCount: rawText.length,
       };

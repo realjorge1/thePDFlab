@@ -212,36 +212,108 @@ class ConvertService {
 
   // Convert PDF to images
   async pdfToImages(pdfFile, format = "png") {
+    const inputPath = pdfFile.tempFilePath;
+    console.log(`[convert] pdfToImages: format=${format}`);
+
+    // Primary: mupdf WebAssembly renderer — no system dependencies required
     try {
-      const options = {
-        density: 100,
-        saveFilename: `page`,
-        savePath: path.dirname(pdfFile.tempFilePath),
-        format: format,
-        width: 2000,
-        height: 2000,
-      };
+      const images = await this._pdfToImagesViaMupdf(inputPath, format);
+      if (images.length > 0) {
+        console.log(`[convert] pdfToImages (mupdf): ${images.length} page(s)`);
+        return images;
+      }
+      throw new Error("mupdf returned 0 pages");
+    } catch (mupdfErr) {
+      console.warn(`[convert] mupdf failed (${mupdfErr.message}), trying pdf2pic…`);
+    }
 
-      const convert = fromPath(pdfFile.tempFilePath, options);
-      const pdfBuffer = await fs.readFile(pdfFile.tempFilePath);
-      const pdfDoc = await PDFDocument.load(pdfBuffer);
-      const pageCount = pdfDoc.getPageCount();
+    // Fallback: pdf2pic — works when GraphicsMagick / Ghostscript is installed
+    try {
+      const images = await this._pdfToImagesViaPdf2Pic(inputPath, format);
+      if (images.length > 0) {
+        console.log(`[convert] pdfToImages (pdf2pic): ${images.length} page(s)`);
+        return images;
+      }
+      throw new Error("pdf2pic returned 0 pages");
+    } catch (pdf2picErr) {
+      console.error(`[convert] pdf2pic also failed: ${pdf2picErr.message}`);
+      throw new Error(
+        "PDF to image conversion failed. " +
+          "The server could not render PDF pages to images. " +
+          "Details: " + pdf2picErr.message,
+      );
+    }
+  }
 
-      const images = [];
-      for (let i = 1; i <= pageCount; i++) {
-        try {
-          const result = await convert(i, { responseType: "buffer" });
-          images.push(result.buffer || result);
-        } catch (error) {
-          console.log(`Error converting page ${i}:`, error.message);
-        }
+  // mupdf-based renderer (WebAssembly, no native deps)
+  async _pdfToImagesViaMupdf(inputPath, format) {
+    const mupdf = await import("mupdf");
+    const pdfBuffer = await fs.readFile(inputPath);
+
+    const doc = mupdf.Document.openDocument(
+      new Uint8Array(pdfBuffer),
+      "application/pdf",
+    );
+    const pageCount = doc.countPages();
+    if (pageCount === 0) throw new Error("PDF has no pages");
+
+    const scale = 150 / 72; // 150 DPI render
+    const images = [];
+
+    for (let i = 0; i < pageCount; i++) {
+      const page = doc.loadPage(i);
+      const matrix = mupdf.Matrix.scale(scale, scale);
+      const pixmap = page.toPixmap(
+        matrix,
+        mupdf.ColorSpace.DeviceRGB,
+        false,
+        true,
+      );
+
+      let buf = Buffer.from(pixmap.asPNG());
+
+      // Convert PNG → JPEG if requested
+      if (format === "jpg" || format === "jpeg") {
+        buf = await sharp(buf).jpeg({ quality: 85 }).toBuffer();
       }
 
-      return images;
-    } catch (error) {
-      console.error("PDF to images error:", error);
-      throw error;
+      if (!buf || buf.length === 0) {
+        throw new Error(`Empty image for page ${i + 1}`);
+      }
+      images.push(buf);
     }
+
+    return images;
+  }
+
+  // pdf2pic-based renderer (needs GraphicsMagick or Ghostscript)
+  async _pdfToImagesViaPdf2Pic(inputPath, format) {
+    const pdfBuffer = await fs.readFile(inputPath);
+    const pdfDoc = await PDFDocument.load(pdfBuffer);
+    const pageCount = pdfDoc.getPageCount();
+
+    const options = {
+      density: 150,
+      saveFilename: "page",
+      savePath: path.dirname(inputPath),
+      format,
+      width: 1654,
+      height: 2339,
+    };
+
+    const convert = fromPath(inputPath, options);
+    const images = [];
+
+    for (let i = 1; i <= pageCount; i++) {
+      const result = await convert(i, { responseType: "buffer" });
+      const buf = result.buffer || result;
+      if (!buf || buf.length === 0) {
+        throw new Error(`Empty buffer from pdf2pic for page ${i}`);
+      }
+      images.push(buf);
+    }
+
+    return images;
   }
 
   // Convert PDF to text
