@@ -167,11 +167,13 @@ export default function PremiumScreen() {
 
           <Text style={[styles.heroTitle, { color: themeColors.text }]}>
             Work smarter,{"\n"}
-            <Text style={{ color: themeColors.primary }}>do more.</Text>
+            <Text style={{ color: themeColors.primary }}>
+              get better results.
+            </Text>
           </Text>
           <Text style={[styles.heroSub, { color: themeColors.textSecondary }]}>
-            Everything you need to work smarter — AI, tools, research & explore
-            and security in one place.
+            Everything you need — AI, tools, research & explore and security in
+            one place.
           </Text>
         </View>
 
