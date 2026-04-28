@@ -81,6 +81,16 @@ import { PINGate } from "@/components/PINGate";
 const { width: SCREEN_WIDTH } = Dimensions.get("window");
 const FOLDER_VIEW_MODE_KEY = "@pdflab_folder_view_mode";
 
+function getTypeBgColor(color: string): string {
+  if (color === colors.pdf) return "#FEE2E2";
+  if (color === colors.word) return "#DBEAFE";
+  if (color === colors.excel) return "#D1FAE5";
+  if (color === colors.ppt) return "#FFEDD5";
+  if (color === colors.image) return "#F3E8FF";
+  if (color === colors.epub) return "#EDE9FE";
+  return "#EEF2FF";
+}
+
 type ViewMode = "list" | "grid";
 
 // ============================================================================
@@ -610,16 +620,6 @@ export default function FoldersScreen() {
       if (file.lastOpenedAt)
         metaParts.push(formatRelativeTime(file.lastOpenedAt));
 
-      const getTypeBgColor = (color: string) => {
-        if (color === colors.pdf) return "#FEE2E2";
-        if (color === colors.word) return "#DBEAFE";
-        if (color === colors.excel) return "#D1FAE5";
-        if (color === colors.ppt) return "#FFEDD5";
-        if (color === colors.image) return "#F3E8FF";
-        if (color === colors.epub) return "#EDE9FE";
-        return "#EEF2FF";
-      };
-
       const isFav = favoriteIds.has(file.id);
 
       return (
@@ -739,16 +739,6 @@ export default function FoldersScreen() {
     (file: QuickAccessFile) => {
       const typeConfig = getFileTypeConfig(file.displayName);
       const isFav = favoriteIds.has(file.id);
-
-      const getTypeBgColor = (color: string) => {
-        if (color === colors.pdf) return "#FEE2E2";
-        if (color === colors.word) return "#DBEAFE";
-        if (color === colors.excel) return "#D1FAE5";
-        if (color === colors.ppt) return "#FFEDD5";
-        if (color === colors.image) return "#F3E8FF";
-        if (color === colors.epub) return "#EDE9FE";
-        return "#EEF2FF";
-      };
 
       return (
         <Pressable
@@ -1052,6 +1042,10 @@ export default function FoldersScreen() {
           contentContainerStyle={
             viewMode === "grid" ? s.gridContent : s.listContent
           }
+          initialNumToRender={12}
+          maxToRenderPerBatch={8}
+          windowSize={5}
+          removeClippedSubviews={true}
           showsVerticalScrollIndicator={false}
           refreshControl={
             <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} />
@@ -1850,16 +1844,16 @@ const s = StyleSheet.create({
   gridRow: {
     justifyContent: "flex-start",
     paddingHorizontal: 0,
-    gap: 8,
+    gap: 12,
   },
   gridContent: {
-    paddingHorizontal: 15,
+    paddingHorizontal: 16,
     paddingBottom: 100,
   },
   gridCard: {
     width: (SCREEN_WIDTH - 56) / 3,
     borderRadius: 8,
-    marginBottom: 8,
+    marginBottom: 14,
     overflow: "hidden",
     borderWidth: 1,
     shadowColor: "#000",

@@ -186,74 +186,46 @@ router.post("/excel-to-pdf", async (req, res) => {
   }
 });
 
-// PDF to JPG
+// PDF to JPG — always returns a single image (page 1, or page specified by ?page=N)
 router.post("/pdf-to-jpg", async (req, res) => {
   try {
     if (!req.files || !req.files.pdf) {
       return res.status(400).json({ error: "No PDF uploaded" });
     }
 
+    const page = Math.max(1, parseInt(req.body.page, 10) || 1);
     const images = await convertService.pdfToImages(req.files.pdf, "jpg");
-
-    if (images.length === 1) {
-      res.setHeader("Content-Type", "image/jpeg");
-      res.setHeader("Content-Disposition", "attachment; filename=page-1.jpg");
-      res.send(images[0]);
-    } else {
-      // Create ZIP file with multiple images
-      const archive = archiver("zip", { zlib: { level: 9 } });
-
-      res.setHeader("Content-Type", "application/zip");
-      res.setHeader(
-        "Content-Disposition",
-        "attachment; filename=pdf-images.zip",
-      );
-
-      archive.pipe(res);
-
-      images.forEach((imageBuffer, index) => {
-        archive.append(imageBuffer, { name: `page-${index + 1}.jpg` });
-      });
-
-      await archive.finalize();
+    const image = images[page - 1] ?? images[0];
+    if (!image) {
+      return res.status(500).json({ error: "No image generated" });
     }
+
+    res.setHeader("Content-Type", "image/jpeg");
+    res.setHeader("Content-Disposition", `attachment; filename=page-${page}.jpg`);
+    res.send(image);
   } catch (error) {
     console.error("PDF to JPG error:", error);
     res.status(500).json({ error: error.message || "Failed to convert PDF to JPG" });
   }
 });
 
-// PDF to PNG
+// PDF to PNG — always returns a single image (page 1, or page specified by ?page=N)
 router.post("/pdf-to-png", async (req, res) => {
   try {
     if (!req.files || !req.files.pdf) {
       return res.status(400).json({ error: "No PDF uploaded" });
     }
 
+    const page = Math.max(1, parseInt(req.body.page, 10) || 1);
     const images = await convertService.pdfToImages(req.files.pdf, "png");
-
-    if (images.length === 1) {
-      res.setHeader("Content-Type", "image/png");
-      res.setHeader("Content-Disposition", "attachment; filename=page-1.png");
-      res.send(images[0]);
-    } else {
-      // Create ZIP file with multiple images
-      const archive = archiver("zip", { zlib: { level: 9 } });
-
-      res.setHeader("Content-Type", "application/zip");
-      res.setHeader(
-        "Content-Disposition",
-        "attachment; filename=pdf-images.zip",
-      );
-
-      archive.pipe(res);
-
-      images.forEach((imageBuffer, index) => {
-        archive.append(imageBuffer, { name: `page-${index + 1}.png` });
-      });
-
-      await archive.finalize();
+    const image = images[page - 1] ?? images[0];
+    if (!image) {
+      return res.status(500).json({ error: "No image generated" });
     }
+
+    res.setHeader("Content-Type", "image/png");
+    res.setHeader("Content-Disposition", `attachment; filename=page-${page}.png`);
+    res.send(image);
   } catch (error) {
     console.error("PDF to PNG error:", error);
     res.status(500).json({ error: error.message || "Failed to convert PDF to PNG" });

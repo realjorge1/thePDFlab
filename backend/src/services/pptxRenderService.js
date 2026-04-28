@@ -16,6 +16,7 @@ const path = require("path");
 const crypto = require("crypto");
 
 const { OUTPUTS_DIR } = require("../utils/fileOutputUtils");
+const logger = require("../utils/logger");
 
 const execFileAsync = util.promisify(execFile);
 
@@ -152,65 +153,73 @@ async function renderPptxToPdf(inputPath, originalName) {
     return { id: fileHash, pdfPath: cached.pdfPath, sizeBytes: cached.sizeBytes };
   }
 
-  // ── Resolve LibreOffice ─────────────────────────────────────────
-  const binary = await resolveLibreOffice();
-
-  // LibreOffice profile must be unique per invocation to avoid lock clashes
-  // when multiple requests run concurrently.
-  const jobId = crypto.randomUUID();
-  const profileDir = path.join(OUTPUTS_DIR, `lo_profile_${jobId}`);
-  const workDir = path.join(OUTPUTS_DIR, `lo_work_${jobId}`);
-
-  await fsp.mkdir(profileDir, { recursive: true });
-  await fsp.mkdir(workDir, { recursive: true });
-
-  // ── Copy temp file with proper extension ────────────────────────
-  // express-fileupload temp files have no extension (e.g. "tmp-1-171337…").
-  // LibreOffice needs the extension to reliably identify the file format.
-  const ext = getOriginalExtension(originalName || inputPath);
-  const namedInput = path.join(workDir, `input${ext}`);
-  await fsp.copyFile(inputPath, namedInput);
+  // ── Try LibreOffice first ────────────────────────────────────────
+  let pdfBuffer = null;
 
   try {
-    await execFileAsync(
-      binary,
-      [
-        `-env:UserInstallation=${toFileUrl(profileDir)}`,
-        "--headless",
-        "--norestore",
-        "--nologo",
-        "--nodefault",
-        "--nofirststartwizard",
-        "--convert-to",
-        "pdf",
-        "--outdir",
-        workDir,
-        namedInput,
-      ],
-      { timeout: CONVERSION_TIMEOUT_MS, windowsHide: true },
-    );
+    const binary = await resolveLibreOffice();
 
-    // LibreOffice outputs "input.pdf" in workDir (mirrors the input basename)
-    const producedPdf = path.join(workDir, "input.pdf");
+    const jobId = crypto.randomUUID();
+    const profileDir = path.join(OUTPUTS_DIR, `lo_profile_${jobId}`);
+    const workDir = path.join(OUTPUTS_DIR, `lo_work_${jobId}`);
 
-    if (!fs.existsSync(producedPdf)) {
-      const files = await fsp.readdir(workDir).catch(() => []);
-      throw new Error(
-        `LibreOffice produced no PDF (workDir contains: ${files.join(", ") || "empty"})`,
+    await fsp.mkdir(profileDir, { recursive: true });
+    await fsp.mkdir(workDir, { recursive: true });
+
+    const ext = getOriginalExtension(originalName || inputPath);
+    const namedInput = path.join(workDir, `input${ext}`);
+    await fsp.copyFile(inputPath, namedInput);
+
+    try {
+      await execFileAsync(
+        binary,
+        [
+          `-env:UserInstallation=${toFileUrl(profileDir)}`,
+          "--headless",
+          "--norestore",
+          "--nologo",
+          "--nodefault",
+          "--nofirststartwizard",
+          "--convert-to",
+          "pdf",
+          "--outdir",
+          workDir,
+          namedInput,
+        ],
+        { timeout: CONVERSION_TIMEOUT_MS, windowsHide: true },
       );
+
+      const producedPdf = path.join(workDir, "input.pdf");
+      if (!fs.existsSync(producedPdf)) {
+        const files = await fsp.readdir(workDir).catch(() => []);
+        throw new Error(
+          `LibreOffice produced no PDF (workDir contains: ${files.join(", ") || "empty"})`,
+        );
+      }
+      pdfBuffer = await fsp.readFile(producedPdf);
+    } finally {
+      fsp.rm(profileDir, { recursive: true, force: true }).catch(() => {});
+      fsp.rm(workDir, { recursive: true, force: true }).catch(() => {});
     }
-
-    // Move to cache-keyed final location
-    const finalPath = cachedPdfPath(fileHash);
-    await fsp.rename(producedPdf, finalPath);
-    const stat = await fsp.stat(finalPath);
-
-    return { id: fileHash, pdfPath: finalPath, sizeBytes: stat.size };
-  } finally {
-    // Best-effort cleanup of the per-job profile, working dir, and named copy
-    fsp.rm(profileDir, { recursive: true, force: true }).catch(() => {});
-    fsp.rm(workDir, { recursive: true, force: true }).catch(() => {});
+  } catch (loErr) {
+    // LibreOffice not installed or failed — fall back to pure-JS converter
+    logger.warn(`[pptx] LibreOffice unavailable (${loErr.message}), using JS fallback`);
   }
+
+  // ── JS fallback: AdmZip + PDFKit (no system deps required) ──────
+  if (!pdfBuffer) {
+    const officeService = require("./officeConversionService");
+    pdfBuffer = await officeService.pptToPDF({
+      tempFilePath: inputPath,
+      name: originalName || path.basename(inputPath),
+    });
+  }
+
+  // ── Persist to hash-keyed cache ──────────────────────────────────
+  const finalPath = cachedPdfPath(fileHash);
+  await fsp.writeFile(finalPath, pdfBuffer);
+  const stat = await fsp.stat(finalPath);
+  return { id: fileHash, pdfPath: finalPath, sizeBytes: stat.size };
 }
 
 /**

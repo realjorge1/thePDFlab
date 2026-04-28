@@ -1086,8 +1086,11 @@ export default function ToolProcessorScreen() {
             name: result.outputFileName || "Converted Document",
           },
         });
+      } else if (extension === "jpg" || extension === "png") {
+        // Share image directly so the user can save it to Photos or another app
+        handleShareResult();
       } else {
-        // For unsupported viewing types (images, html, txt, zip, etc.) — offer share
+        // For unsupported viewing types (html, txt, zip, etc.) — offer share
         Alert.alert(
           "File Saved",
           "This file type cannot be previewed in the app. Would you like to share it instead?",

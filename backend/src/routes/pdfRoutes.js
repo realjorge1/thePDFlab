@@ -1009,13 +1009,16 @@ router.post("/annotate", async (req, res) => {
     if (annotations) {
       parsedAnnotations = JSON.parse(annotations);
     } else if (text) {
-      // Simple text annotation from frontend
-      const targetPages = pages ? JSON.parse(pages) : [0];
+      // Simple text annotation from frontend — use passed coordinates
+      const annotX = parseFloat(req.body.x) || 50;
+      const annotY = parseFloat(req.body.y) || 50;
+      const bodyPage = req.body.pageNumber !== undefined ? parseInt(req.body.pageNumber, 10) : null;
+      const targetPages = pages ? JSON.parse(pages) : (bodyPage !== null ? [bodyPage] : [0]);
       parsedAnnotations = targetPages.map((p) => ({
         pageNumber: p,
         text,
-        x: 50,
-        y: 50,
+        x: annotX,
+        y: annotY,
         type: "note",
       }));
     } else {

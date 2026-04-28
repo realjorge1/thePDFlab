@@ -20,8 +20,8 @@ import * as FileSystem from "expo-file-system/legacy";
 // Constants
 // ────────────────────────────────────────────────────────────────────
 
-/** Minimum acceptable PDF size in bytes (5 KB). */
-const MIN_PDF_SIZE_BYTES = 5 * 1024;
+/** Minimum acceptable PDF size in bytes (300 B). */
+const MIN_PDF_SIZE_BYTES = 300;
 
 /** PDF magic header. */
 const PDF_MAGIC = "%PDF-";

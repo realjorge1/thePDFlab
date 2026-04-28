@@ -61,6 +61,16 @@ import { useTheme } from "@/services/ThemeProvider";
 
 const VIEW_MODE_KEY = "@pdflab_library_view_mode";
 
+function getTypeBgColor(color: string): string {
+  if (color === colors.pdf) return "#FEE2E2";
+  if (color === colors.word) return "#DBEAFE";
+  if (color === colors.excel) return "#D1FAE5";
+  if (color === colors.ppt) return "#FFEDD5";
+  if (color === colors.image) return "#F3E8FF";
+  if (color === colors.epub) return "#EDE9FE";
+  return "#EEF2FF";
+}
+
 const { width: SCREEN_WIDTH } = Dimensions.get("window");
 
 // ============================================================================
@@ -778,16 +788,6 @@ export default function LibraryScreen() {
         metaParts.push(formatRelativeTime(item.lastOpenedAt));
       const metaText = metaParts.join(" • ");
 
-      // Get enhanced background color for file type
-      const getTypeBgColor = (color: string) => {
-        if (color === colors.pdf) return "#FEE2E2";
-        if (color === colors.word) return "#DBEAFE";
-        if (color === colors.excel) return "#D1FAE5";
-        if (color === colors.ppt) return "#FFEDD5";
-        if (color === colors.image) return "#F3E8FF";
-        return "#EEF2FF";
-      };
-
       const isSelected = markMode && selectedIds.has(item.id);
       const isPinned = pinnedIds.includes(item.id);
 
@@ -898,7 +898,6 @@ export default function LibraryScreen() {
       );
     },
     [
-      colorScheme,
       textColor,
       markMode,
       selectedIds,
@@ -916,16 +915,6 @@ export default function LibraryScreen() {
       const typeConfig = getFileTypeConfig(item.displayName);
       const isSelected = markMode && selectedIds.has(item.id);
       const isFav = favoriteIds.has(item.id);
-
-      const getTypeBgColor = (color: string) => {
-        if (color === colors.pdf) return "#FEE2E2";
-        if (color === colors.word) return "#DBEAFE";
-        if (color === colors.excel) return "#D1FAE5";
-        if (color === colors.ppt) return "#FFEDD5";
-        if (color === colors.image) return "#F3E8FF";
-        if (color === colors.epub) return "#EDE9FE";
-        return "#EEF2FF";
-      };
 
       return (
         <Pressable
@@ -2486,18 +2475,18 @@ const styles = StyleSheet.create({
 
   // ── Grid view styles ──────────────────────────────────────────────────
   gridContent: {
-    paddingHorizontal: 15,
+    paddingHorizontal: 16,
     paddingBottom: 150,
   },
   gridRow: {
     justifyContent: "flex-start",
     paddingHorizontal: 0,
-    gap: 8,
+    gap: 12,
   },
   gridCard: {
     width: (SCREEN_WIDTH - 56) / 3,
     borderRadius: 8,
-    marginBottom: 8,
+    marginBottom: 14,
     overflow: "hidden",
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 1 },

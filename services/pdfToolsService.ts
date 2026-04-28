@@ -76,8 +76,8 @@ const TOOL_ENDPOINTS: Record<string, ToolEndpointConfig> = {
   },
   split: {
     endpoint: API_ENDPOINTS.PDF.SPLIT,
-    outputExtension: "json",
-    outputMimeType: "application/json",
+    outputExtension: "pdf",
+    outputMimeType: "application/pdf",
     multipleOutputs: true,
   },
   remove: {
@@ -168,15 +168,13 @@ const TOOL_ENDPOINTS: Record<string, ToolEndpointConfig> = {
   // Convert from PDF
   "pdf-to-jpg": {
     endpoint: API_ENDPOINTS.CONVERT.PDF_TO_JPG,
-    outputExtension: "zip",
-    outputMimeType: "application/zip",
-    multipleOutputs: true,
+    outputExtension: "jpg",
+    outputMimeType: "image/jpeg",
   },
   "pdf-to-png": {
     endpoint: API_ENDPOINTS.CONVERT.PDF_TO_PNG,
-    outputExtension: "zip",
-    outputMimeType: "application/zip",
-    multipleOutputs: true,
+    outputExtension: "png",
+    outputMimeType: "image/png",
   },
   "pdf-to-word": {
     endpoint: API_ENDPOINTS.CONVERT.PDF_TO_WORD,

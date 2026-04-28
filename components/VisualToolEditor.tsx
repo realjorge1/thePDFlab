@@ -18,10 +18,10 @@ import {
 } from "lucide-react-native";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
+  FlatList,
   GestureResponderEvent,
   LayoutChangeEvent,
   Pressable,
-  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -173,12 +173,13 @@ export const VisualToolEditor: React.FC<Props> = ({
     startPdfY: 0,
   });
 
-  // ScrollView state
-  const scrollViewRef = useRef<ScrollView>(null);
+  // FlatList state
+  const flatListRef = useRef<FlatList<number>>(null);
   const [currentVisiblePage, setCurrentVisiblePage] = useState(0);
   const [goToPageText, setGoToPageText] = useState(
     String(placement.pageNumber + 1),
   );
+  const viewabilityConfig = useRef({ viewAreaCoveragePercentThreshold: 50 });
 
   // Zoom state
   const MIN_ZOOM = 1;
@@ -244,23 +245,10 @@ export const VisualToolEditor: React.FC<Props> = ({
   const elScreenY =
     (pdfH - placement.y - (placement.height || elementSize.h)) * scale;
 
-  // CRITICAL FIX (2024-04-03):
-  // Filter pages to prevent concurrent PDF renderer crashes.
-  // Only render current page ± 1 buffer page.
-  // See pdfThumbnailService.ts and ThumbnailGrid.tsx for context.
   const allPageIndices = React.useMemo(
     () => Array.from({ length: totalPages }, (_, i) => i),
     [totalPages],
   );
-
-  const pageIndices = React.useMemo(() => {
-    const current = placement.pageNumber;
-    const buffer = 1;
-    const filtered = allPageIndices.filter(
-      (idx) => Math.abs(idx - current) <= buffer,
-    );
-    return filtered;
-  }, [placement.pageNumber, allPageIndices]);
 
   // ── Handlers ──────────────────────────────────────────────────────
 
@@ -340,6 +328,7 @@ export const VisualToolEditor: React.FC<Props> = ({
       Math.min(placement.pageNumber + delta, totalPages - 1),
     );
     onPlacementChange({ ...placement, pageNumber: newPage });
+    flatListRef.current?.scrollToIndex({ index: newPage, animated: true });
   };
 
   const handleReset = () => {
@@ -352,15 +341,13 @@ export const VisualToolEditor: React.FC<Props> = ({
     });
   };
 
-  // ScrollView helpers
-  const handleScroll = useCallback(
-    (e: { nativeEvent: { contentOffset: { y: number } } }) => {
-      if (itemTotalH > 0) {
-        const page = Math.round(e.nativeEvent.contentOffset.y / itemTotalH);
-        setCurrentVisiblePage(Math.max(0, Math.min(page, totalPages - 1)));
+  const handleViewableItemsChanged = useCallback(
+    ({ viewableItems }: { viewableItems: Array<{ item: number }> }) => {
+      if (viewableItems.length > 0) {
+        setCurrentVisiblePage(viewableItems[0].item);
       }
     },
-    [itemTotalH, totalPages],
+    [],
   );
 
   const handleGoToPage = useCallback(() => {
@@ -368,37 +355,123 @@ export const VisualToolEditor: React.FC<Props> = ({
     if (isNaN(target) || target < 1 || target > totalPages) return;
     const pageIdx = target - 1;
     onPlacementChange({ ...placement, pageNumber: pageIdx });
-    scrollViewRef.current?.scrollTo({
-      y: pageIdx * itemTotalH,
-      animated: true,
-    });
-  }, [goToPageText, totalPages, placement, onPlacementChange, itemTotalH]);
+    flatListRef.current?.scrollToIndex({ index: pageIdx, animated: true });
+  }, [goToPageText, totalPages, placement, onPlacementChange]);
 
   const handleJumpToElementPage = useCallback(() => {
-    scrollViewRef.current?.scrollTo({
-      y: placement.pageNumber * itemTotalH,
+    flatListRef.current?.scrollToIndex({
+      index: placement.pageNumber,
       animated: true,
     });
-  }, [placement.pageNumber, itemTotalH]);
+  }, [placement.pageNumber]);
 
   // Sync goToPageText when placement page changes
   useEffect(() => {
     setGoToPageText(String(placement.pageNumber + 1));
   }, [placement.pageNumber]);
 
-  // Auto-scroll to element page on first mount
+  // Auto-scroll to element page on first mount (once layout is ready)
   useEffect(() => {
     if (itemTotalH > 0 && placement.pageNumber > 0) {
       setTimeout(() => {
-        scrollViewRef.current?.scrollTo({
-          y: placement.pageNumber * itemTotalH,
+        flatListRef.current?.scrollToIndex({
+          index: placement.pageNumber,
           animated: false,
         });
       }, 300);
     }
   }, [itemTotalH]);
 
-  // ── Render ────────────────────────────────────────────────────────
+  // ── Page item renderer ────────────────────────────────────────────
+  const renderPageItem = useCallback(
+    ({ item: pageIndex }: { item: number }) => {
+      const isElementPage = pageIndex === placement.pageNumber;
+      return (
+        <React.Fragment>
+          <Pressable
+            style={[
+              vs.pageItemContainer,
+              {
+                width: containerW,
+                height: pageRenderH,
+                borderColor: isElementPage ? color : "transparent",
+              },
+            ]}
+            onPress={() => {
+              if (!isElementPage) {
+                onPlacementChange({ ...placement, pageNumber: pageIndex });
+              }
+            }}
+          >
+            <Pdf
+              source={{ uri: fileUri }}
+              page={pageIndex + 1}
+              enablePaging={true}
+              fitPolicy={2}
+              minScale={1}
+              maxScale={1}
+              style={vs.pdfPageFill}
+              onError={(err: any) =>
+                console.warn("PDF page render error:", err)
+              }
+            />
+            {!isElementPage && (
+              <View style={vs.pageTapTarget} pointerEvents="box-none">
+                <View style={[vs.pageTapHint, { backgroundColor: color + "80" }]}>
+                  <Text style={vs.pageTapHintText}>Tap to place here</Text>
+                </View>
+              </View>
+            )}
+            {isElementPage && (
+              <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
+                <View
+                  style={[
+                    vs.placedElement,
+                    {
+                      left: elScreenX,
+                      top: elScreenY,
+                      width: elW,
+                      height: elH,
+                      backgroundColor: toolType === "redact" ? color : color + "20",
+                      borderColor: color,
+                      borderWidth: toolType === "redact" ? 0 : 2,
+                      borderStyle: "dashed",
+                    },
+                  ]}
+                  onStartShouldSetResponder={() => true}
+                  onMoveShouldSetResponder={() => true}
+                  onResponderTerminationRequest={() => false}
+                  onResponderGrant={handleDragStart}
+                  onResponderMove={handleDragMove}
+                  onResponderRelease={handleDragEnd}
+                >
+                  {toolType !== "redact" && (
+                    <Text style={[vs.elementLabel, { color }]} numberOfLines={1}>
+                      {previewLabel || toolType.replace("-", " ")}
+                    </Text>
+                  )}
+                  <View style={[vs.dragHandle, { backgroundColor: color + "30" }]}>
+                    <GripVertical color={color} size={14} />
+                  </View>
+                </View>
+              </View>
+            )}
+            <View style={[vs.pageNumberBadge, isElementPage && { backgroundColor: color }]}>
+              <Text style={vs.pageNumberText}>{pageIndex + 1}</Text>
+            </View>
+          </Pressable>
+          {pageIndex < totalPages - 1 && <VTEPageSeparator />}
+        </React.Fragment>
+      );
+    },
+    [
+      placement, containerW, pageRenderH, color, toolType, previewLabel,
+      elScreenX, elScreenY, elW, elH, fileUri, totalPages,
+      handleDragStart, handleDragMove, handleDragEnd, onPlacementChange,
+    ],
+  );
+
+  // ── Render ──────────────────────────────���─────────────────────────
 
   return (
     <View style={vs.container}>
@@ -475,132 +548,33 @@ export const VisualToolEditor: React.FC<Props> = ({
           <GestureHandlerRootView style={{ flex: 1 }}>
             <GestureDetector gesture={pinchGesture}>
               <Animated.View style={[{ flex: 1 }, zoomAnimatedStyle]}>
-                <ScrollView
-                  ref={scrollViewRef}
+                <FlatList
+                  ref={flatListRef}
+                  data={allPageIndices}
+                  keyExtractor={(item) => `vte-page-${item}`}
+                  renderItem={renderPageItem}
                   scrollEnabled={!isDragging}
                   nestedScrollEnabled
                   showsVerticalScrollIndicator
-                  onScroll={handleScroll}
+                  onViewableItemsChanged={handleViewableItemsChanged}
+                  viewabilityConfig={viewabilityConfig.current}
                   scrollEventThrottle={100}
-                >
-                  {pageIndices.map((pageIndex) => {
-                    const isElementPage = pageIndex === placement.pageNumber;
-                    return (
-                      <React.Fragment key={`vte-page-${pageIndex}`}>
-                        <Pressable
-                          style={[
-                            vs.pageItemContainer,
-                            {
-                              width: containerW,
-                              height: pageRenderH,
-                              borderColor: isElementPage
-                                ? color
-                                : "transparent",
-                            },
-                          ]}
-                          onPress={() => {
-                            if (!isElementPage) {
-                              onPlacementChange({
-                                ...placement,
-                                pageNumber: pageIndex,
-                              });
-                            }
-                          }}
-                        >
-                          <Pdf
-                            source={{ uri: fileUri }}
-                            page={pageIndex + 1}
-                            enablePaging={true}
-                            fitPolicy={2}
-                            minScale={1}
-                            maxScale={1}
-                            style={vs.pdfPageFill}
-                            onError={(err: any) =>
-                              console.warn("PDF page render error:", err)
-                            }
-                          />
-                          {!isElementPage && (
-                            <View
-                              style={vs.pageTapTarget}
-                              pointerEvents="box-none"
-                            >
-                              <View
-                                style={[
-                                  vs.pageTapHint,
-                                  { backgroundColor: color + "80" },
-                                ]}
-                              >
-                                <Text style={vs.pageTapHintText}>
-                                  Tap to place here
-                                </Text>
-                              </View>
-                            </View>
-                          )}
-                          {isElementPage && (
-                            <View
-                              style={StyleSheet.absoluteFill}
-                              pointerEvents="box-none"
-                            >
-                              <View
-                                style={[
-                                  vs.placedElement,
-                                  {
-                                    left: elScreenX,
-                                    top: elScreenY,
-                                    width: elW,
-                                    height: elH,
-                                    backgroundColor:
-                                      toolType === "redact"
-                                        ? color
-                                        : color + "20",
-                                    borderColor: color,
-                                    borderWidth: toolType === "redact" ? 0 : 2,
-                                    borderStyle: "dashed",
-                                  },
-                                ]}
-                                onStartShouldSetResponder={() => true}
-                                onMoveShouldSetResponder={() => true}
-                                onResponderTerminationRequest={() => false}
-                                onResponderGrant={handleDragStart}
-                                onResponderMove={handleDragMove}
-                                onResponderRelease={handleDragEnd}
-                              >
-                                {toolType !== "redact" && (
-                                  <Text
-                                    style={[vs.elementLabel, { color }]}
-                                    numberOfLines={1}
-                                  >
-                                    {previewLabel || toolType.replace("-", " ")}
-                                  </Text>
-                                )}
-                                <View
-                                  style={[
-                                    vs.dragHandle,
-                                    { backgroundColor: color + "30" },
-                                  ]}
-                                >
-                                  <GripVertical color={color} size={14} />
-                                </View>
-                              </View>
-                            </View>
-                          )}
-                          {/* Page number badge */}
-                          <View
-                            style={[
-                              vs.pageNumberBadge,
-                              isElementPage && { backgroundColor: color },
-                            ]}
-                          >
-                            <Text style={vs.pageNumberText}>
-                              {pageIndex + 1}
-                            </Text>
-                          </View>
-                        </Pressable>
-                        {pageIndex < totalPages - 1 && <VTEPageSeparator />}
-                      </React.Fragment>
-                    );
+                  windowSize={3}
+                  maxToRenderPerBatch={2}
+                  initialNumToRender={3}
+                  removeClippedSubviews
+                  getItemLayout={(_, index) => ({
+                    length: itemTotalH,
+                    offset: index * itemTotalH,
+                    index,
                   })}
-                </ScrollView>
+                  onScrollToIndexFailed={({ index }) => {
+                    flatListRef.current?.scrollToOffset({
+                      offset: index * itemTotalH,
+                      animated: false,
+                    });
+                  }}
+                />
               </Animated.View>
             </GestureDetector>
           </GestureHandlerRootView>

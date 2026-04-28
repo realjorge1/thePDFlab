@@ -57,6 +57,8 @@ import {
   removeUnderline,
 } from "@/services/viewerStorageService";
 
+import { API_BASE_URL } from "@/config/api";
+import * as FileSystem from "expo-file-system/legacy";
 import {
   DarkTheme,
   LightTheme,
@@ -341,20 +343,70 @@ export default function PdfViewerScreen() {
     }
   }, []);
 
-  const handlePasswordSubmit = useCallback(() => {
-    if (!passwordInput.trim()) {
+  const handlePasswordSubmit = useCallback(async () => {
+    const pwd = passwordInput.trim();
+    if (!pwd) {
       Alert.alert("Error", "Please enter a password.");
       return;
     }
-    Alert.alert(
-      "Password Protected",
-      "This PDF is password protected. Please use an external PDF viewer to open this file.",
-      [
-        { text: "Cancel", style: "cancel", onPress: () => router.back() },
-        { text: "Open Externally", onPress: () => handleOpenWithSystem() },
-      ],
-    );
-  }, [passwordInput, handleOpenWithSystem]);
+
+    const fileUri = state.normalizedUri ?? uri;
+    if (!fileUri) return;
+
+    setState((prev) => ({ ...prev, loading: true, passwordRequired: false }));
+
+    try {
+      const formData = new FormData();
+      formData.append("file", {
+        uri: fileUri,
+        type: "application/pdf",
+        name: name || "document.pdf",
+      } as any);
+      formData.append("password", pwd);
+
+      const response = await fetch(`${API_BASE_URL}/pdf/unlock`, {
+        method: "POST",
+        body: formData,
+      });
+
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({}));
+        throw new Error(err.error || "Wrong password or failed to unlock PDF.");
+      }
+
+      const blob = await response.blob();
+      const reader = new FileReader();
+      const base64Data = await new Promise<string>((resolve, reject) => {
+        reader.onloadend = () => {
+          const r = reader.result as string;
+          resolve(r.includes(",") ? r.split(",")[1] : r);
+        };
+        reader.onerror = reject;
+        reader.readAsDataURL(blob);
+      });
+
+      const decryptedUri = `${FileSystem.cacheDirectory}unlocked_${Date.now()}.pdf`;
+      await FileSystem.writeAsStringAsync(decryptedUri, base64Data, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
+
+      if (!isMountedRef.current) return;
+      setState((prev) => ({
+        ...prev,
+        normalizedUri: decryptedUri,
+        loading: false,
+        passwordRequired: false,
+        error: null,
+      }));
+    } catch (error) {
+      if (!isMountedRef.current) return;
+      setState((prev) => ({ ...prev, loading: false, passwordRequired: true }));
+      Alert.alert(
+        "Unlock Failed",
+        error instanceof Error ? error.message : "Could not unlock PDF. Please check the password.",
+      );
+    }
+  }, [passwordInput, state.normalizedUri, uri, name]);
 
   const handleRetry = useCallback(() => {
     normalizeUri();

@@ -2,7 +2,9 @@
 // Generate Document Modal – Premium redesign
 // ============================================
 
+import { AppHeaderContainer } from "@/components/AppHeaderContainer";
 import { GradientView } from "@/components/GradientView";
+import { colors as appColors } from "@/constants/theme";
 import { useTheme } from "@/services/ThemeProvider";
 import {
   BookOpen,
@@ -34,7 +36,11 @@ import { SafeAreaView } from "react-native-safe-area-context";
 const PURPLE = "#7C3AED";
 const PURPLE_MID = "#9333EA";
 const INDIGO = "#4F46E5";
-const HEADER_GRADIENT: [string, string, string] = ["#4F46E5", "#7C3AED", "#9333EA"];
+const HEADER_GRADIENT: [string, string, string] = [
+  appColors.gradientStart,
+  appColors.gradientMid,
+  appColors.gradientEnd,
+];
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 export interface GenerateDocumentParams {
@@ -276,65 +282,67 @@ export default function GenerateDocumentModal({
         {/* ══════════════════════════════════════════════════════════════
             GRADIENT HEADER
         ══════════════════════════════════════════════════════════════ */}
-        <GradientView
-          colors={HEADER_GRADIENT}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-          style={s.headerWrap}
-        >
-          {/* Top row: back / title / close */}
-          <View style={s.headerRow}>
-            <TouchableOpacity
-              onPress={step > 1 ? handleBack : handleClose}
-              style={s.headerIconBtn}
-              disabled={isLoading}
-              activeOpacity={0.7}
-            >
-              {step > 1
-                ? <ChevronLeft size={22} color="#FFF" strokeWidth={2.5} />
-                : <X size={20} color="rgba(255,255,255,0.85)" strokeWidth={2.5} />}
-            </TouchableOpacity>
+        <AppHeaderContainer>
+          <GradientView
+            colors={HEADER_GRADIENT}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={s.headerWrap}
+          >
+            {/* Top row: back / title / close */}
+            <View style={s.headerRow}>
+              <TouchableOpacity
+                onPress={step > 1 ? handleBack : handleClose}
+                style={s.headerIconBtn}
+                disabled={isLoading}
+                activeOpacity={0.7}
+              >
+                {step > 1
+                  ? <ChevronLeft size={22} color="#FFF" strokeWidth={2.5} />
+                  : <X size={20} color="rgba(255,255,255,0.85)" strokeWidth={2.5} />}
+              </TouchableOpacity>
 
-            <View style={s.headerMid}>
-              <Wand2 size={15} color="rgba(255,255,255,0.9)" strokeWidth={2} />
-              <Text style={s.headerTitle}>Generate Document</Text>
+              <View style={s.headerMid}>
+                <Wand2 size={15} color="rgba(255,255,255,0.9)" strokeWidth={2} />
+                <Text style={s.headerTitle}>Generate Document</Text>
+              </View>
+
+              <View style={s.headerIconBtn} />
             </View>
 
-            <View style={s.headerIconBtn} />
-          </View>
-
-          {/* Progress strip */}
-          <View style={s.progressStrip}>
-            {STEP_META.map((sm, idx) => {
-              const done = step > sm.num;
-              const active = step === sm.num;
-              return (
-                <React.Fragment key={sm.num}>
-                  <View style={s.stepItem}>
-                    <View style={[
-                      s.stepCircle,
-                      done ? s.stepDone : active ? s.stepActive : s.stepIdle,
-                    ]}>
-                      {done
-                        ? <Check size={12} color="#7C3AED" strokeWidth={3} />
-                        : <Text style={[s.stepNum, active ? s.stepNumOn : s.stepNumOff]}>
-                            {sm.num}
-                          </Text>}
+            {/* Progress strip */}
+            <View style={s.progressStrip}>
+              {STEP_META.map((sm, idx) => {
+                const done = step > sm.num;
+                const active = step === sm.num;
+                return (
+                  <React.Fragment key={sm.num}>
+                    <View style={s.stepItem}>
+                      <View style={[
+                        s.stepCircle,
+                        done ? s.stepDone : active ? s.stepActive : s.stepIdle,
+                      ]}>
+                        {done
+                          ? <Check size={12} color="#7C3AED" strokeWidth={3} />
+                          : <Text style={[s.stepNum, active ? s.stepNumOn : s.stepNumOff]}>
+                              {sm.num}
+                            </Text>}
+                      </View>
+                      <Text style={[s.stepLabel, (active || done) ? s.stepLabelOn : s.stepLabelOff]}>
+                        {sm.label}
+                      </Text>
                     </View>
-                    <Text style={[s.stepLabel, (active || done) ? s.stepLabelOn : s.stepLabelOff]}>
-                      {sm.label}
-                    </Text>
-                  </View>
-                  {idx < STEP_META.length - 1 && (
-                    <View style={s.stepConnectorWrap}>
-                      <View style={[s.stepConnector, { backgroundColor: step > sm.num ? "rgba(255,255,255,0.9)" : "rgba(255,255,255,0.25)" }]} />
-                    </View>
-                  )}
-                </React.Fragment>
-              );
-            })}
-          </View>
-        </GradientView>
+                    {idx < STEP_META.length - 1 && (
+                      <View style={s.stepConnectorWrap}>
+                        <View style={[s.stepConnector, { backgroundColor: step > sm.num ? "rgba(255,255,255,0.9)" : "rgba(255,255,255,0.25)" }]} />
+                      </View>
+                    )}
+                  </React.Fragment>
+                );
+              })}
+            </View>
+          </GradientView>
+        </AppHeaderContainer>
 
         {/* ══════════════════════════════════════════════════════════════
             SCROLLABLE CONTENT
@@ -801,24 +809,24 @@ const s = StyleSheet.create({
   flex: { flex: 1 },
 
   // Header
-  headerWrap: { paddingBottom: 18 },
+  headerWrap: { paddingBottom: 14 },
   headerRow: {
     flexDirection: "row",
     alignItems: "center",
-    paddingHorizontal: 8,
-    paddingTop: Platform.OS === "android" ? 16 : 12,
-    paddingBottom: 6,
+    paddingHorizontal: 20,
+    paddingTop: Platform.OS === "android" ? 20 : 16,
+    paddingBottom: 16,
   },
   headerIconBtn: {
-    width: 44, height: 44,
+    width: 40, height: 40,
     alignItems: "center", justifyContent: "center",
-    borderRadius: 22,
+    borderRadius: 20,
   },
   headerMid: {
     flex: 1, flexDirection: "row",
     alignItems: "center", justifyContent: "center", gap: 7,
   },
-  headerTitle: { fontSize: 16, fontWeight: "800", color: "#FFF", letterSpacing: 0.2 },
+  headerTitle: { fontSize: 20, fontWeight: "700", color: "#FFF", letterSpacing: -0.3 },
 
   // Progress
   progressStrip: {
