@@ -3,7 +3,7 @@
  * the user selects text in the document WebView.
  *
  * Layout (horizontal, scrollable):
- *   "Highlight" label → 5 colour circles | Underline | Ask athemi |
+ *   "Highlight" label → 5 colour circles | Underline | Ask gozlin |
  *   Cross Out | Copy | Share | Cancel
  *
  * Positions itself above the selection when there is room, otherwise below.

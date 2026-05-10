@@ -11,6 +11,7 @@ import {
 import { ToolCategory } from "@/components/ToolCategory";
 import { colors } from "@/constants/theme";
 import { toolCategories } from "@/constants/tools";
+import { useDocuments as useDocLibDocuments } from "@/hooks/useDocLib";
 import { useFileIndex } from "@/hooks/useFileIndex";
 import { pickFilesWithResult } from "@/services/document-manager";
 import { upsertFileRecord } from "@/services/fileIndexService";
@@ -171,6 +172,7 @@ export default function ToolsScreen() {
 
   // File index for checking library file availability
   const { files: libraryFiles } = useFileIndex();
+  const { documents: doclibDocs } = useDocLibDocuments();
 
   // File source picker state
   const [showSourcePicker, setShowSourcePicker] = useState(false);
@@ -179,16 +181,19 @@ export default function ToolsScreen() {
     null,
   );
 
-  // Check if the library has files matching the pending tool's allowed extensions
+  // Check if the library has files matching the pending tool's allowed extensions.
+  // Includes both the unified file index and doclib SAF-scanned documents.
   const hasMatchingLibraryFiles = useMemo(() => {
     if (!pendingTool) return true;
     const exts = pendingTool.allowedExtensions.map((e) => e.toLowerCase());
-    return libraryFiles.some((f) => {
+    const inIndex = libraryFiles.some((f) => {
       const ext = f.extension?.toLowerCase();
       const type = f.type?.toLowerCase();
       return exts.includes(ext) || exts.includes(type);
     });
-  }, [pendingTool, libraryFiles]);
+    if (inIndex) return true;
+    return doclibDocs.some((d) => exts.includes(d.type?.toLowerCase()));
+  }, [pendingTool, libraryFiles, doclibDocs]);
 
   // ============================================================================
   // HANDLERS

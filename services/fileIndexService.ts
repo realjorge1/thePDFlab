@@ -80,7 +80,7 @@ export interface UpsertFileParams {
 // CONSTANTS
 // ============================================================================
 
-const UNIFIED_INDEX_KEY = "@pdflab_unified_file_index";
+const UNIFIED_INDEX_KEY = "@inscribed_unified_file_index";
 const MAX_FILES = 500;
 const CACHE_DIR = `${FileSystem.documentDirectory}library-cache/`;
 
@@ -417,10 +417,19 @@ export const upsertFileRecord = async (
  */
 export const markFileOpened = async (fileId: string): Promise<void> => {
   const files = await loadFileIndex();
-  // Try matching by id first, then fall back to matching by uri
+  // SAF doclib uses ids of the form "saf:<uri>" — strip the prefix so we can
+  // still match by uri when the caller hands us a doclib id.
+  const safPrefix = "saf:";
+  const normalizedId = fileId.startsWith(safPrefix)
+    ? fileId.slice(safPrefix.length)
+    : fileId;
+
   let fileIndex = files.findIndex((f) => f.id === fileId);
   if (fileIndex === -1) {
     fileIndex = files.findIndex((f) => f.uri === fileId);
+  }
+  if (fileIndex === -1 && normalizedId !== fileId) {
+    fileIndex = files.findIndex((f) => f.uri === normalizedId);
   }
 
   if (fileIndex === -1) {

@@ -61,7 +61,7 @@ export class MockAIProvider implements AIProvider {
     if (msg.includes("hello") || msg.includes("hi") || msg.includes("hey")) {
       return {
         content:
-          "Hello! I'm athemi, your assistant. I can help you with:\n\n• Summarizing documents\n• Translating text\n• Extracting tasks and action items\n• Analyzing content\n• Filling forms\n• Answering questions about documents\n\nHow can I help you today?",
+          "Hello! I'm gozlin, your assistant. I can help you with:\n\n• Summarizing documents\n• Translating text\n• Extracting tasks and action items\n• Analyzing content\n• Filling forms\n• Answering questions about documents\n\nHow can I help you today?",
       };
     }
     if (msg.includes("help")) {

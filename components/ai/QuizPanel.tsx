@@ -5,15 +5,20 @@
 // ============================================
 
 import { LibraryFilePicker } from "@/components/LibraryFilePicker";
+import { SCHEDULE_PENDING_KEY_PREFIX } from "@/app/schedule-task";
+import type { PendingScheduleData } from "@/app/schedule-task";
 import {
   extractDocumentText,
   generateQuiz,
   pickDocument,
 } from "@/services/ai/ai.service";
 import { useTheme } from "@/services/ThemeProvider";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { useRouter } from "expo-router";
 import type { AIDocumentRef } from "@/services/ai/ai.types";
 import {
   AlertTriangle,
+  AlarmClock,
   BarChart2,
   BookOpen,
   Brain,
@@ -185,6 +190,7 @@ interface Props {
 export function QuizPanel({ initialDoc, initialDocText }: Props) {
   const { colors: t, mode } = useTheme();
   const isDark = mode === "dark";
+  const router = useRouter();
 
   // ── Document state ──────────────────────────────────────────────────────────
   const [doc, setDoc] = useState<AIDocumentRef | undefined>(initialDoc);
@@ -225,6 +231,7 @@ export function QuizPanel({ initialDoc, initialDocText }: Props) {
     setDoc(picked);
     setIsExtracting(true);
     setExtractionFailed(false);
+    setPhase("setup");
     try {
       const text = await extractDocumentText(picked);
       // Detect placeholder/failure responses — these start with "[" and contain no real content
@@ -248,7 +255,6 @@ export function QuizPanel({ initialDoc, initialDocText }: Props) {
     } finally {
       setIsExtracting(false);
     }
-    setPhase("setup");
   }, []);
 
   const handlePickFromDevice = useCallback(async () => {
@@ -295,7 +301,7 @@ export function QuizPanel({ initialDoc, initialDocText }: Props) {
       if (extractionFailed || !docText?.trim()) {
         Alert.alert(
           "Extraction Failed",
-          "Could not read text from this document. Please ensure the backend is running, or try a different file (PDF and DOCX work best).",
+          "Could not read text from this document. Please try a different file (PDF and DOCX work best).",
         );
         return;
       }
@@ -361,6 +367,32 @@ export function QuizPanel({ initialDoc, initialDocText }: Props) {
   );
 
   const handleStartQuiz = useCallback(() => runGeneration(), [runGeneration]);
+
+  // ── Schedule quiz ───────────────────────────────────────────────────────────
+  const handleSchedule = useCallback(async () => {
+    if (!doc || !docText) return;
+    const key = `${Date.now()}`;
+    const taskTitle = `Quiz on "${doc.name}"`;
+    const pending: PendingScheduleData = {
+      type: 'quiz',
+      title: `Quiz: ${doc.name}`,
+      description: `${config.length} quiz · ${config.difficulty} difficulty`,
+      payload: {
+        type: 'quiz',
+        data: {
+          documentUri: doc.uri,
+          documentName: doc.name,
+          documentMimeType: doc.mimeType ?? 'application/pdf',
+          questionType: config.questionType,
+          length: config.length,
+          difficulty: config.difficulty,
+          extractedText: docText,
+        },
+      },
+    };
+    await AsyncStorage.setItem(SCHEDULE_PENDING_KEY_PREFIX + key, JSON.stringify(pending));
+    router.push({ pathname: '/schedule-task', params: { pendingKey: key, taskType: 'quiz', taskTitle } } as any);
+  }, [doc, docText, config, router]);
 
   // ── Answer logic ────────────────────────────────────────────────────────────
   const currentQ = questions[currentIdx];
@@ -602,7 +634,7 @@ export function QuizPanel({ initialDoc, initialDocText }: Props) {
           <View style={[styles.errorCard, { backgroundColor: "#FEF2F2", borderColor: "#FECACA" }]}>
             <AlertTriangle size={13} color="#EF4444" />
             <Text style={styles.errorText}>
-              Could not extract text from this file. Make sure the backend is running, or try a different document (PDF and DOCX work best).
+              Could not extract text from this file. Please try a different document (PDF and DOCX work best).
             </Text>
           </View>
         ) : genError ? (
@@ -716,8 +748,19 @@ export function QuizPanel({ initialDoc, initialDocText }: Props) {
           activeOpacity={0.8}
         >
           <Brain size={18} color="#FFF" />
-          <Text style={styles.startBtnText}>Start Quiz</Text>
+          <Text style={styles.startBtnText}>Start Quiz Now</Text>
           <ChevronRight size={16} color="#FFF" />
+        </TouchableOpacity>
+
+        {/* Schedule for later */}
+        <TouchableOpacity
+          style={[styles.scheduleBtn, { opacity: (isExtracting || extractionFailed || !doc) ? 0.4 : 1 }]}
+          onPress={handleSchedule}
+          disabled={isExtracting || extractionFailed || !doc}
+          activeOpacity={0.8}
+        >
+          <AlarmClock size={16} color={ACCENT} />
+          <Text style={[styles.scheduleBtnText, { color: ACCENT }]}>Schedule for Later</Text>
         </TouchableOpacity>
 
         <View style={{ height: 28 }} />
@@ -1351,6 +1394,23 @@ const styles = StyleSheet.create({
     color: "#FFF",
     fontSize: 16,
     fontWeight: "700",
+  },
+
+  scheduleBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    marginTop: 10,
+    paddingVertical: 12,
+    borderRadius: 14,
+    borderWidth: 1.5,
+    borderColor: `${ACCENT}40`,
+    backgroundColor: `${ACCENT}0D`,
+  },
+  scheduleBtnText: {
+    fontSize: 14,
+    fontWeight: "600",
   },
 
   // ── Generating ──

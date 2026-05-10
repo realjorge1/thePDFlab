@@ -499,6 +499,26 @@ export function getSupportedTools(): string[] {
 // ============================================================================
 
 /**
+ * Resolve a file URI for upload. SAF content:// URIs cannot be streamed
+ * directly by RN's fetch multipart implementation, so we copy them to the
+ * app cache (producing a file:// URI) first. Returns the URI to upload from
+ * and the temp path to clean up afterward (null for file:// — no copy made).
+ */
+async function resolveUploadUri(
+  uri: string,
+  mimeType: string,
+): Promise<{ uploadUri: string; tempPath: string | null }> {
+  if (!uri.startsWith("content://")) {
+    return { uploadUri: uri, tempPath: null };
+  }
+  const ext =
+    mimeType.split("/")[1]?.replace(/[^a-z0-9]/gi, "") || "bin";
+  const tempPath = `${FileSystem.cacheDirectory}upload_${Date.now()}_${Math.random().toString(36).slice(2)}.${ext}`;
+  await FileSystem.copyAsync({ from: uri, to: tempPath });
+  return { uploadUri: tempPath, tempPath };
+}
+
+/**
  * Process a file with the specified tool
  */
 export async function processWithTool(
@@ -508,20 +528,22 @@ export async function processWithTool(
   const {
     toolId,
     fileUri,
-    fileName,
     fileMimeType,
     additionalFiles,
     params,
     signal,
   } = options;
 
+  // Strip directory prefix from SAF-sourced filenames (e.g. "documents/foo.pdf" → "foo.pdf")
+  const fileName = options.fileName.split("/").pop() || options.fileName;
+
   console.log(`[PdfTools] Processing ${toolId} for file: ${fileName}`);
   console.log(`[PdfTools] Backend URL: ${API_BASE_URL}`);
 
-  // Quick connectivity pre-check (5 s timeout)
+  // Quick connectivity pre-check (3 s timeout)
   try {
     const hc = new AbortController();
-    const hcTimer = setTimeout(() => hc.abort(), 5000);
+    const hcTimer = setTimeout(() => hc.abort(), 3000);
     const hcResp = await fetch(API_BASE_URL.replace("/api", "/api/health"), {
       signal: hc.signal,
     });
@@ -550,9 +572,10 @@ export async function processWithTool(
 
   // Check file size (skip for tools that don't require an input file)
   const noFileTools = ["text-to-pdf"];
+  let fileSize = 0;
   if (!noFileTools.includes(toolId)) {
     onProgress?.(5, "Validating file...");
-    const fileSize = await checkFileSize(fileUri);
+    fileSize = await checkFileSize(fileUri);
     if (fileSize > MAX_FILE_SIZE) {
       return {
         success: false,
@@ -561,6 +584,16 @@ export async function processWithTool(
     }
   }
 
+  // Tracks temp cache copies of SAF URIs — cleaned up in the finally block.
+  const tempPaths: string[] = [];
+
+  // Resolves a URI for upload and tracks any temp file created.
+  const resolveUri = async (uri: string, mime: string) => {
+    const { uploadUri, tempPath } = await resolveUploadUri(uri, mime);
+    if (tempPath) tempPaths.push(tempPath);
+    return uploadUri;
+  };
+
   try {
     // Build form data
     onProgress?.(10, "Please Wait");
@@ -568,55 +601,58 @@ export async function processWithTool(
 
     // Special handling for text-to-pdf: send text as form body, no file needed
     if (toolId === "text-to-pdf") {
-      // text-to-pdf backend expects 'text' in body, no file
       if (params?.text) {
         formData.append("text", params.text);
       }
     } else if (toolId === "merge") {
       // Merge: send ALL files (main + additional) under "pdfs" key
+      const mainMime = fileMimeType || "application/pdf";
       formData.append("pdfs", {
-        uri: fileUri,
-        type: fileMimeType || "application/pdf",
+        uri: await resolveUri(fileUri, mainMime),
+        type: mainMime,
         name: fileName,
       } as any);
       if (additionalFiles && additionalFiles.length > 0) {
-        for (let i = 0; i < additionalFiles.length; i++) {
-          const addFile = additionalFiles[i];
+        for (const addFile of additionalFiles) {
+          const addMime = addFile.mimeType || "application/pdf";
           formData.append("pdfs", {
-            uri: addFile.uri,
-            type: addFile.mimeType || "application/pdf",
-            name: addFile.name,
+            uri: await resolveUri(addFile.uri, addMime),
+            type: addMime,
+            name: addFile.name.split("/").pop() || addFile.name,
           } as any);
         }
       }
     } else if (["compare", "diff", "merge-review"].includes(toolId)) {
       // Two-file tools: send as pdf1 + pdf2
+      const mainMime = fileMimeType || "application/pdf";
       formData.append("pdf1", {
-        uri: fileUri,
-        type: fileMimeType || "application/pdf",
+        uri: await resolveUri(fileUri, mainMime),
+        type: mainMime,
         name: fileName,
       } as any);
       if (additionalFiles && additionalFiles.length > 0) {
+        const addMime = additionalFiles[0].mimeType || "application/pdf";
         formData.append("pdf2", {
-          uri: additionalFiles[0].uri,
-          type: additionalFiles[0].mimeType || "application/pdf",
-          name: additionalFiles[0].name,
+          uri: await resolveUri(additionalFiles[0].uri, addMime),
+          type: addMime,
+          name: additionalFiles[0].name.split("/").pop() || additionalFiles[0].name,
         } as any);
       }
     } else if (["jpg-to-pdf", "png-to-pdf"].includes(toolId)) {
       // Image-to-PDF: send under "images" key
+      const mainMime = fileMimeType || "image/jpeg";
       formData.append("images", {
-        uri: fileUri,
-        type: fileMimeType || "image/jpeg",
+        uri: await resolveUri(fileUri, mainMime),
+        type: mainMime,
         name: fileName,
       } as any);
       if (additionalFiles && additionalFiles.length > 0) {
-        for (let i = 0; i < additionalFiles.length; i++) {
-          const addFile = additionalFiles[i];
+        for (const addFile of additionalFiles) {
+          const addMime = addFile.mimeType || "image/jpeg";
           formData.append("images", {
-            uri: addFile.uri,
-            type: addFile.mimeType || "image/jpeg",
-            name: addFile.name,
+            uri: await resolveUri(addFile.uri, addMime),
+            type: addMime,
+            name: addFile.name.split("/").pop() || addFile.name,
           } as any);
         }
       }
@@ -626,26 +662,28 @@ export async function processWithTool(
       )
     ) {
       // Office/HTML conversion: send under "document" key
+      const mainMime = fileMimeType || "application/octet-stream";
       formData.append("document", {
-        uri: fileUri,
-        type: fileMimeType || "application/octet-stream",
+        uri: await resolveUri(fileUri, mainMime),
+        type: mainMime,
         name: fileName,
       } as any);
     } else {
       // All other single-PDF tools: send under "file" key (middleware maps to "pdf")
+      const mainMime = fileMimeType || "application/pdf";
       formData.append("file", {
-        uri: fileUri,
-        type: fileMimeType || "application/pdf",
+        uri: await resolveUri(fileUri, mainMime),
+        type: mainMime,
         name: fileName,
       } as any);
     }
 
-    // Add tool-specific parameters (skip 'text' for text-to-pdf since already added)
+    // Add tool-specific parameters
     if (params) {
       Object.entries(params).forEach(([key, value]) => {
         if (value !== undefined && value !== null) {
-          if (toolId === "text-to-pdf" && key === "text") return; // already added
-          if (key === "attachmentFiles") return; // handled separately below
+          if (toolId === "text-to-pdf" && key === "text") return;
+          if (key === "attachmentFiles") return;
           formData.append(
             key,
             typeof value === "string" ? value : JSON.stringify(value),
@@ -659,10 +697,11 @@ export async function processWithTool(
       try {
         const attachFiles = JSON.parse(params.attachmentFiles);
         for (const af of attachFiles) {
+          const afMime = af.mimeType || "application/octet-stream";
           formData.append("files", {
-            uri: af.uri,
-            type: af.mimeType || "application/octet-stream",
-            name: af.name,
+            uri: await resolveUri(af.uri, afMime),
+            type: afMime,
+            name: (af.name || "file").split("/").pop() || af.name,
           } as any);
         }
       } catch (e) {
@@ -701,6 +740,8 @@ export async function processWithTool(
     });
 
     clearTimeout(timeoutId);
+
+    onProgress?.(50, "Please Wait");
 
     // Check response status
     if (!response.ok) {
@@ -874,6 +915,11 @@ export async function processWithTool(
       success: false,
       error: "An unexpected error occurred during processing.",
     };
+  } finally {
+    // Delete any temp cache copies made for SAF content:// URIs
+    for (const p of tempPaths) {
+      FileSystem.deleteAsync(p, { idempotent: true }).catch(() => {});
+    }
   }
 }
 
@@ -1093,18 +1139,31 @@ async function saveBlobToFile(
     );
     const outputUri = `${OUTPUT_DIR}${outputFileName}`;
 
-    // Convert blob to base64 and save
-    const reader = new FileReader();
-    const base64Data = await new Promise<string>((resolve, reject) => {
-      reader.onloadend = () => {
-        const result = reader.result as string;
-        // Remove data URL prefix if present
-        const base64 = result.includes(",") ? result.split(",")[1] : result;
-        resolve(base64);
-      };
-      reader.onerror = reject;
-      reader.readAsDataURL(blob);
-    });
+    // Convert blob to base64. Use arrayBuffer() when available (avoids
+    // the data-URL prefix overhead and is faster for large files).
+    let base64Data: string;
+    try {
+      const arrayBuf = await blob.arrayBuffer();
+      const uint8 = new Uint8Array(arrayBuf);
+      // Convert to base64 in 8 KB chunks to avoid stack overflow on large files
+      const CHUNK = 8192;
+      let binary = "";
+      for (let i = 0; i < uint8.length; i += CHUNK) {
+        binary += String.fromCharCode(...uint8.subarray(i, i + CHUNK));
+      }
+      base64Data = btoa(binary);
+    } catch {
+      // Fallback: FileReader approach
+      const reader = new FileReader();
+      base64Data = await new Promise<string>((resolve, reject) => {
+        reader.onloadend = () => {
+          const result = reader.result as string;
+          resolve(result.includes(",") ? result.split(",")[1] : result);
+        };
+        reader.onerror = reject;
+        reader.readAsDataURL(blob);
+      });
+    }
 
     // Validate PDF output before saving (for PDF tools)
     if (toolConfig.outputExtension === "pdf" && base64Data.length >= 8) {
@@ -1114,7 +1173,7 @@ async function saveBlobToFile(
           throw new Error("Server response is not a valid PDF.");
         }
       } catch {
-        // If atob fails, the data may still be valid binary for non-PDF tools
+        // If atob fails the data may still be valid binary for non-PDF tools
       }
     }
 

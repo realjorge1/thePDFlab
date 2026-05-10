@@ -30,7 +30,7 @@ interface AIDocumentRefInternal extends AIDocumentRef {
 }
 
 // ─── Storage keys ─────────────────────────────────────────────────────────────
-const SESSIONS_KEY = "@pdflab/ai_sessions";
+const SESSIONS_KEY = "@inscribed/ai_sessions";
 const MAX_SESSIONS = 50;
 const TEXT_INPUT_LIMIT = 15_000; // characters
 

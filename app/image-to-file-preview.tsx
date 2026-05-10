@@ -403,7 +403,7 @@ const styles = StyleSheet.create({
   createBtnDisabled: { opacity: 0.5 },
   createBtnText: { color: "#fff", fontSize: 15, fontWeight: "700" },
 
-  scrollContent: { padding: 16, gap: 16 },
+  scrollContent: { paddingHorizontal: 10, paddingTop: 16, paddingBottom: 16, gap: 16 },
 
   titleCard: {
     borderWidth: 1,

@@ -7,6 +7,19 @@ const {
   outputPath,
   toDownloadUrl,
 } = require("../utils/fileOutputUtils");
+const pdfRepairService = require("../services/pdfRepairService");
+
+// Load a PDF buffer with structural-repair fallback (mirrors safeLoadPDF in pdfService.js)
+async function loadWithFallback(pdfBytes, inputPath) {
+  const opts = { ignoreEncryption: true, throwOnInvalidObject: false };
+  if (pdfBytes.slice(0, 5).toString("binary") === "%PDF-") {
+    try { return await PDFDocument.load(pdfBytes, opts); } catch {}
+  }
+  // Repair fallback
+  const { buffer } = await pdfRepairService.repairPdf(inputPath);
+  const repaired = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer);
+  return PDFDocument.load(repaired, opts);
+}
 
 const LEVELS = {
   low: { quality: 85, scale: 1.0 },
@@ -40,20 +53,19 @@ router.post("/", async (req, res, next) => {
       const originalSize = file.size;
 
       const pdfBytes = await fs.readFile(inputPath);
-      const pdfDoc = await PDFDocument.load(pdfBytes, {
-        ignoreEncryption: true,
-      });
+      const pdfDoc = await loadWithFallback(pdfBytes, inputPath);
 
       // Strip metadata
       pdfDoc.setTitle("");
       pdfDoc.setAuthor("");
       pdfDoc.setSubject("");
       pdfDoc.setKeywords([]);
-      pdfDoc.setCreator("PDFiQ");
-      pdfDoc.setProducer("PDFiQ");
+      pdfDoc.setCreator("Inscribed");
+      pdfDoc.setProducer("Inscribed");
 
       // Re-compress embedded JPEG images
       const context = pdfDoc.context;
+      let imagesProcessed = 0;
       for (const [, obj] of context.enumerateIndirectObjects()) {
         if (!(obj instanceof PDFStream)) continue;
 
@@ -84,9 +96,14 @@ router.post("/", async (req, res, next) => {
             obj.setContents(recompressed);
             dict.set(PDFName.of("Width"), context.obj(newW));
             dict.set(PDFName.of("Height"), context.obj(newH));
+            imagesProcessed++;
           }
         } catch {
           // Skip images that can't be re-encoded
+        }
+        // Yield every 8 images to keep the event loop responsive
+        if (imagesProcessed > 0 && imagesProcessed % 8 === 0) {
+          await new Promise((r) => setImmediate(r));
         }
       }
 

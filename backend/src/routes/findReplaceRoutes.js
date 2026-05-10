@@ -8,6 +8,7 @@ const {
 } = require("../utils/pdfTextExtractor");
 const { validateOutputChanged } = require("../utils/processingValidator");
 const { outputPath, toDownloadUrl } = require("../utils/fileOutputUtils");
+const { safeLoadPDF } = require("../services/pdfService");
 
 /**
  * POST /api/find-replace/preview
@@ -84,7 +85,7 @@ router.post("/", async (req, res, next) => {
   try {
     const inputPath = req.files.pdf.tempFilePath;
     const pdfBytes = await fs.readFile(inputPath);
-    const pdfDoc = await PDFDocument.load(pdfBytes, {
+    const pdfDoc = await safeLoadPDF(pdfBytes, {
       ignoreEncryption: true,
     });
     const pdfPages = pdfDoc.getPages();

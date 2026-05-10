@@ -4,11 +4,11 @@ import { colors, spacing } from "@/constants/theme";
 import { pickFilesWithResult } from "@/services/document-manager";
 import { notifyProcessingComplete } from "@/services/notificationService";
 import { loadSettings } from "@/services/settingsService";
+import { wakeUpBackend } from "@/config/api";
 import {
   getToolConfig,
   isToolSupported,
   processWithTool,
-  wakeUpBackend,
 } from "@/services/pdfToolsService";
 import { useTheme } from "@/services/ThemeProvider";
 import * as Clipboard from "expo-clipboard";
@@ -60,6 +60,7 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import Pdf from "react-native-pdf";
 
 // ============================================================================
 // MODULE-LEVEL PURE FUNCTIONS & CONSTANTS
@@ -156,8 +157,8 @@ const TOOL_DESCRIPTIONS: Record<string, string> = {
   protect: "Add password protection to your PDF.",
   unlock: "Remove password protection from your PDF.",
   encrypt:
-    "Encrypt your PDF with AES-256-GCM encryption. Creates a .pdflab file.",
-  decrypt: "Decrypt a .pdflab encrypted file back to PDF.",
+    "Encrypt your PDF with AES-256-GCM encryption. Creates a .inscribed file.",
+  decrypt: "Decrypt a .inscribed encrypted file back to PDF.",
   "header-footer": "Add header and footer text to every page.",
   "text-to-pdf": "Create a PDF from your text content.",
   annotate: "Add annotations to your PDF.",
@@ -405,10 +406,20 @@ export default function ToolProcessorScreen() {
     height: 40,
   });
   const [pdfPageInfo, setPdfPageInfo] = useState({ pageCount: 1, pageWidth: 612, pageHeight: 792 });
+  // True once page info has been resolved either from the backend OR from
+  // the native PDF viewer (whichever wins). Used so the hidden detector can
+  // unmount as soon as it's no longer needed.
+  const pageInfoResolvedRef = useRef(false);
 
-  // Fetch PDF page info for visual tools and crop
+  // Fetch PDF page info for visual tools and crop. Backend is preferred (it
+  // also reports page width/height), but it is NOT blocking — if the backend
+  // is slow or unavailable, the visible VisualToolEditor's first-page
+  // onLoadComplete will resolve pageCount + dimensions natively.
   useEffect(() => {
     if (!needsPageInfo || !fileUri) return;
+    let cancelled = false;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 6000);
     (async () => {
       try {
         const form = new FormData();
@@ -420,20 +431,46 @@ export default function ToolProcessorScreen() {
         const resp = await fetch(`${API_BASE_URL}/pdf/info`, {
           method: "POST",
           body: form,
+          signal: controller.signal,
         });
-        if (resp.ok) {
+        if (!cancelled && resp.ok) {
           const data = await resp.json();
-          setPdfPageInfo({
-            pageCount: data.pageCount || 1,
-            pageWidth: data.pageWidth || 612,
-            pageHeight: data.pageHeight || 792,
-          });
+          setPdfPageInfo((prev) => ({
+            pageCount: data.pageCount || prev.pageCount || 1,
+            pageWidth: data.pageWidth || prev.pageWidth || 612,
+            pageHeight: data.pageHeight || prev.pageHeight || 792,
+          }));
+          if ((data.pageCount || 0) > 0) pageInfoResolvedRef.current = true;
         }
       } catch {
-        // Use defaults
+        // Backend unavailable — the visible viewer will resolve pageCount.
+      } finally {
+        clearTimeout(timeout);
       }
     })();
-  }, [needsPageInfo, fileUri]);
+    return () => {
+      cancelled = true;
+      clearTimeout(timeout);
+      controller.abort();
+    };
+  }, [needsPageInfo, fileUri, file]);
+
+  // Local fallback: a 1×1 invisible <Pdf> reads page count + dimensions
+  // natively. Runs in parallel with the backend call and the visible viewer's
+  // first-page onLoadComplete — whichever resolves first wins. Unmounts once
+  // pageCount > 1.
+  const handleLocalPdfLoad = useCallback(
+    (numberOfPages: number, _path: string, dims?: { width: number; height: number }) => {
+      if (!numberOfPages || numberOfPages < 1) return;
+      pageInfoResolvedRef.current = true;
+      setPdfPageInfo((prev) => ({
+        pageCount: Math.max(prev.pageCount, numberOfPages),
+        pageWidth: dims?.width || prev.pageWidth || 612,
+        pageHeight: dims?.height || prev.pageHeight || 792,
+      }));
+    },
+    [],
+  );
 
   // Processing state
   const [isProcessing, setIsProcessing] = useState(false);
@@ -1138,6 +1175,38 @@ export default function ToolProcessorScreen() {
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: t.background }}>
+      {/* Hidden 1×1 native page-count detector — runs on screen mount so the
+          place-step page-nav bar is populated even if the backend /pdf/info
+          call is slow or the visible viewer's onLoadComplete misfires for the
+          current document. Unmounts as soon as pageCount > 1. */}
+      {needsPageInfo && fileUri && pdfPageInfo.pageCount <= 1 && (
+        <View
+          pointerEvents="none"
+          style={{
+            position: "absolute",
+            width: 1,
+            height: 1,
+            opacity: 0,
+            top: -10,
+            left: -10,
+          }}
+        >
+          <Pdf
+            source={{ uri: fileUri as string }}
+            page={1}
+            singlePage
+            scale={1}
+            minScale={1}
+            maxScale={1}
+            style={{ width: 1, height: 1 }}
+            onLoadComplete={handleLocalPdfLoad}
+            onError={() => {
+              /* swallow — multi-page preview will surface real errors */
+            }}
+          />
+        </View>
+      )}
+
       {/* Header */}
       <View
         style={[
@@ -2181,6 +2250,14 @@ export default function ToolProcessorScreen() {
                         onPlacementChange={setVisualPlacement}
                         previewLabel={noteText.slice(0, 30) || "Text"}
                         onScrollLock={setScrollLocked}
+                        onPageInfoResolved={(info) => {
+                          pageInfoResolvedRef.current = true;
+                          setPdfPageInfo((prev) => ({
+                            pageCount: Math.max(prev.pageCount, info.pageCount),
+                            pageWidth: info.pageWidth || prev.pageWidth,
+                            pageHeight: info.pageHeight || prev.pageHeight,
+                          }));
+                        }}
                         t={t}
                       />
                     </View>
@@ -2249,6 +2326,14 @@ export default function ToolProcessorScreen() {
                         onPlacementChange={setVisualPlacement}
                         previewLabel={stampType.toUpperCase()}
                         onScrollLock={setScrollLocked}
+                        onPageInfoResolved={(info) => {
+                          pageInfoResolvedRef.current = true;
+                          setPdfPageInfo((prev) => ({
+                            pageCount: Math.max(prev.pageCount, info.pageCount),
+                            pageWidth: info.pageWidth || prev.pageWidth,
+                            pageHeight: info.pageHeight || prev.pageHeight,
+                          }));
+                        }}
                         t={t}
                       />
                     </View>
@@ -2786,6 +2871,14 @@ export default function ToolProcessorScreen() {
                       onPlacementChange={setVisualPlacement}
                       previewLabel={linkText || linkUrl || "Link"}
                       onScrollLock={setScrollLocked}
+                      onPageInfoResolved={(info) => {
+                        pageInfoResolvedRef.current = true;
+                        setPdfPageInfo((prev) => ({
+                          pageCount: Math.max(prev.pageCount, info.pageCount),
+                          pageWidth: info.pageWidth || prev.pageWidth,
+                          pageHeight: info.pageHeight || prev.pageHeight,
+                        }));
+                      }}
                       t={t}
                     />
                   </View>
@@ -2941,6 +3034,14 @@ export default function ToolProcessorScreen() {
                       onPlacementChange={setVisualPlacement}
                       previewLabel="Redacted"
                       onScrollLock={setScrollLocked}
+                      onPageInfoResolved={(info) => {
+                        pageInfoResolvedRef.current = true;
+                        setPdfPageInfo((prev) => ({
+                          pageCount: Math.max(prev.pageCount, info.pageCount),
+                          pageWidth: info.pageWidth || prev.pageWidth,
+                          pageHeight: info.pageHeight || prev.pageHeight,
+                        }));
+                      }}
                       t={t}
                     />
                   </View>

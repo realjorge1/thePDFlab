@@ -56,6 +56,10 @@ import {
   removeStrikethrough,
   removeUnderline,
 } from "@/services/viewerStorageService";
+import {
+  getReadingProgress,
+  setReadingProgressFromPages,
+} from "@/services/readingProgressService";
 
 import { API_BASE_URL } from "@/config/api";
 import * as FileSystem from "expo-file-system/legacy";
@@ -77,9 +81,16 @@ import {
   getAllFiles,
   toggleFavorite,
 } from "@/services/fileService";
+import {
+  fetchPdfAsHtml,
+  generatePdfEditorHtml,
+  savePdfFromHtml,
+} from "@/services/pdfEditService";
 import { repairPdfViaBackend } from "@/services/pdfRepairClient";
 import { validatePdfFile } from "@/services/pdfValidationService";
 import { recycleFile } from "@/services/recycleBinService";
+import { WebView } from "react-native-webview";
+import type { WebView as WebViewType } from "react-native-webview";
 
 // ============================================================================
 // TYPES
@@ -132,6 +143,43 @@ interface ViewerState {
   selectionText: string;
   selectionRect: { x: number; y: number; width: number; height: number } | null;
   selectionOffsets: { startOffset: number; endOffset: number } | null;
+  // ── Inline editor (in-place edit mode) ──
+  editMode: boolean;
+  editorHtml: string | null;
+  editLoading: boolean;
+  editSaving: boolean;
+  editLoadingStartedAt: number | null;
+  editLoadingElapsed: number;
+}
+
+// ============================================================================
+// SAF URI HELPERS
+// ============================================================================
+
+/**
+ * Re-encode a SAF document URI whose tree-ID / document-ID segments may contain
+ * unescaped characters (literal ':', '/', spaces).  A decoded '/' inside the
+ * document-ID is treated by Android's ContentResolver as a path separator,
+ * causing it to resolve a directory instead of a file → EISDIR.
+ *
+ * decode-then-reencode is idempotent: already-correct URIs are unchanged.
+ */
+function reEncodeSafDocumentUri(uri: string): string {
+  if (!uri.startsWith("content://")) return uri;
+  const treeIdx = uri.indexOf("/tree/");
+  const docIdx  = uri.indexOf("/document/");
+  if (treeIdx === -1 || docIdx === -1 || docIdx <= treeIdx) return uri;
+  const authority = uri.slice(0, treeIdx);
+  const treeId    = uri.slice(treeIdx + 6, docIdx);
+  const docId     = uri.slice(docIdx + 10);
+  try {
+    return (
+      `${authority}/tree/${encodeURIComponent(decodeURIComponent(treeId))}` +
+      `/document/${encodeURIComponent(decodeURIComponent(docId))}`
+    );
+  } catch {
+    return uri;
+  }
 }
 
 // ============================================================================
@@ -153,6 +201,11 @@ export default function PdfViewerScreen() {
   const colorScheme = useColorScheme() ?? "light";
   const theme = colorScheme === "dark" ? DarkTheme : LightTheme;
 
+  // Callers in library.tsx wrap the URI in encodeURIComponent before pushing
+  // to compensate for expo-router's net 1-decode behavior, which strips a
+  // layer of URI-encoding from SAF tree-document URIs and produces EISDIR
+  // when the resulting URI is opened. The wrap+native-decode round-trip
+  // restores the original URI here without any extra work.
   const { uri, name } = useLocalSearchParams<{ uri: string; name: string }>();
 
   const [state, setState] = useState<ViewerState>({
@@ -190,6 +243,12 @@ export default function PdfViewerScreen() {
     selectionText: "",
     selectionRect: null,
     selectionOffsets: null,
+    editMode: false,
+    editorHtml: null,
+    editLoading: false,
+    editSaving: false,
+    editLoadingStartedAt: null,
+    editLoadingElapsed: 0,
   });
 
   const [passwordInput, setPasswordInput] = useState("");
@@ -198,8 +257,12 @@ export default function PdfViewerScreen() {
   const [headerHeight, setHeaderHeight] = useState(0);
   const isMountedRef = useRef(true);
   const mobileRendererRef = useRef<MobileRendererHandle>(null);
+  const editorWebViewRef = useRef<WebViewType>(null);
+  const editAbortRef = useRef<AbortController | null>(null);
   /** Holds a search query that arrived before text extraction completed. */
   const pendingSearchQueryRef = useRef<string | null>(null);
+  /** Whether we've already attempted to restore the saved page on this open. */
+  const restoredPageRef = useRef(false);
 
   // ── Lifecycle ────────────────────────────────────────────────────
   React.useEffect(() => {
@@ -219,6 +282,8 @@ export default function PdfViewerScreen() {
       }));
       return;
     }
+    restoredPageRef.current = false;
+    setTargetPage(undefined);
     normalizeUri();
     checkStarStatus();
   }, [uri]);
@@ -255,10 +320,35 @@ export default function PdfViewerScreen() {
         showRecovery: false,
       }));
 
-      const normalized = await normalizePdfUri(uri);
+      if (__DEV__) console.log("[PdfViewer] normalizeUri start:", uri);
+      // SAF document URIs may arrive decoded (literal ':' and '/' inside the
+      // document-ID segment). Re-encode them so Android's ContentResolver parses
+      // the document ID correctly instead of resolving a partial path (→ EISDIR).
+      const fixedUri = reEncodeSafDocumentUri(uri);
+      if (__DEV__ && fixedUri !== uri) console.log("[PdfViewer] re-encoded SAF URI:", fixedUri);
+      const normalized = await normalizePdfUri(fixedUri);
+      if (__DEV__) console.log("[PdfViewer] normalized:", normalized);
       if (!isMountedRef.current) return;
 
+      // If we couldn't mirror to a file:// URI, skip byte-level validation —
+      // it would fail with the same EISDIR. Let react-native-pdf load via
+      // ContentResolver.openInputStream and surface any genuine corruption
+      // through onError → recovery screen.
+      const stillContentUri = normalized.startsWith("content://");
+      if (stillContentUri) {
+        if (__DEV__)
+          console.log("[PdfViewer] passing content:// directly, skipping validation");
+        setState((prev) => ({
+          ...prev,
+          normalizedUri: normalized,
+          loading: false,
+        }));
+        return;
+      }
+
       const validation = await validatePdfFile(normalized);
+      if (__DEV__)
+        console.log("[PdfViewer] validation:", JSON.stringify(validation));
       if (!isMountedRef.current) return;
 
       if (!validation.valid) {
@@ -281,6 +371,7 @@ export default function PdfViewerScreen() {
         loading: false,
       }));
     } catch (error) {
+      if (__DEV__) console.warn("[PdfViewer] normalizeUri error:", error);
       if (!isMountedRef.current) return;
       setState((prev) => ({
         ...prev,
@@ -304,13 +395,37 @@ export default function PdfViewerScreen() {
   }, [uri, name]);
 
   // ── PDF callbacks ────────────────────────────────────────────────
-  const handlePdfLoadComplete = useCallback((numberOfPages: number) => {
-    if (!isMountedRef.current) return;
-    setState((prev) => ({
-      ...prev,
-      pageInfo: { ...prev.pageInfo, total: numberOfPages },
-    }));
-  }, []);
+  const handlePdfLoadComplete = useCallback(
+    (numberOfPages: number) => {
+      if (!isMountedRef.current) return;
+      setState((prev) => ({
+        ...prev,
+        pageInfo: { ...prev.pageInfo, total: numberOfPages },
+      }));
+
+      // Restore last-read page exactly once per open.
+      // - If user reached the final page previously: start fresh at page 1.
+      // - Otherwise: jump to the last page they were on.
+      if (restoredPageRef.current || !uri || numberOfPages <= 0) return;
+      restoredPageRef.current = true;
+
+      getReadingProgress(reEncodeSafDocumentUri(uri))
+        .then((entry) => {
+          if (!isMountedRef.current || !entry) return;
+          const saved = entry.currentPage;
+          if (typeof saved !== "number" || saved <= 1) return;
+          // Treat "finished" as having reached the last page (or progress >= 1).
+          const finished =
+            (typeof entry.progress === "number" && entry.progress >= 0.999) ||
+            saved >= numberOfPages;
+          if (finished) return;
+          const target = Math.min(saved, numberOfPages);
+          if (target > 1) setTargetPage(target);
+        })
+        .catch(() => {});
+    },
+    [uri],
+  );
 
   const handlePageChanged = useCallback(
     (page: number, numberOfPages: number) => {
@@ -319,8 +434,14 @@ export default function PdfViewerScreen() {
         ...prev,
         pageInfo: { current: page, total: numberOfPages },
       }));
+      if (uri && numberOfPages > 0) {
+        // Always save under the canonical encoded form so lookups in library
+        // and home screen (which use file.uri from the DB) find the entry.
+        const progressKey = reEncodeSafDocumentUri(uri);
+        setReadingProgressFromPages(progressKey, page, numberOfPages).catch(() => {});
+      }
     },
-    [],
+    [uri],
   );
 
   const handlePdfError = useCallback((error: string) => {
@@ -666,18 +787,167 @@ export default function PdfViewerScreen() {
     });
   }, [uri, name]);
 
-  // ── Edit File ────────────────────────────────────────────────────
+  // ── Edit File (inline) ───────────────────────────────────────────
+  // Enter edit mode: convert PDF → HTML on the backend, then host a
+  // contentEditable WebView so the user can type/cursor directly. Save flips
+  // the HTML back through /convert/html-to-pdf and replaces the file shown.
+  const enterEditMode = useCallback(async () => {
+    const fileUri = state.normalizedUri || (uri as string);
+    if (!fileUri) {
+      Alert.alert("Cannot edit", "The PDF is not ready yet.");
+      return;
+    }
+
+    // 90s ceiling — beyond this the user is better off retrying or using a tool.
+    const controller = new AbortController();
+    editAbortRef.current = controller;
+    const timeoutId = setTimeout(() => controller.abort(), 90_000);
+
+    setState((prev) => ({
+      ...prev,
+      editLoading: true,
+      editLoadingStartedAt: Date.now(),
+      editLoadingElapsed: 0,
+    }));
+
+    try {
+      const html = await fetchPdfAsHtml(
+        fileUri,
+        name || "document.pdf",
+        controller.signal,
+      );
+      const editorHtml = generatePdfEditorHtml(html);
+      if (!isMountedRef.current) return;
+      setState((prev) => ({
+        ...prev,
+        editMode: true,
+        editorHtml,
+        editLoading: false,
+        editLoadingStartedAt: null,
+        showMenu: false,
+        showSearch: false,
+        showThumbnails: false,
+        showGoToPage: false,
+        readAloudActive: false,
+      }));
+    } catch (err) {
+      if (!isMountedRef.current) return;
+      const aborted =
+        controller.signal.aborted ||
+        (err instanceof Error && err.name === "AbortError");
+      setState((prev) => ({
+        ...prev,
+        editLoading: false,
+        editLoadingStartedAt: null,
+      }));
+      if (aborted) return; // user cancelled; don't show an alert
+      Alert.alert(
+        "Editing failed",
+        err instanceof Error
+          ? err.message
+          : "The backend could not convert this PDF to an editable form.",
+      );
+    } finally {
+      clearTimeout(timeoutId);
+      if (editAbortRef.current === controller) editAbortRef.current = null;
+    }
+  }, [state.normalizedUri, uri, name]);
+
+  const cancelEditLoading = useCallback(() => {
+    editAbortRef.current?.abort();
+  }, []);
+
+  // Tick the elapsed-time display while the conversion is running.
+  React.useEffect(() => {
+    if (!state.editLoading || state.editLoadingStartedAt == null) return;
+    const startedAt = state.editLoadingStartedAt;
+    const id = setInterval(() => {
+      setState((prev) =>
+        prev.editLoading
+          ? { ...prev, editLoadingElapsed: Math.floor((Date.now() - startedAt) / 1000) }
+          : prev,
+      );
+    }, 500);
+    return () => clearInterval(id);
+  }, [state.editLoading, state.editLoadingStartedAt]);
+
   const handleEditFile = useCallback(() => {
-    router.push({
-      pathname: "/tool-processor",
-      params: {
-        tool: "edit",
-        fileUri: uri,
-        file: name,
-        fileMimeType: "application/pdf",
-      },
-    });
-  }, [uri, name]);
+    Alert.alert("Edit PDF", "Open this PDF for editing?", [
+      { text: "Cancel", style: "cancel" },
+      { text: "Edit", onPress: enterEditMode },
+    ]);
+  }, [enterEditMode]);
+
+  const exitEditMode = useCallback(() => {
+    setState((prev) => ({
+      ...prev,
+      editMode: false,
+      editorHtml: null,
+      editSaving: false,
+    }));
+  }, []);
+
+  const handleSaveEdit = useCallback(() => {
+    if (!editorWebViewRef.current) return;
+    setState((prev) => ({ ...prev, editSaving: true }));
+    // Ask the editor for its current innerHTML; reply lands in onMessage below.
+    editorWebViewRef.current.injectJavaScript(`
+      (function() {
+        try {
+          var content = window.getEditorContent ? window.getEditorContent() : '';
+          window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'pdf-save-content', content: content }));
+        } catch (e) {
+          window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'pdf-save-error', message: String(e) }));
+        }
+      })(); true;
+    `);
+  }, []);
+
+  const handleEditorMessage = useCallback(
+    async (event: { nativeEvent: { data: string } }) => {
+      let data: any;
+      try {
+        data = JSON.parse(event.nativeEvent.data);
+      } catch {
+        return;
+      }
+      if (data?.type === "pdf-save-content") {
+        try {
+          const newUri = await savePdfFromHtml(
+            data.content || "",
+            name || "document.pdf",
+          );
+          if (!isMountedRef.current) return;
+          setState((prev) => ({
+            ...prev,
+            editSaving: false,
+            editMode: false,
+            editorHtml: null,
+            // Swap the displayed PDF over to the saved copy so the viewer
+            // immediately reflects the edits without re-navigation.
+            normalizedUri: newUri,
+            loading: false,
+          }));
+          Alert.alert(
+            "PDF Saved",
+            "Your edits have been saved as a new PDF.",
+            [{ text: "OK" }],
+          );
+        } catch (err) {
+          if (!isMountedRef.current) return;
+          setState((prev) => ({ ...prev, editSaving: false }));
+          Alert.alert(
+            "Save failed",
+            err instanceof Error ? err.message : "Could not save the edited PDF.",
+          );
+        }
+      } else if (data?.type === "pdf-save-error") {
+        setState((prev) => ({ ...prev, editSaving: false }));
+        Alert.alert("Save failed", data.message || "Editor reported an error.");
+      }
+    },
+    [name],
+  );
 
   // ── Delete ───────────────────────────────────────────────────────
   const handleDelete = useCallback(async () => {
@@ -855,7 +1125,7 @@ export default function PdfViewerScreen() {
 
   const handleSelectionAskAthemi = useCallback(() => {
     if (!state.selectionText) return;
-    router.push({ pathname: "/ai", params: { prompt: state.selectionText } });
+    router.push({ pathname: "/gozlin", params: { prompt: state.selectionText } });
     setState((prev) => ({ ...prev, selectionVisible: false }));
   }, [state.selectionText]);
 
@@ -1384,7 +1654,49 @@ export default function PdfViewerScreen() {
       {/* ── Document content ───────────────────────────────────── */}
       {state.normalizedUri && (
         <View style={{ flex: 1 }}>
-          {isMobileView ? (
+          {state.editMode && state.editorHtml ? (
+            <View style={{ flex: 1, backgroundColor: theme.background.primary }}>
+              {/* Editor toolbar — Cancel / Save */}
+              <View style={styles.editorToolbar}>
+                <Pressable
+                  onPress={exitEditMode}
+                  style={styles.editorCancelBtn}
+                  disabled={state.editSaving}
+                >
+                  <Text style={styles.editorCancelText}>Cancel</Text>
+                </Pressable>
+                <View style={styles.editorTitleWrap}>
+                  <MaterialIcons name="edit" size={16} color="#2563eb" />
+                  <Text style={styles.editorTitle}>Editing</Text>
+                </View>
+                <Pressable
+                  onPress={handleSaveEdit}
+                  style={[
+                    styles.editorSaveBtn,
+                    state.editSaving && styles.editorSaveBtnDisabled,
+                  ]}
+                  disabled={state.editSaving}
+                >
+                  {state.editSaving ? (
+                    <ActivityIndicator size="small" color="#fff" />
+                  ) : (
+                    <Text style={styles.editorSaveText}>Save</Text>
+                  )}
+                </Pressable>
+              </View>
+              <WebView
+                ref={editorWebViewRef}
+                source={{ html: state.editorHtml }}
+                originWhitelist={["*"]}
+                style={{ flex: 1, backgroundColor: "#fff" }}
+                javaScriptEnabled
+                domStorageEnabled
+                hideKeyboardAccessoryView={false}
+                keyboardDisplayRequiresUserAction={false}
+                onMessage={handleEditorMessage}
+              />
+            </View>
+          ) : isMobileView ? (
             <MobileRenderer
               ref={mobileRendererRef}
               html={state.mobileHtml}
@@ -1431,6 +1743,31 @@ export default function PdfViewerScreen() {
               )}
             </>
           )}
+        </View>
+      )}
+
+      {/* ── Inline edit-mode entry overlay ───────────────────────── */}
+      {state.editLoading && (
+        <View style={styles.editLoadingOverlay}>
+          <ActivityIndicator size="large" color={Palette.white} />
+          <Text style={styles.editLoadingText}>
+            {state.editLoadingElapsed < 3
+              ? "Uploading PDF…"
+              : state.editLoadingElapsed < 15
+                ? "Extracting text…"
+                : state.editLoadingElapsed < 45
+                  ? "Still working…"
+                  : "Almost there…"}
+          </Text>
+          <Text style={styles.editLoadingElapsed}>
+            {state.editLoadingElapsed}s
+          </Text>
+          <Pressable
+            onPress={cancelEditLoading}
+            style={styles.editCancelLoadingBtn}
+          >
+            <Text style={styles.editCancelLoadingText}>Cancel</Text>
+          </Pressable>
         </View>
       )}
 
@@ -1705,6 +2042,85 @@ const styles = StyleSheet.create({
     marginTop: 12,
     fontSize: 15,
     color: "#fff",
+    fontWeight: "600",
+  },
+  editorToolbar: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    backgroundColor: "#fff",
+    borderBottomWidth: 1,
+    borderBottomColor: "#e5e7eb",
+  },
+  editorTitleWrap: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  editorTitle: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#2563eb",
+  },
+  editorCancelBtn: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+  },
+  editorCancelText: {
+    fontSize: 14,
+    fontWeight: "500",
+    color: "#6b7280",
+  },
+  editorSaveBtn: {
+    minWidth: 72,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 8,
+    backgroundColor: "#16a34a",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  editorSaveBtnDisabled: {
+    opacity: 0.6,
+  },
+  editorSaveText: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: "#fff",
+  },
+  editLoadingOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "rgba(0,0,0,0.55)",
+    justifyContent: "center",
+    alignItems: "center",
+    zIndex: 200,
+  },
+  editLoadingText: {
+    marginTop: 12,
+    fontSize: 15,
+    color: "#fff",
+    fontWeight: "600",
+  },
+  editLoadingElapsed: {
+    marginTop: 4,
+    fontSize: 13,
+    color: "rgba(255,255,255,0.7)",
+    fontWeight: "500",
+  },
+  editCancelLoadingBtn: {
+    marginTop: 20,
+    paddingHorizontal: 22,
+    paddingVertical: 10,
+    borderRadius: 22,
+    borderWidth: 1.5,
+    borderColor: "rgba(255,255,255,0.5)",
+  },
+  editCancelLoadingText: {
+    color: "#fff",
+    fontSize: 14,
     fontWeight: "600",
   },
   header: {

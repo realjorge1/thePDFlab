@@ -203,7 +203,9 @@ export function validateContentType(contentType: string | null | undefined): {
 // ────────────────────────────────────────────────────────────────────
 
 /**
- * Read the first `length` bytes of a file as a UTF-8 string.
+ * Read the first `length` bytes of a file as a string of byte characters.
+ * Always goes through base64 — a UTF-8 fallback on a binary PDF corrupts
+ * the bytes and makes valid PDFs fail magic-byte detection.
  */
 async function readFileChunk(
   uri: string,
@@ -211,8 +213,6 @@ async function readFileChunk(
   length: number,
 ): Promise<string | null> {
   try {
-    // expo-file-system only supports reading entire files as string.
-    // For header checking we read as base64 and decode.
     const base64 = await FileSystem.readAsStringAsync(uri, {
       encoding: FileSystem.EncodingType.Base64,
       length,
@@ -220,12 +220,18 @@ async function readFileChunk(
     });
     return base64ToUtf8(base64);
   } catch {
-    // Fallback: read entire file as string (only for small files)
+    // Fallback: read whole file as base64, slice the head client-side.
+    // Skip for files >5 MB to avoid OOM.
     try {
-      const content = await FileSystem.readAsStringAsync(uri, {
-        encoding: FileSystem.EncodingType.UTF8,
+      const info = await FileSystem.getInfoAsync(uri);
+      const size = (info as any).size ?? 0;
+      if (size > 5 * 1024 * 1024) return null;
+      const fullBase64 = await FileSystem.readAsStringAsync(uri, {
+        encoding: FileSystem.EncodingType.Base64,
       });
-      return content.substring(0, length);
+      // 4 base64 chars = 3 bytes; slice enough to cover `length` bytes.
+      const headChars = Math.ceil((length * 4) / 3);
+      return base64ToUtf8(fullBase64.slice(0, headChars));
     } catch {
       return null;
     }
@@ -249,7 +255,18 @@ async function readFileTail(
     });
     return base64ToUtf8(base64);
   } catch {
-    return null;
+    // Fallback: read whole file as base64, slice the tail client-side.
+    // Skip for files >5 MB to avoid OOM.
+    if (fileSize > 5 * 1024 * 1024) return null;
+    try {
+      const fullBase64 = await FileSystem.readAsStringAsync(uri, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
+      const tailChars = Math.ceil((length * 4) / 3);
+      return base64ToUtf8(fullBase64.slice(-tailChars));
+    } catch {
+      return null;
+    }
   }
 }
 

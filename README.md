@@ -1,4 +1,4 @@
-# PDFiQ
+# Inscribed
 
 A React Native document/PDF tools app with an Express backend — organized as a monorepo.
 

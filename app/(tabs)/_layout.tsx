@@ -183,8 +183,8 @@ export default function TabLayout() {
           case "downloads":
             router.push("/(tabs)/download");
             break;
-          case "ai":
-            router.push("/ai");
+          case "gozlin":
+            router.push("/gozlin");
             break;
           case "tools":
             router.push("/(tabs)/tools");

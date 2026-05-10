@@ -170,7 +170,7 @@ export default function FindReplaceScreen() {
       if (!data.downloadUrl) throw new Error("No download URL returned from server");
 
       // Save to documents directory so it persists, then register in the library
-      const outputDir = `${FileSystem.documentDirectory}pdfiq-outputs/`;
+      const outputDir = `${FileSystem.documentDirectory}inscribed-outputs/`;
       await FileSystem.makeDirectoryAsync(outputDir, { intermediates: true });
       const outputName = `replaced_${selectedFile.name}`;
       const outputUri = `${outputDir}${outputName}`;
@@ -393,7 +393,7 @@ const styles = StyleSheet.create({
   },
   backBtn: { width: 40, alignItems: "flex-start" },
   headerTitle: { flex: 1, textAlign: "center", fontSize: 18, fontWeight: "700" },
-  content: { padding: 16, paddingBottom: 40 },
+  content: { paddingHorizontal: 10, paddingTop: 16, paddingBottom: 40 },
   filePicker: {
     flexDirection: "row",
     alignItems: "center",

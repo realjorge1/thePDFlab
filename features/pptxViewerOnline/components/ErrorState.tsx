@@ -27,8 +27,8 @@ export function ErrorState({
     ? "You appear to be offline"
     : "Can't open presentation";
   const hint = offlineSuspected
-    ? "This feature needs a connection to the render server. Please check your internet and try again."
-    : "If this keeps happening, the file may be corrupted or the server may be starting up.";
+    ? "This feature needs an internet connection. Please check your connection and try again."
+    : "If this keeps happening, the file may be corrupted. Please try again in a moment.";
 
   return (
     <View style={styles.root}>

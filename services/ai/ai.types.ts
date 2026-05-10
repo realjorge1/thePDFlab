@@ -304,8 +304,8 @@ export interface AIFeatureMeta {
 export const AI_FEATURES: AIFeatureMeta[] = [
   {
     id: "chat",
-    name: "ask athemi",
-    description: "Have a conversation with athemi",
+    name: "ask gozlin",
+    description: "Have a conversation with gozlin",
     color: "#6366F1",
     icon: "message-square",
     requiresDocument: false,
@@ -359,7 +359,7 @@ export const AI_FEATURES: AIFeatureMeta[] = [
   {
     id: "fill-form",
     name: "Fill Form",
-    description: "Auto-fill forms with athemi",
+    description: "Auto-fill forms with gozlin",
     color: "#14B8A6",
     icon: "file-signature",
     requiresDocument: true,

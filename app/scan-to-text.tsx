@@ -746,7 +746,7 @@ const styles = StyleSheet.create({
   createBtnText: { color: "#fff", fontSize: 14, fontWeight: "700" },
 
   // Scroll
-  scrollContent: { padding: 16, gap: 14 },
+  scrollContent: { paddingHorizontal: 10, paddingTop: 16, paddingBottom: 16, gap: 14 },
 
   // Image area
   imageArea: {

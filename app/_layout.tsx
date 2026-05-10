@@ -32,7 +32,17 @@ if (__DEV__) {
 }
 
 import { FloatingAIButton } from "@/components/AIButton";
+import { OnboardingScreen } from "@/components/OnboardingScreen";
+import { ReturnCardOverlay } from "@/components/ScheduledTasks";
 import { SubscriptionProvider } from "@/context/SubscriptionContext";
+import { useScheduledTasks } from "@/hooks/useScheduledTasks";
+import { wakeUpBackend } from "@/config/api";
+import { initKeepAlive } from "@/services/backendKeepAlive";
+import { setPendingGeneration } from "@/services/generatedDocStore";
+import type { ScheduledTask } from "@/services/scheduledTasks";
+import { useRouter } from "expo-router";
+import docLibDb from "@/services/doclib/database";
+import docLibIndexer from "@/services/doclib/fileIndexer";
 import { loadNativeFonts } from "@/services/editorFontService";
 import { runImportedFileRetentionCheck } from "@/services/fileRetentionService";
 import { purgeExpired } from "@/services/recycleBinService";
@@ -48,15 +58,54 @@ import "react-native-reanimated";
 // Prevent the splash screen from hiding until fonts are loaded.
 SplashScreen.preventAutoHideAsync().catch(() => {});
 
+// ── Scheduled Tasks Watcher ───────────────────────────────────────────────────
+// Separate component so it can call hooks inside the provider + router context.
+
+function ScheduledTasksWatcher() {
+  const router = useRouter();
+  const { unseenTasks, dismissTask } = useScheduledTasks();
+
+  const handleDocumentResult = useCallback(async (task: ScheduledTask) => {
+    if (task.result?.type !== 'generate_document') return;
+    const { content, title, fileType, category, wordCount } = task.result.data;
+    setPendingGeneration({ content, title, fileType: fileType as any, category, tone: 'professional', wordCount });
+    router.push('/gozlin-generated-preview' as any);
+  }, [router]);
+
+  const handleQuizResult = useCallback((task: ScheduledTask) => {
+    router.push({ pathname: '/gozlin', params: { scheduledQuizId: task.id } } as any);
+  }, [router]);
+
+  const handleWorkspaceResult = useCallback((task: ScheduledTask) => {
+    router.push({ pathname: '/gozlin-workspace', params: { scheduledAIId: task.id } } as any);
+  }, [router]);
+
+  return (
+    <ReturnCardOverlay
+      tasks={unseenTasks}
+      onDismiss={dismissTask}
+      onDocumentResult={handleDocumentResult}
+      onQuizResult={handleQuizResult}
+      onWorkspaceResult={handleWorkspaceResult}
+    />
+  );
+}
+
 export const unstable_settings = {
   anchor: "(tabs)",
 };
 
 export default function RootLayout() {
   const [fontsReady, setFontsReady] = useState(false);
+  const [onboardingDone, setOnboardingDone] = useState(false);
 
   useEffect(() => {
     // Run background startup tasks in parallel with font loading
+    // Wake Render backend while the app initialises (cold starts take ~60s).
+    // initKeepAlive then keeps it warm with a silent ping every 10 minutes.
+    wakeUpBackend().catch(() => {});
+    initKeepAlive();
+
     Promise.all([
       loadNativeFonts(),
       // Purge expired recycle bin entries (15-day retention)
@@ -68,6 +117,11 @@ export default function RootLayout() {
         setRate(s.readingSpeed);
         setAutoDetectLanguage(s.autoDetectLanguage);
       }).catch(console.error),
+      // Initialise the SAF document library DB and kick off a background scan
+      docLibDb
+        .init()
+        .then(() => docLibIndexer.scheduleIncrementalScan(2500))
+        .catch((e) => console.warn("[DocLib] init failed:", e)),
     ])
       .then(() => setFontsReady(true))
       .catch(() => setFontsReady(true)); // show app even if tasks fail
@@ -80,7 +134,7 @@ export default function RootLayout() {
   }, [fontsReady]);
 
   if (!fontsReady) {
-    return null; // splash screen stays visible
+    return null; // native splash screen stays visible
   }
 
   return (
@@ -96,12 +150,13 @@ export default function RootLayout() {
         >
           <Stack.Screen name="(tabs)" />
           <Stack.Screen name="index" options={{ headerShown: false }} />
-          <Stack.Screen name="ai" />
+          <Stack.Screen name="gozlin" />
           <Stack.Screen name="manage-pages" />
           <Stack.Screen name="file-details" />
           <Stack.Screen name="browse-files" />
           <Stack.Screen name="tool-processor" />
           <Stack.Screen name="library" />
+          <Stack.Screen name="doclib-library" />
           <Stack.Screen name="share" />
           <Stack.Screen name="folders" />
           <Stack.Screen name="pdf-viewer" />
@@ -120,7 +175,7 @@ export default function RootLayout() {
             options={{ animation: "none" }}
           />
           <Stack.Screen name="image-to-file-preview" />
-          <Stack.Screen name="ai-generated-preview" />
+          <Stack.Screen name="gozlin-generated-preview" />
           <Stack.Screen name="settings" />
           <Stack.Screen name="privacy-policy" />
           <Stack.Screen name="terms-of-service" />
@@ -136,9 +191,14 @@ export default function RootLayout() {
           <Stack.Screen name="citation-extractor" />
           <Stack.Screen name="ppt-studio" />
           <Stack.Screen name="ppt-viewer" />
-          <Stack.Screen name="xlsx-viewer" />
+          <Stack.Screen name="scheduled-tasks" />
+          <Stack.Screen name="schedule-task" />
         </Stack>
         <FloatingAIButton />
+        <ScheduledTasksWatcher />
+        {!onboardingDone && (
+          <OnboardingScreen onFinish={() => setOnboardingDone(true)} />
+        )}
       </View>
       </SubscriptionProvider>
     </ThemeProvider>

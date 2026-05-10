@@ -312,7 +312,7 @@ const styles = StyleSheet.create({
   },
   backBtn: { width: 40, alignItems: "flex-start" },
   headerTitle: { flex: 1, textAlign: "center", fontSize: 18, fontWeight: "700" },
-  content: { padding: 16, paddingBottom: 40 },
+  content: { paddingHorizontal: 10, paddingTop: 16, paddingBottom: 40 },
   addFilesBtn: {
     flexDirection: "row",
     alignItems: "center",

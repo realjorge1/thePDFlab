@@ -1,7 +1,7 @@
 /**
  * FloatingAIButton
  *
- * A global floating action button for quick athemi access, using the techy "/a"
+ * A global floating action button for quick gozlin access, using the techy "/a"
  * logo. Features a static multi-tone tech-color aura ring around the logo.
  *
  * No animations — clean, static, polished look.
@@ -90,8 +90,8 @@ export default function FloatingAIButton() {
       <TouchableOpacity
         style={styles.hitArea}
         activeOpacity={0.8}
-        onPress={() => router.push("/ai")}
-        accessibilityLabel="Open athemi"
+        onPress={() => router.push("/gozlin")}
+        accessibilityLabel="Open gozlin"
         accessibilityRole="button"
         hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
       >

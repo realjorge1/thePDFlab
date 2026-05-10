@@ -2,6 +2,7 @@ const express = require("express");
 const router = express.Router();
 const { PDFDocument, StandardFonts, rgb } = require("pdf-lib");
 const fs = require("fs").promises;
+const { safeLoadPDF } = require("../services/pdfService");
 
 /**
  * POST /api/header-footer
@@ -43,7 +44,7 @@ router.post("/", async (req, res, next) => {
 
   try {
     const pdfBytes = await fs.readFile(req.files.pdf.tempFilePath);
-    const pdfDoc = await PDFDocument.load(pdfBytes, {
+    const pdfDoc = await safeLoadPDF(pdfBytes, {
       ignoreEncryption: true,
     });
     const pages = pdfDoc.getPages();

@@ -78,7 +78,7 @@ export async function initNotifications(): Promise<void> {
 
     // Android notification channel
     if (Platform.OS === "android") {
-      await Notifications.setNotificationChannelAsync("pdflab-tasks", {
+      await Notifications.setNotificationChannelAsync("inscribed-tasks", {
         name: "Task Notifications",
         importance: Notifications.AndroidImportance.DEFAULT,
         vibrationPattern: [0, 100],
@@ -102,7 +102,7 @@ async function sendLocalNotification(payload: NotificationPayload) {
           title: payload.title,
           body: payload.body,
           data: { type: payload.type },
-          ...(Platform.OS === "android" ? { channelId: "pdflab-tasks" } : {}),
+          ...(Platform.OS === "android" ? { channelId: "inscribed-tasks" } : {}),
         },
         trigger: null, // immediate
       });

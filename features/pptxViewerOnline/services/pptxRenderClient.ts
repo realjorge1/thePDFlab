@@ -69,7 +69,7 @@ async function postPptxForConversion(
         // not JSON
       }
       throw new Error(
-        `Server could not convert presentation (${response.status}): ${detail}`,
+        `Could not convert presentation (${response.status}): ${detail}`,
       );
     }
 
@@ -77,7 +77,7 @@ async function postPptxForConversion(
   } catch (err) {
     if (err instanceof Error && err.name === "AbortError") {
       throw new Error(
-        "Conversion timed out. The server may be starting up — please try again in a moment.",
+        "Conversion timed out. Please try again in a moment.",
       );
     }
     throw err;

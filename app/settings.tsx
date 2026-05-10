@@ -68,7 +68,7 @@ const THEME_OPTIONS: { label: string; value: ThemeMode }[] = [
 
 const START_SCREEN_OPTIONS: StartScreen[] = [
   "home",
-  "ai",
+  "gozlin",
   "library",
   "tools",
   "downloads",
@@ -77,7 +77,7 @@ const START_SCREEN_OPTIONS: StartScreen[] = [
 
 const START_SCREEN_LABELS: Record<StartScreen, string> = {
   home: "Home",
-  ai: "AI",
+  gozlin: "gozlin",
   library: "Library",
   tools: "Tools",
   downloads: "Downloads",
@@ -262,7 +262,7 @@ export default function SettingsScreen() {
           }
           Alert.alert("PIN Set", "App lock has been enabled.");
         } else {
-          Alert.alert("Error", "PIN must be exactly 6 digits.");
+          Alert.alert("Error", "PIN must be exactly 5 digits.");
         }
       } else if (pinMode === "verify") {
         if (verifyingUnlock) {
@@ -583,6 +583,14 @@ export default function SettingsScreen() {
             onPress={() => router.push("/recycle" as any)}
             hideSeparator
           />
+          {Platform.OS === "android" && (
+            <SettingRow
+              title="Document Library"
+              subtitle="Auto-index folders on this device"
+              onPress={() => router.push("/doclib-library" as any)}
+              hideSeparator
+            />
+          )}
         </Category>
 
         {/* ── 5. Document Behavior ── */}
@@ -826,11 +834,11 @@ export default function SettingsScreen() {
                 hideSeparator
               />
               <SettingRow
-                title="Lock AI (athemi)"
-                subtitle="Require PIN to access the AI assistant"
+                title="Lock gozlin"
+                subtitle="Require PIN to access gozlin"
                 toggle
-                toggleValue={settings.screenLocks.ai}
-                onToggle={(v) => handleScreenLockToggle("ai", v)}
+                toggleValue={settings.screenLocks.gozlin}
+                onToggle={(v) => handleScreenLockToggle("gozlin", v)}
                 hideSeparator
               />
               <SettingRow
@@ -883,10 +891,10 @@ export default function SettingsScreen() {
           />
           <SettingRow
             title="Contact support"
-            subtitle="linuson.g.linuson@gmail.com"
+            subtitle="facebook.com/the-inscribedsoftware"
             onPress={() =>
-              Linking.openURL("mailto:linuson.g.linuson@gmail.com").catch(() =>
-                Alert.alert("Cannot open email client"),
+              Linking.openURL("https://www.facebook.com/the-inscribedsoftware").catch(() =>
+                Alert.alert("Cannot open link"),
               )
             }
             hideSeparator

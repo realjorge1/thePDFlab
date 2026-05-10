@@ -1,4 +1,5 @@
 import { AppHeaderContainer } from "@/components/AppHeaderContainer";
+import { PINGate } from "@/components/PINGate";
 import { GradientView } from "@/components/GradientView";
 import { colors } from "@/constants/theme";
 import {
@@ -15,7 +16,6 @@ import {
   Layers,
   MonitorPlay,
   ScanLine,
-  Sheet as SheetIcon,
 } from "lucide-react-native";
 import React, { useCallback, useMemo, useRef, useState } from "react";
 import {
@@ -121,17 +121,6 @@ const CREATION_OPTIONS: CreationOption[] = [
     iconColor: "#D24726",
     bgColor: "#FEF3EE",
     accentColor: "#D24726",
-    fileType: null,
-    method: "blank",
-  },
-  {
-    id: "blank-xlsx",
-    title: "Spreadsheet",
-    subtitle: "Create an .xlsx workbook",
-    icon: SheetIcon,
-    iconColor: "#107C41",
-    bgColor: "#E6F4EA",
-    accentColor: "#107C41",
     fileType: null,
     method: "blank",
   },
@@ -300,10 +289,6 @@ export default function CreateFileScreen() {
         router.push("/ppt-studio" as any);
         return;
       }
-      if (option.id === "blank-xlsx") {
-        router.push("/xlsx-viewer" as any);
-        return;
-      }
       if (option.method === "blank" && option.fileType === "pdf") {
         router.push("/create-blank-pdf");
         return;
@@ -399,6 +384,7 @@ export default function CreateFileScreen() {
   );
 
   return (
+    <PINGate screen="createFiles">
     <SafeAreaView edges={['top']} style={[styles.screen, { backgroundColor: t.background }]}>
       {/* ── Header ── */}
       <AppHeaderContainer>
@@ -495,6 +481,7 @@ export default function CreateFileScreen() {
         </View>
       )}
     </SafeAreaView>
+    </PINGate>
   );
 }
 

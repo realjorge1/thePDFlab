@@ -18,7 +18,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 // ─── Brute-force constants ────────────────────────────────────────────────────
 const MAX_ATTEMPTS = 5;
 const LOCKOUT_MS = 30_000; // 30 seconds
-const ATTEMPT_KEY = "@pdflab_pin_attempts";
+const ATTEMPT_KEY = "@inscribed_pin_attempts";
 
 interface AttemptData {
   count: number;
@@ -99,7 +99,7 @@ export async function isPINConfigured(): Promise<boolean> {
  * Set up a new PIN. Enables app lock and stores the hash.
  */
 export async function setupPIN(pin: string): Promise<boolean> {
-  if (pin.length !== 6 || !/^\d+$/.test(pin)) {
+  if (pin.length !== 5 || !/^\d+$/.test(pin)) {
     return false;
   }
 
@@ -184,7 +184,7 @@ export async function changePIN(
   const isValid = await verifyPINBool(oldPIN);
   if (!isValid) return false;
 
-  if (newPIN.length !== 6 || !/^\d+$/.test(newPIN)) {
+  if (newPIN.length !== 5 || !/^\d+$/.test(newPIN)) {
     return false;
   }
 
@@ -208,8 +208,9 @@ export async function removePIN(pin: string): Promise<boolean> {
     library: false,
     downloads: false,
     createFiles: false,
-    ai: false,
+    gozlin: false,
     folders: false,
+    ai: false,
   };
   await saveSettings(settings);
   return true;

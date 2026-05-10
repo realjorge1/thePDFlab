@@ -51,6 +51,7 @@ import {
 import { useTheme } from "@/services/ThemeProvider";
 import { useLocalSearchParams, useNavigation, useRouter } from "expo-router";
 import {
+  AlertTriangle,
   ArrowRight,
   BookOpen,
   Brain,
@@ -101,7 +102,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 const ACCENT = "#9333EA";
 const GRID_GAP = 6;
 const GRID_COLUMNS = 3;
-const GRID_H_PADDING = 12; // matches spacing.md
+const GRID_H_PADDING = 8;
 const SCREEN_WIDTH = Dimensions.get("window").width;
 const CARD_WIDTH = Math.floor(
   (SCREEN_WIDTH - GRID_H_PADDING * 2 - GRID_GAP * (GRID_COLUMNS - 1)) /
@@ -197,7 +198,7 @@ function extractTextForPages(fullText: string, pageNums: number[], totalPages: n
 export default function AIScreen() {
   const { colors: t, mode } = useTheme();
   const router = useRouter();
-  // "Ask athemi" deep-link: viewers pass selected text as a route param
+  // "Ask gozlin" deep-link: viewers pass selected text as a route param
   const { initialText } = useLocalSearchParams<{ initialText?: string }>();
 
   // ── State ─────────────────────────────────────────────────────────────────
@@ -226,6 +227,8 @@ export default function AIScreen() {
   const [translateDocFormat, setTranslateDocFormat] = useState<"pdf" | "docx">("pdf");
   const [translateProgress, setTranslateProgress] = useState<string | null>(null);
   const [isExtractingTranslateDoc, setIsExtractingTranslateDoc] = useState(false);
+  const [translateDocExtractionFailed, setTranslateDocExtractionFailed] = useState(false);
+  const [isExtractingAttachedDoc, setIsExtractingAttachedDoc] = useState(false);
   const translateScrollRef = useRef<ScrollView>(null);
   const translateContentHeightRef = useRef<number>(0);
   // When a new assistant response is appended, this stores the "y" offset where
@@ -327,7 +330,7 @@ export default function AIScreen() {
     };
   }, []);
 
-  // ── Pre-populate input from "Ask athemi" deep-link ─────────────────────────
+  // ── Pre-populate input from "Ask gozlin" deep-link ─────────────────────────
   useEffect(() => {
     if (initialText && typeof initialText === "string" && initialText.trim()) {
       // Start a fresh chat session with the highlighted text as the input
@@ -460,6 +463,7 @@ export default function AIScreen() {
     setTranslateDocText(undefined);
     setTranslateDocPageCount(0);
     setTranslatePageInput("all");
+    setTranslateDocExtractionFailed(false);
   }, []);
 
   const handleTranslateSubmit = useCallback(async () => {
@@ -498,7 +502,7 @@ export default function AIScreen() {
             tone: "professional",
             wordCount: response.content.split(/\s+/).length,
           });
-          router.push("/ai-generated-preview" as any);
+          router.push("/gozlin-generated-preview" as any);
         } catch {
           setTranslateMessages((prev) => [
             ...prev,
@@ -557,7 +561,7 @@ export default function AIScreen() {
             wordCount: response.content.split(/\s+/).length,
           });
           setTranslateFreeText("");
-          router.push("/ai-generated-preview" as any);
+          router.push("/gozlin-generated-preview" as any);
         } catch {
           setTranslateMessages((prev) => [
             ...prev,
@@ -617,6 +621,7 @@ export default function AIScreen() {
       setTranslateMessages([]);
       setIsTranslating(false);
       setTranslateProgress(null);
+      setTranslateDocExtractionFailed(false);
     }
   }, [activeAction]);
 
@@ -634,17 +639,33 @@ export default function AIScreen() {
 
     if (filePickerForRef.current === "translate") {
       setIsExtractingTranslateDoc(true);
+      setTranslateDocExtractionFailed(false);
       setTranslateDoc(doc);
       setTranslateDocText(undefined);
       setTranslateDocPageCount(0);
       setTranslatePageInput("all");
       try {
         const text = await extractDocumentText(doc);
-        setTranslateDocText(text ?? "");
-        const pageMatches = text?.match(/\[Page \d+\]/g);
-        setTranslateDocPageCount(pageMatches ? pageMatches.length : 1);
+        const isPlaceholder =
+          !text ||
+          (text.trimStart().startsWith("[") &&
+            (text.includes("extraction was not available") ||
+              text.includes("Extraction failed") ||
+              text.includes("extraction is not available") ||
+              text.includes("Failed to read") ||
+              text.includes("no text extracted")));
+        if (isPlaceholder) {
+          setTranslateDocText("");
+          setTranslateDocExtractionFailed(true);
+          setTranslateDocPageCount(1);
+        } else {
+          setTranslateDocText(text ?? "");
+          const pageMatches = text?.match(/\[Page \d+\]/g);
+          setTranslateDocPageCount(pageMatches ? pageMatches.length : 1);
+        }
       } catch {
         setTranslateDocText("");
+        setTranslateDocExtractionFailed(true);
         setTranslateDocPageCount(1);
       } finally {
         setIsExtractingTranslateDoc(false);
@@ -654,36 +675,41 @@ export default function AIScreen() {
 
     setAttachedDoc(doc);
     setExtractionStatus("none");
+    setIsExtractingAttachedDoc(true);
 
-    const text = await extractDocumentText(doc);
-    setDocText(text);
+    try {
+      const text = await extractDocumentText(doc);
+      setDocText(text);
 
-    const _trimmedForStatus = text?.trimStart() ?? "";
-    if (text && (_trimmedForStatus.startsWith("[Page ") || !_trimmedForStatus.startsWith("["))) {
-      setExtractionStatus("extracted");
-    } else {
-      setExtractionStatus("partial");
+      const _trimmedForStatus = text?.trimStart() ?? "";
+      if (text && (_trimmedForStatus.startsWith("[Page ") || !_trimmedForStatus.startsWith("["))) {
+        setExtractionStatus("extracted");
+      } else {
+        setExtractionStatus("partial");
+      }
+
+      setSession((prev) => ({
+        ...prev,
+        document: doc,
+        updatedAt: Date.now(),
+      }));
+
+      const extracted = text && !text.trimStart().startsWith("[");
+      const sysMsg = createMessage(
+        "assistant",
+        `📎 Document attached: "${doc.name}"\n${
+          extracted
+            ? "Text extracted and ready. You can now summarize, translate, or ask questions."
+            : "Attached. You can paste relevant text in your message for best results."
+        }`,
+      );
+      setSession((prev) => ({
+        ...prev,
+        messages: [...prev.messages, sysMsg],
+      }));
+    } finally {
+      setIsExtractingAttachedDoc(false);
     }
-
-    setSession((prev) => ({
-      ...prev,
-      document: doc,
-      updatedAt: Date.now(),
-    }));
-
-    const extracted = text && !text.trimStart().startsWith("[");
-    const sysMsg = createMessage(
-      "assistant",
-      `📎 Document attached: "${doc.name}"\n${
-        extracted
-          ? "Text extracted and ready. You can now summarize, translate, or ask questions."
-          : "Attached. You can paste relevant text in your message for best results."
-      }`,
-    );
-    setSession((prev) => ({
-      ...prev,
-      messages: [...prev.messages, sysMsg],
-    }));
   }, []);
 
   const handlePickFromApp = useCallback(() => {
@@ -706,17 +732,33 @@ export default function AIScreen() {
 
     if (filePickerForRef.current === "translate") {
       setIsExtractingTranslateDoc(true);
+      setTranslateDocExtractionFailed(false);
       setTranslateDoc(doc);
       setTranslateDocText(undefined);
       setTranslateDocPageCount(0);
       setTranslatePageInput("all");
       try {
         const text = await extractDocumentText(doc);
-        setTranslateDocText(text ?? "");
-        const pageMatches = text?.match(/\[Page \d+\]/g);
-        setTranslateDocPageCount(pageMatches ? pageMatches.length : 1);
+        const isPlaceholder =
+          !text ||
+          (text.trimStart().startsWith("[") &&
+            (text.includes("extraction was not available") ||
+              text.includes("Extraction failed") ||
+              text.includes("extraction is not available") ||
+              text.includes("Failed to read") ||
+              text.includes("no text extracted")));
+        if (isPlaceholder) {
+          setTranslateDocText("");
+          setTranslateDocExtractionFailed(true);
+          setTranslateDocPageCount(1);
+        } else {
+          setTranslateDocText(text ?? "");
+          const pageMatches = text?.match(/\[Page \d+\]/g);
+          setTranslateDocPageCount(pageMatches ? pageMatches.length : 1);
+        }
       } catch {
         setTranslateDocText("");
+        setTranslateDocExtractionFailed(true);
         setTranslateDocPageCount(1);
       } finally {
         setIsExtractingTranslateDoc(false);
@@ -726,36 +768,41 @@ export default function AIScreen() {
 
     setAttachedDoc(doc);
     setExtractionStatus("none");
+    setIsExtractingAttachedDoc(true);
 
-    const text = await extractDocumentText(doc);
-    setDocText(text);
+    try {
+      const text = await extractDocumentText(doc);
+      setDocText(text);
 
-    const _trimmedForStatus = text?.trimStart() ?? "";
-    if (text && (_trimmedForStatus.startsWith("[Page ") || !_trimmedForStatus.startsWith("["))) {
-      setExtractionStatus("extracted");
-    } else {
-      setExtractionStatus("partial");
+      const _trimmedForStatus = text?.trimStart() ?? "";
+      if (text && (_trimmedForStatus.startsWith("[Page ") || !_trimmedForStatus.startsWith("["))) {
+        setExtractionStatus("extracted");
+      } else {
+        setExtractionStatus("partial");
+      }
+
+      setSession((prev) => ({
+        ...prev,
+        document: doc,
+        updatedAt: Date.now(),
+      }));
+
+      const extracted = text && !text.trimStart().startsWith("[");
+      const sysMsg = createMessage(
+        "assistant",
+        `📎 Document attached: "${doc.name}"\n${
+          extracted
+            ? "Text extracted and ready. You can now summarize, translate, or ask questions."
+            : "Attached. You can paste relevant text in your message for best results."
+        }`,
+      );
+      setSession((prev) => ({
+        ...prev,
+        messages: [...prev.messages, sysMsg],
+      }));
+    } finally {
+      setIsExtractingAttachedDoc(false);
     }
-
-    setSession((prev) => ({
-      ...prev,
-      document: doc,
-      updatedAt: Date.now(),
-    }));
-
-    const extracted = text && !text.trimStart().startsWith("[");
-    const sysMsg = createMessage(
-      "assistant",
-      `📎 Document attached: "${doc.name}"\n${
-        extracted
-          ? "Text extracted and ready. You can now summarize, translate, or ask questions."
-          : "Attached. You can paste relevant text in your message for best results."
-      }`,
-    );
-    setSession((prev) => ({
-      ...prev,
-      messages: [...prev.messages, sysMsg],
-    }));
   }, []);
 
   const handleRemoveDocument = useCallback(() => {
@@ -1002,7 +1049,7 @@ export default function AIScreen() {
   const handleClearAllSessions = useCallback(() => {
     Alert.alert(
       "Clear All History",
-      "This will permanently delete all athemi conversation history.",
+      "This will permanently delete all gozlin conversation history.",
       [
         { text: "Cancel", style: "cancel" },
         {
@@ -1062,7 +1109,7 @@ export default function AIScreen() {
         });
 
         setShowGenerateDocumentModal(false);
-        router.push("/ai-generated-preview" as any);
+        router.push("/gozlin-generated-preview" as any);
       } catch (e) {
         Alert.alert(
           "Generation Failed",
@@ -1239,9 +1286,11 @@ export default function AIScreen() {
         const [
           { getAllFolders, createFolder, moveFileToFolder, FOLDER_COLORS },
           { upsertFileRecord, getFileByUri },
+          { getAllFiles: getLegacyFiles },
         ] = await Promise.all([
           import("@/services/folderService"),
           import("@/services/fileIndexService"),
+          import("@/services/fileService"),
         ]);
 
         // 1) Find or auto-create the smart folder at the root
@@ -1258,22 +1307,32 @@ export default function AIScreen() {
             FOLDER_COLORS[Math.floor(Math.random() * FOLDER_COLORS.length)],
           ));
 
-        // 2) Ensure the attached document exists in the unified file index.
-        //    upsertFileRecord deduplicates by URI, so this is safe to call
-        //    even when the file is already there.
-        let record = await getFileByUri(attachedDoc.uri);
-        if (!record) {
-          record = await upsertFileRecord({
-            uri: attachedDoc.uri,
-            name: attachedDoc.name,
-            mimeType: attachedDoc.mimeType,
-            size: attachedDoc.size,
-            source: "imported",
-          });
+        // 2) Determine the file ID to use for the folder mapping.
+        //    The Folders screen uses the legacy fileService ID for legacy files,
+        //    so we must check the legacy store first. Only fall back to the
+        //    unified fileIndexService if the file is not in the legacy store.
+        const legacyFiles = await getLegacyFiles();
+        const legacyFile = legacyFiles.find((f) => f.uri === attachedDoc.uri);
+
+        let fileId: string;
+        if (legacyFile) {
+          fileId = legacyFile.id;
+        } else {
+          let record = await getFileByUri(attachedDoc.uri);
+          if (!record) {
+            record = await upsertFileRecord({
+              uri: attachedDoc.uri,
+              name: attachedDoc.name,
+              mimeType: attachedDoc.mimeType,
+              size: attachedDoc.size,
+              source: "imported",
+            });
+          }
+          fileId = record.id;
         }
 
         // 3) Add the file to the folder (creates the file → folder mapping)
-        await moveFileToFolder(record.id, target.id);
+        await moveFileToFolder(fileId, target.id);
 
         setSmartFolderToast(`Added to "${target.name}" folder`);
       } catch (e: any) {
@@ -1558,7 +1617,7 @@ export default function AIScreen() {
 
   // ── Render ────────────────────────────────────────────────────────────────
   return (
-    <PINGate screen="ai">
+    <PINGate screen="gozlin">
       <SafeAreaView
         style={[styles.safe, { backgroundColor: t.background }]}
         edges={["top"]}
@@ -1609,7 +1668,7 @@ export default function AIScreen() {
                             return;
                           }
                           if (feature.id === "workspace") {
-                            router.push("/ai-workspace" as any);
+                            router.push("/gozlin-workspace" as any);
                             return;
                           }
                           handleModeChange(feature.id as AIAction);
@@ -1708,13 +1767,16 @@ export default function AIScreen() {
               >
                 {attachedDoc.name}
               </Text>
-              <Text style={{ color: t.textTertiary, fontSize: 11 }}>
-                {extractionStatus === "extracted"
-                  ? "✓"
-                  : extractionStatus === "partial"
-                    ? "⚠"
-                    : "📄"}
-              </Text>
+              {isExtractingAttachedDoc
+                ? <ActivityIndicator size="small" color={ACCENT} />
+                : <Text style={{ color: t.textTertiary, fontSize: 11 }}>
+                    {extractionStatus === "extracted"
+                      ? "✓"
+                      : extractionStatus === "partial"
+                        ? "⚠"
+                        : "📄"}
+                  </Text>
+              }
               <TouchableOpacity
                 onPress={handleRemoveDocument}
                 hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
@@ -1887,13 +1949,21 @@ export default function AIScreen() {
                 {translateDoc ? (
                   <>
                     {/* Doc info row */}
-                    <View style={[styles.translateDocRow, { backgroundColor: mode === "dark" ? "#0F172A" : "#F3E8FF", borderColor: mode === "dark" ? "#334155" : "#D8B4FE" }]}>
-                      <FileText size={14} color={ACCENT} />
+                    <View style={[styles.translateDocRow, { backgroundColor: translateDocExtractionFailed ? (mode === "dark" ? "#1C0A0A" : "#FEF2F2") : (mode === "dark" ? "#0F172A" : "#F3E8FF"), borderColor: translateDocExtractionFailed ? "#EF4444" : (mode === "dark" ? "#334155" : "#D8B4FE") }]}>
+                      <FileText size={14} color={translateDocExtractionFailed ? "#EF4444" : ACCENT} />
                       <Text style={[styles.translateDocName, { color: t.text }]} numberOfLines={1}>{translateDoc.name}</Text>
-                      {translateDocPageCount > 0 && (
+                      {!isExtractingTranslateDoc && translateDocExtractionFailed && (
+                        <Text style={{ fontSize: 11, color: "#EF4444", flexShrink: 1 }}>Can't read text</Text>
+                      )}
+                      {!isExtractingTranslateDoc && translateDocPageCount > 0 && !translateDocExtractionFailed && (
                         <Text style={[styles.translateDocPageCount, { color: t.textSecondary }]}>{translateDocPageCount}p</Text>
                       )}
-                      {isExtractingTranslateDoc && <ActivityIndicator size="small" color={ACCENT} />}
+                      {isExtractingTranslateDoc
+                        ? <ActivityIndicator size="small" color={ACCENT} />
+                        : translateDocExtractionFailed
+                          ? <AlertTriangle size={14} color="#EF4444" />
+                          : null
+                      }
                       <TouchableOpacity onPress={handleTranslateRemoveDoc} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
                         <X size={14} color={t.textTertiary} />
                       </TouchableOpacity>
@@ -1908,11 +1978,12 @@ export default function AIScreen() {
                         style={[styles.translatePageInput, { color: t.text, backgroundColor: mode === "dark" ? "#0F172A" : "#F8FAFC", borderColor: t.border }]}
                         autoCorrect={false}
                         autoCapitalize="none"
+                        editable={!translateDocExtractionFailed}
                       />
                       <TouchableOpacity
                         onPress={handleTranslateSubmit}
-                        disabled={isTranslating || isExtractingTranslateDoc}
-                        style={[styles.translateSubmitBtn, { backgroundColor: (isTranslating || isExtractingTranslateDoc) ? t.border : ACCENT }]}
+                        disabled={isTranslating || isExtractingTranslateDoc || translateDocExtractionFailed}
+                        style={[styles.translateSubmitBtn, { backgroundColor: (isTranslating || isExtractingTranslateDoc || translateDocExtractionFailed) ? t.border : ACCENT }]}
                         activeOpacity={0.8}
                       >
                         {isTranslating

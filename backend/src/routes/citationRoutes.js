@@ -47,6 +47,20 @@ router.post("/extract", async (req, res, next) => {
   }
 
   try {
+    // Fast-fail for non-PDF uploads (e.g. ZIP-based formats like DOCX/EPUB)
+    const fh = await fs.open(req.files.pdf.tempFilePath, "r");
+    const headBuf = Buffer.alloc(8192);
+    const { bytesRead } = await fh.read(headBuf, 0, 8192, 0);
+    await fh.close();
+    const head = headBuf.slice(0, bytesRead);
+    const headHex = head.slice(0, 4).toString("hex");
+    if (headHex === "504b0304" || headHex === "504b0506" || headHex === "504b0708") {
+      return res.status(400).json({ error: "The uploaded file is not a PDF (it appears to be a ZIP-based format such as DOCX or EPUB). Please upload a valid PDF." });
+    }
+    if (head.slice(0, 5).toString("binary") !== "%PDF-" && head.toString("binary").indexOf("%PDF-") === -1) {
+      return res.status(400).json({ error: "The uploaded file does not appear to be a valid PDF." });
+    }
+
     const fullText = await extractFullText(
       req.files.pdf.tempFilePath,
     );

@@ -47,8 +47,8 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
-const MIN_PIN = 6;
-const MAX_PIN = 6;
+const MIN_PIN = 5;
+const MAX_PIN = 5;
 const MAX_DOTS = MAX_PIN; // dots rendered = max possible length
 
 // ── Theme-aware colour palettes ──────────────────────────────────────────────
@@ -641,7 +641,7 @@ export function PINSetupModal({
   const subtitle =
     mode === "setup"
       ? step === "enter"
-        ? "Enter a 4–8 digit PIN"
+        ? "Enter a 5-digit PIN"
         : "Re-enter your PIN to confirm"
       : "Enter your PIN to continue";
 

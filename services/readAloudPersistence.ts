@@ -11,8 +11,8 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
 // Storage keys
-const READ_ALOUD_STATE_KEY = "@pdfiq_read_aloud_state";
-const DOCUMENT_POSITION_KEY = "@pdfiq_document_position";
+const READ_ALOUD_STATE_KEY = "@inscribed_read_aloud_state";
+const DOCUMENT_POSITION_KEY = "@inscribed_document_position";
 
 // Types
 export interface ReadAloudState {

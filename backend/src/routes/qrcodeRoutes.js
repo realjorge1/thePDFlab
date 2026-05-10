@@ -6,6 +6,7 @@ const sharp = require("sharp");
 const fs = require("fs").promises;
 const { tempFilePath, outputPath, toDownloadUrl, cleanupFiles } = require("../utils/fileOutputUtils");
 const { validateOutputChanged } = require("../utils/processingValidator");
+const { safeLoadPDF } = require("../services/pdfService");
 
 /**
  * POST /api/qrcode
@@ -77,7 +78,7 @@ router.post("/", async (req, res, next) => {
 
     // Load PDF & embed QR
     const pdfBytes = await fs.readFile(req.files.pdf.tempFilePath);
-    const pdfDoc = await PDFDocument.load(pdfBytes, {
+    const pdfDoc = await safeLoadPDF(pdfBytes, {
       ignoreEncryption: true,
     });
     const pages = pdfDoc.getPages();

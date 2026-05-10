@@ -161,7 +161,7 @@ export type SelectionAction =
   | "bold"
   | "italic"
   | "underline"
-  | "ask-athemi"
+  | "ask-gozlin"
   | "text-color"
   | "highlight-color";
 

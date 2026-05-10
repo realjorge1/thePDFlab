@@ -22,7 +22,7 @@ const { PDFDocument } = require("pdf-lib");
 // ────────────────────────────────────────────────────────────────────
 
 function tmpPath(ext = ".pdf") {
-  return path.join(os.tmpdir(), `pdflab_repair_${uuidv4()}${ext}`);
+  return path.join(os.tmpdir(), `inscribed_repair_${uuidv4()}${ext}`);
 }
 
 function execAsync(cmd, args, timeoutMs = 30_000) {

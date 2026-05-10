@@ -100,7 +100,7 @@ export class AIService {
       console.error("Chat error:", error);
 
       // Fallback response for development/testing
-      return `I understand you're asking: "${message}". However, I'm unable to connect to the AI backend at the moment. Please ensure your backend is running at the configured URL.`;
+      return `I understand you're asking: "${message}". However, I'm unable to reach the AI service right now. Please check your connection and try again.`;
     }
   }
 

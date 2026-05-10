@@ -11,7 +11,7 @@ export const aiFeatures = [
   {
     id: "summarize",
     name: "Summarize",
-    description: "Get athemi-powered summary",
+    description: "Get gozlin-powered summary",
     color: "#2563EB",
   },
   {

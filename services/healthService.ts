@@ -2,7 +2,7 @@
  * Backend Health Service
  * Checks the backend health endpoint and reports status + latency.
  */
-import { API_BASE_URL } from "@/config/api";
+import { HEALTH_URL } from "@/config/api";
 
 export interface HealthResult {
   status: "connected" | "offline" | "error";
@@ -11,7 +11,7 @@ export interface HealthResult {
 }
 
 export async function checkBackendHealth(): Promise<HealthResult> {
-  const healthUrl = API_BASE_URL.replace("/api", "") + "/health";
+  const healthUrl = HEALTH_URL;
   const start = Date.now();
 
   try {

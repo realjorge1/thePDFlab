@@ -213,7 +213,7 @@ export const SELECTION_BRIDGE_JS = `
     var range = offsetsToRange(startOff, endOff);
     if (!range) { post({ type: 'annotation_applied', success: false, id: id, kind: 'highlight' }); return; }
     var ok = wrapRange(range, {
-      className: 'pdflab-hl',
+      className: 'inscribed-hl',
       attrs: { 'data-hl-id': id },
       style: 'background-color:' + color + ';border-radius:2px;padding:0 1px;'
     });
@@ -226,7 +226,7 @@ export const SELECTION_BRIDGE_JS = `
     var range = offsetsToRange(startOff, endOff);
     if (!range) { post({ type: 'annotation_applied', success: false, id: id, kind: 'underline' }); return; }
     var ok = wrapRange(range, {
-      className: 'pdflab-ul',
+      className: 'inscribed-ul',
       attrs: { 'data-ul-id': id },
       style: 'text-decoration:underline;text-decoration-color:#1976D2;text-decoration-thickness:2px;text-underline-offset:3px;'
     });
@@ -299,7 +299,7 @@ export const SELECTION_BRIDGE_JS = `
     var range = offsetsToRange(startOff, endOff);
     if (!range) { post({ type: 'annotation_applied', success: false, id: id, kind: 'strikethrough' }); return; }
     var ok = wrapRange(range, {
-      className: 'pdflab-st',
+      className: 'inscribed-st',
       attrs: { 'data-st-id': id },
       style: 'text-decoration:line-through;text-decoration-color:#E53935;text-decoration-thickness:2px;'
     });
@@ -344,7 +344,7 @@ export const SELECTION_BRIDGE_JS = `
       while (idx !== -1) {
         if (idx > last) frag.appendChild(document.createTextNode(text.substring(last, idx)));
         var sp = document.createElement('span');
-        sp.setAttribute('data-pdflab-sr', '1');
+        sp.setAttribute('data-inscribed-sr', '1');
         sp.setAttribute('style', SR_NORMAL);
         sp.textContent = text.substring(idx, idx + q.length);
         frag.appendChild(sp); __srSpans.push(sp);

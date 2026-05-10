@@ -6,7 +6,9 @@ import { PINGate } from "@/components/PINGate";
 import { aiFeatures } from "@/constants/ai-features";
 import { GLOBAL_CONTAINER_HEADERS } from "@/constants/featureFlags";
 import { colors } from "@/constants/theme";
+import { useRecentDocuments as useDocLibRecentDocuments } from "@/hooks/useDocLib";
 import { useFileIndex } from "@/hooks/useFileIndex";
+import { useReadingProgressFor } from "@/hooks/useReadingProgress";
 import {
   FileInfo,
   formatDate,
@@ -15,6 +17,7 @@ import {
   markFileAsOpened,
   shareFile,
 } from "@/services/fileService";
+import { cleanFileName } from "@/services/safFolderSync";
 import { useSettings } from "@/services/settingsService";
 import { useTheme } from "@/services/ThemeProvider";
 import { perfMark } from "@/utils/perfLogger";
@@ -67,8 +70,10 @@ function mapFileType(type: string): string {
     case "epub":
       return "epub";
     case "ppt":
+    case "pptx":
       return "ppt";
     case "excel":
+    case "xlsx":
       return "excel";
     case "image":
       return "image";
@@ -111,6 +116,9 @@ export default function HomeScreen() {
     updateLastOpened: updateFileOpened,
     refresh: refreshIndex,
   } = useFileIndex();
+
+  // SAF doclib docs that have actually been opened in the app
+  const { documents: doclibDocs } = useDocLibRecentDocuments();
 
   const [recentFiles, setRecentFiles] = useState<DisplayFile[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
@@ -267,7 +275,7 @@ export default function HomeScreen() {
       const recentFromIndex = getRecentFiles(7);
 
       // Convert UnifiedFileRecord to DisplayFile for display
-      const convertedFiles: DisplayFile[] = recentFromIndex.map((f) => ({
+      const convertedIndex: DisplayFile[] = recentFromIndex.map((f) => ({
         id: f.id,
         name: f.name,
         uri: f.uri,
@@ -280,6 +288,32 @@ export default function HomeScreen() {
         lastOpened: f.lastOpenedAt,
         source: f.source,
       }));
+
+      // Also include SAF doclib docs that have been opened in-app and aren't already in the unified index
+      const indexUris = new Set(recentFromIndex.map((f) => f.uri));
+      const convertedDoclib: DisplayFile[] = doclibDocs
+        .filter((d) => !indexUris.has(d.uri))
+        .map((d) => {
+          const cleanName = cleanFileName(d.name);
+          return {
+            id: `saf:${d.uri}`,
+            name: cleanName,
+            uri: d.uri,
+            size: d.size || 0,
+            type: mapFileType(d.type),
+            mimeType: d.mimeType || "application/octet-stream",
+            lastModified: d.lastOpened!,
+            dateAdded: d.lastModified,
+            dateModified: d.lastModified,
+            lastOpened: d.lastOpened!,
+            source: "picked",
+          };
+        });
+
+      // Merge, sort by recency, cap at 7
+      const convertedFiles = [...convertedIndex, ...convertedDoclib]
+        .sort((a, b) => (b.lastOpened ?? 0) - (a.lastOpened ?? 0))
+        .slice(0, 7);
 
       setRecentFiles(convertedFiles);
     } catch (error) {
@@ -308,7 +342,7 @@ export default function HomeScreen() {
     } finally {
       setLoading(false);
     }
-  }, [getRecentFiles]);
+  }, [getRecentFiles, doclibDocs]);
 
   // Load on focus (throttled) and when allFiles changes
   useFocusEffect(
@@ -359,25 +393,30 @@ export default function HomeScreen() {
       await markFileAsOpened(file.id);
       await updateFileOpened(file.id);
 
+      // expo-router applies a net 1-decode to params, which corrupts SAF
+      // content:// URIs (literal ':' and '/' in doc-ID → EISDIR). Pre-encode
+      // so the viewer receives the original URI after the implicit decode.
+      const safeUri = encodeURIComponent(file.uri);
+
       if (file.type === "pdf") {
         router.push({
           pathname: "/pdf-viewer",
-          params: { uri: file.uri, name: file.name },
+          params: { uri: safeUri, name: file.name },
         });
       } else if (file.type === "word") {
         (router as any).push({
           pathname: "/docx-viewer",
-          params: { uri: file.uri, name: file.name },
+          params: { uri: safeUri, name: file.name },
         });
       } else if (file.type === "epub") {
         router.push({
           pathname: "/epub-viewer",
-          params: { uri: file.uri, name: file.name },
+          params: { uri: safeUri, name: file.name },
         });
       } else if (file.type === "ppt") {
         router.push({
           pathname: "/ppt-viewer",
-          params: { uri: file.uri, name: file.name },
+          params: { uri: safeUri, name: file.name },
         });
       } else if (
         ["jpg", "jpeg", "png", "gif", "webp", "heic"].includes(
@@ -387,7 +426,7 @@ export default function HomeScreen() {
       ) {
         router.push({
           pathname: "/image-viewer",
-          params: { uri: file.uri, name: file.name, type: file.mimeType },
+          params: { uri: safeUri, name: file.name, type: file.mimeType },
         });
       } else {
         setFileTypeOptionsFile(file);
@@ -498,7 +537,7 @@ export default function HomeScreen() {
                 GLOBAL_CONTAINER_HEADERS && styles.greetingSectionEnhanced,
               ]}
             >
-              <Text style={styles.greetingName}>PDFlab</Text>
+              <Text style={styles.greetingName}>inScribed</Text>
             </View>
             <TouchableOpacity
               onPress={() => router.push("/settings" as any)}
@@ -636,7 +675,7 @@ export default function HomeScreen() {
                       {/* AI Card */}
                       <TouchableOpacity
                         style={styles.bentoCardMedium}
-                        onPress={() => router.push("/ai")}
+                        onPress={() => router.push("/gozlin")}
                         activeOpacity={0.85}
                       >
                         <GradientView
@@ -652,7 +691,7 @@ export default function HomeScreen() {
                           <View style={styles.aiTopRow}>
                             <AILogoBadge size={30} />
                             <Text style={styles.bentoMediumTitle}>
-                              athemi AI
+                              gozlin
                             </Text>
                           </View>
                           <View style={styles.aiFeatureTextArea}>
@@ -730,7 +769,7 @@ export default function HomeScreen() {
                       style={styles.bentoCardWide}
                       onPress={() =>
                         router.push({
-                          pathname: "/(tabs)/library",
+                          pathname: "/library",
                           params: { sourceFilter: "downloaded" },
                         })
                       }
@@ -842,24 +881,15 @@ export default function HomeScreen() {
                     ]}
                   >
                     <View style={styles.filesContainer}>
-                      {filteredFiles.map((file, index) => (
-                        <React.Fragment key={file.id}>
-                          <FileCard
-                            file={file}
-                            theme={t}
-                            textColor={textColor}
-                            onPress={handleFilePress}
-                            getFileIcon={getFileIcon}
-                          />
-                          {index < filteredFiles.length - 1 && (
-                            <View
-                              style={[
-                                styles.fileDivider,
-                                { backgroundColor: t.borderLight },
-                              ]}
-                            />
-                          )}
-                        </React.Fragment>
+                      {filteredFiles.map((file) => (
+                        <FileCard
+                          key={file.id}
+                          file={file}
+                          theme={t}
+                          textColor={textColor}
+                          onPress={handleFilePress}
+                          getFileIcon={getFileIcon}
+                        />
                       ))}
                     </View>
                   </View>
@@ -898,7 +928,7 @@ export default function HomeScreen() {
                     </Text>
                     <TouchableOpacity
                       style={styles.emptyButton}
-                      onPress={() => router.push("/library")}
+                      onPress={() => router.push("/(tabs)/library" as any)}
                     >
                       <GradientView
                         colors={[colors.gradientStart, colors.gradientMid]}
@@ -907,7 +937,7 @@ export default function HomeScreen() {
                         style={styles.emptyButtonGradient}
                       >
                         <FolderOpen color="white" size={20} strokeWidth={2} />
-                        <Text style={styles.emptyButtonText}>Your Library</Text>
+                        <Text style={styles.emptyButtonText}>Document Library</Text>
                       </GradientView>
                     </TouchableOpacity>
                   </View>
@@ -1069,37 +1099,69 @@ const FileCard = React.memo(function FileCard({
 }: FileCardProps) {
   const { Icon, color, bgColor } = getFileIcon(file.type);
   const handlePress = useCallback(() => onPress(file), [file, onPress]);
+  const progressEntry = useReadingProgressFor(file.uri);
+  const progress = progressEntry?.progress ?? 0;
+  const showProgress = progress > 0;
 
   return (
-    <TouchableOpacity
-      style={styles.flatFileRow}
-      onPress={handlePress}
-      activeOpacity={0.7}
-    >
-      <View style={[styles.fileIconBox, { backgroundColor: bgColor }]}>
-        <Icon color={color} size={20} strokeWidth={2} />
-      </View>
-      <View style={styles.fileContent}>
-        <Text
-          style={[styles.modernFileName, { color: textColor }]}
-          numberOfLines={1}
-        >
-          {file.name}
-        </Text>
-        <View style={styles.fileMetaRow}>
-          <Text style={[styles.modernFileMeta, { color: theme.textSecondary }]}>
-            {formatFileSize(file.size)}
-          </Text>
-          <View style={styles.metaDot} />
-          <Text style={[styles.modernFileMeta, { color: theme.textSecondary }]}>
-            {formatDate(file.lastOpened || file.dateAdded)}
-          </Text>
+    <View style={styles.fileCardWrapper}>
+      <TouchableOpacity
+        style={styles.flatFileRow}
+        onPress={handlePress}
+        activeOpacity={0.7}
+      >
+        <View style={[styles.fileIconBox, { backgroundColor: bgColor }]}>
+          <Icon color={color} size={20} strokeWidth={2} />
         </View>
-      </View>
-      <View style={styles.fileArrow}>
-        <ChevronRight color={theme.textTertiary} size={16} strokeWidth={2.5} />
-      </View>
-    </TouchableOpacity>
+        <View style={styles.fileContent}>
+          <Text
+            style={[styles.modernFileName, { color: textColor }]}
+            numberOfLines={1}
+          >
+            {file.name}
+          </Text>
+          <View style={styles.fileMetaRow}>
+            <Text
+              style={[styles.modernFileMeta, { color: theme.textSecondary }]}
+            >
+              {formatFileSize(file.size)}
+            </Text>
+            <View style={styles.metaDot} />
+            <Text
+              style={[styles.modernFileMeta, { color: theme.textSecondary }]}
+            >
+              {formatDate(file.lastOpened || file.dateAdded)}
+            </Text>
+          </View>
+        </View>
+        <View style={styles.fileArrow}>
+          <ChevronRight
+            color={theme.textTertiary}
+            size={16}
+            strokeWidth={2.5}
+          />
+        </View>
+      </TouchableOpacity>
+      {showProgress && (
+        <View
+          style={[
+            styles.fileProgressTrack,
+            { backgroundColor: theme.borderLight },
+          ]}
+          pointerEvents="none"
+        >
+          <View
+            style={[
+              styles.fileProgressFill,
+              {
+                width: `${Math.max(2, Math.min(100, progress * 100))}%`,
+                backgroundColor: theme.primary,
+              },
+            ]}
+          />
+        </View>
+      )}
+    </View>
   );
 });
 
@@ -1613,15 +1675,28 @@ const styles = StyleSheet.create({
   filesContainer: {
     gap: 0,
   },
+  fileCardWrapper: {
+    position: "relative",
+  },
   flatFileRow: {
     flexDirection: "row",
     alignItems: "center",
     paddingVertical: 8,
     paddingHorizontal: 10,
   },
-  fileDivider: {
-    height: StyleSheet.hairlineWidth,
-    marginHorizontal: 16,
+  fileProgressTrack: {
+    position: "absolute",
+    left: 12,
+    right: 12,
+    bottom: 2,
+    height: 2,
+    borderRadius: 1,
+    overflow: "hidden",
+    opacity: 0.85,
+  },
+  fileProgressFill: {
+    height: "100%",
+    borderRadius: 1,
   },
   fileIconBox: {
     width: 38,

@@ -106,11 +106,15 @@ function isImage(ext: string, type?: string, mime?: string): boolean {
  */
 export function openFile(router: Router, params: OpenFileParams): boolean {
   const ext = getExtension(params);
+  // Pre-encode the URI: expo-router applies a net 1-decode to params, which
+  // mangles SAF tree-document URIs and fails open with EISDIR. The viewer
+  // gets the original URI back via the implicit decode.
+  const safeUri = encodeURIComponent(params.uri);
 
   if (isPdf(ext, params.type, params.mimeType)) {
     router.push({
       pathname: "/pdf-viewer",
-      params: { uri: params.uri, name: params.name },
+      params: { uri: safeUri, name: params.name },
     });
     return true;
   }
@@ -118,7 +122,7 @@ export function openFile(router: Router, params: OpenFileParams): boolean {
   if (isDocx(ext, params.type)) {
     (router as any).push({
       pathname: "/docx-viewer",
-      params: { uri: params.uri, name: params.name },
+      params: { uri: safeUri, name: params.name },
     });
     return true;
   }
@@ -126,7 +130,7 @@ export function openFile(router: Router, params: OpenFileParams): boolean {
   if (isEpub(ext, params.type, params.mimeType)) {
     router.push({
       pathname: "/epub-viewer",
-      params: { uri: params.uri, name: params.name },
+      params: { uri: safeUri, name: params.name },
     });
     return true;
   }
@@ -134,7 +138,7 @@ export function openFile(router: Router, params: OpenFileParams): boolean {
   if (isPpt(ext, params.type, params.mimeType)) {
     router.push({
       pathname: "/ppt-viewer",
-      params: { uri: params.uri, name: params.name },
+      params: { uri: safeUri, name: params.name },
     });
     return true;
   }
@@ -143,7 +147,7 @@ export function openFile(router: Router, params: OpenFileParams): boolean {
     router.push({
       pathname: "/image-viewer",
       params: {
-        uri: params.uri,
+        uri: safeUri,
         name: params.name,
         type: params.mimeType || "image/jpeg",
       },

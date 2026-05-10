@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.6
 #
-# PDFlab backend — Node + LibreOffice image for Render.com deploy.
+# Inscribed backend — Node + LibreOffice image for Render.com deploy.
 # LibreOffice Impress is what backs /api/pptx/convert (PPTX → PDF).
 
 # ─── Build stage: install node_modules with native build tools ───────────────

@@ -1,16 +1,19 @@
 import Constants from "expo-constants";
 
-// Get API URL from app.json extra config or use default.
+// API URL resolution order:
+//   1. EXPO_PUBLIC_API_URL — set per-profile in eas.json or .env (recommended
+//      for production builds; e.g. "https://your-app.onrender.com/api").
+//   2. app.json → expo.extra.apiUrl — LAN address for on-device dev.
+//   3. http://localhost:5000/api — Hermes/web fallback for local emulators.
 //
-// For local development with a real device on the same LAN:
-//   1. Find your PC's local IP (e.g. 192.168.1.42)
-//   2. Set "apiUrl" in app.json → expo.extra:
-//        "extra": { "apiUrl": "http://192.168.1.42:5000/api" }
-//   3. Restart the Expo dev server
-//
-// Default uses localhost backend (runs on port 5000)
+// IMPORTANT: cleartext (HTTP) traffic is only permitted to the hosts listed
+// in android/app/src/main/res/xml/network_security_config.xml. If you point
+// the LAN URL at a new IP, add it there or release builds will silently fail
+// with "Network request failed".
 export const API_BASE_URL =
-  Constants.expoConfig?.extra?.apiUrl || "http://localhost:5000/api";
+  process.env.EXPO_PUBLIC_API_URL ||
+  Constants.expoConfig?.extra?.apiUrl ||
+  "http://localhost:5000/api";
 
 export const API_ENDPOINTS = {
   // PDF Operations
@@ -121,25 +124,64 @@ export const API_ENDPOINTS = {
     CITATIONS_FORMAT: `${API_BASE_URL}/citations/format`,
   },
 
+  // GozlinScientia
+  SCIENTIFIC_CALC: {
+    CALCULATE: `${API_BASE_URL}/scientific-calc/calculate`,
+    SUGGESTIONS: `${API_BASE_URL}/scientific-calc/suggestions`,
+  },
+
   // Health check
   HEALTH: `${API_BASE_URL.replace("/api", "")}/health`,
 };
 
-// Helper function to wake up backend (for free tier hosting)
-export async function wakeUpBackend(): Promise<boolean> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 10000);
-  try {
-    await fetch(API_BASE_URL.replace("/api", ""), {
-      method: "GET",
-      signal: controller.signal,
-    });
-    return true;
-  } catch {
-    return false;
-  } finally {
-    clearTimeout(timer);
+export const BACKEND_BASE = API_BASE_URL.replace("/api", "");
+export const HEALTH_URL = `${BACKEND_BASE}/health`;
+
+// Render free-tier cold starts can take up to 60s.
+// We poll /health with short individual timeouts rather than one long request,
+// so the OS can surface network errors quickly between attempts.
+export async function wakeUpBackend(
+  onStatus?: (msg: string) => void,
+  maxWaitMs = 65_000,
+): Promise<boolean> {
+  const deadline = Date.now() + maxWaitMs;
+  let attempt = 0;
+
+  while (Date.now() < deadline) {
+    attempt++;
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) break;
+
+    const timeoutMs = Math.min(10_000, remaining);
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+    try {
+      // Neutral status — never expose "server" / "backend" wording in UI.
+      onStatus?.("Please wait…");
+
+      const res = await fetch(HEALTH_URL, {
+        method: "GET",
+        signal: controller.signal,
+        cache: "no-store",
+      });
+      clearTimeout(timer);
+
+      if (res.ok) {
+        return true;
+      }
+    } catch {
+      clearTimeout(timer);
+    }
+
+    // Short pause before retry
+    const retryDelay = Math.min(3_000, deadline - Date.now());
+    if (retryDelay > 0) {
+      await new Promise<void>((r) => setTimeout(r, retryDelay));
+    }
   }
+
+  return false;
 }
 
 // Helper function for API calls with error handling and timeout

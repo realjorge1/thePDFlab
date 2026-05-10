@@ -134,6 +134,7 @@ app.use("/api/header-footer", require("./routes/headerFooterRoutes"));
 app.use("/api/highlight-export", require("./routes/highlightExportRoutes"));
 app.use("/api/citations", require("./routes/citationRoutes"));
 app.use("/api/pptx", require("./routes/pptxRoutes"));
+app.use("/api/scientific-calc", require("./routes/scientificCalcRoutes"));
 
 // Serve output files (for tools that return download URLs)
 const { OUTPUTS_DIR, startOutputCleanup } = require("./utils/fileOutputUtils");
@@ -160,7 +161,7 @@ function healthPayload() {
 app.get("/", (req, res) => {
   res.json({
     status: "ok",
-    message: "PDFlab Backend API is running!",
+    message: "Inscribed Backend API is running!",
     version: "1.0.0",
     endpoints: {
       pdf: "/api/pdf/*",
@@ -197,7 +198,7 @@ const server = app.listen(config.port, config.host, () => {
   server.headersTimeout = 70000;
 
   logger.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-  logger.info(`PDFlab Backend started`);
+  logger.info(`Inscribed Backend started`);
   logger.info(`Listening on http://${config.host}:${config.port}`);
   logger.info(`Environment: ${config.env}`);
   logger.info(`Temp directory: ${config.tempDir}`);

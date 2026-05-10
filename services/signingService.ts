@@ -73,16 +73,7 @@ export async function applyVisualSignature(params: {
   const blob = await response.blob();
   const outputName = `signed_${fileName || "document.pdf"}`;
   const outputUri = `${FileSystem.cacheDirectory}${outputName}`;
-
-  const reader = new FileReader();
-  const base64 = await new Promise<string>((resolve, reject) => {
-    reader.onload = () => {
-      const result = reader.result as string;
-      resolve(result.split(",")[1]);
-    };
-    reader.onerror = reject;
-    reader.readAsDataURL(blob);
-  });
+  const base64 = await blobToBase64(blob);
 
   await FileSystem.writeAsStringAsync(outputUri, base64, {
     encoding: FileSystem.EncodingType.Base64,
@@ -171,9 +162,34 @@ export async function applyDigitalSignature(params: {
   const blob = await response.blob();
   const outputName = `digitally_signed_${fileName || "document.pdf"}`;
   const outputUri = `${FileSystem.cacheDirectory}${outputName}`;
+  const base64 = await blobToBase64(blob);
 
-  const reader = new FileReader();
-  const base64 = await new Promise<string>((resolve, reject) => {
+  await FileSystem.writeAsStringAsync(outputUri, base64, {
+    encoding: FileSystem.EncodingType.Base64,
+  });
+
+  return { uri: outputUri, fileName: outputName };
+}
+
+// Faster blob → base64: arrayBuffer() + chunked btoa avoids the
+// data-URL prefix overhead and reduces peak memory vs FileReader.
+async function blobToBase64(blob: Blob): Promise<string> {
+  if (typeof (blob as any).arrayBuffer === "function") {
+    try {
+      const arrayBuf = await blob.arrayBuffer();
+      const uint8 = new Uint8Array(arrayBuf);
+      const CHUNK = 8192;
+      let binary = "";
+      for (let i = 0; i < uint8.length; i += CHUNK) {
+        binary += String.fromCharCode(...uint8.subarray(i, i + CHUNK));
+      }
+      return btoa(binary);
+    } catch {
+      // fall through to FileReader fallback
+    }
+  }
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
     reader.onload = () => {
       const result = reader.result as string;
       resolve(result.split(",")[1]);
@@ -181,12 +197,6 @@ export async function applyDigitalSignature(params: {
     reader.onerror = reject;
     reader.readAsDataURL(blob);
   });
-
-  await FileSystem.writeAsStringAsync(outputUri, base64, {
-    encoding: FileSystem.EncodingType.Base64,
-  });
-
-  return { uri: outputUri, fileName: outputName };
 }
 
 /**

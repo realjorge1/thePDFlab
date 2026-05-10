@@ -525,6 +525,10 @@ export function getDocxDisplayName(fileUri: string): string {
   }
 }
 
+// In-memory cache: source URI → cached local file URI.
+// Avoids re-copying the same SAF file on every open within an app session.
+const _normalizeCache = new Map<string, string>();
+
 /**
  * Normalize a DOCX file URI for viewing
  * Copies SAF URIs to cache if needed
@@ -533,6 +537,16 @@ export async function normalizeDocxUri(fileUri: string): Promise<string> {
   try {
     // Handle SAF URIs (content://)
     if (fileUri.startsWith("content://")) {
+      // Return cached copy if it still exists on disk.
+      const hit = _normalizeCache.get(fileUri);
+      if (hit) {
+        try {
+          const info = await FileSystem.getInfoAsync(hit);
+          if (info.exists) return hit;
+        } catch {}
+        _normalizeCache.delete(fileUri);
+      }
+
       const fileName = `docx_${Date.now()}.docx`;
       const cacheUri = `${FileSystem.cacheDirectory}${fileName}`;
 
@@ -541,7 +555,7 @@ export async function normalizeDocxUri(fileUri: string): Promise<string> {
         to: cacheUri,
       });
 
-      console.log("[DocxService] Copied SAF URI to cache:", cacheUri);
+      _normalizeCache.set(fileUri, cacheUri);
       return cacheUri;
     }
 

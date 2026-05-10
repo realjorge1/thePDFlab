@@ -11,6 +11,7 @@ const {
 } = require("pdf-lib");
 const fs = require("fs").promises;
 const { outputPath, toDownloadUrl } = require("../utils/fileOutputUtils");
+const { safeLoadPDF } = require("../services/pdfService");
 
 const ANNOTATION_TYPES = new Set([
   "Highlight",
@@ -63,7 +64,7 @@ router.post("/", async (req, res, next) => {
 
   try {
     const pdfBytes = await fs.readFile(req.files.pdf.tempFilePath);
-    const pdfDoc = await PDFDocument.load(pdfBytes, {
+    const pdfDoc = await safeLoadPDF(pdfBytes, {
       ignoreEncryption: true,
     });
     const pages = pdfDoc.getPages();

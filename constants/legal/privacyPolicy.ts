@@ -1,5 +1,5 @@
 /**
- * Privacy Policy content for PDFlab
+ * Privacy Policy content for Inscribed
  * Structured data extracted from the original legal document.
  */
 
@@ -21,21 +21,20 @@ export const PRIVACY_POLICY_LAST_UPDATED = "February 2026";
 export const PRIVACY_POLICY_TITLE = "Privacy Policy";
 
 export const PRIVACY_POLICY_SUBTITLE =
-  "Freemium · Auth · Payments · Google Drive Backup · AI Processing";
+  "Freemium · Payments · AI Processing";
 
 export const PRIVACY_POLICY_SECTIONS: LegalSection[] = [
   {
     heading: "1. Introduction",
     paragraphs: [
-      'Welcome to PDFlab ("we," "our," or "us").',
-      "PDFlab is a document management and productivity application that allows users to:",
+      'Welcome to Inscribed ("we," "our," or "us").',
+      "Inscribed is a document management and productivity application that allows users to:",
     ],
     bullets: [
       "View, create, edit, and convert documents",
       "Use AI-powered document assistance",
       "Download legally available open-source materials",
       "Store files locally",
-      "Back up files to Google Drive",
       "Access premium features via subscription",
     ],
     subsections: [
@@ -61,9 +60,9 @@ export const PRIVACY_POLICY_SECTIONS: LegalSection[] = [
     heading: "2. Information We Collect",
     subsections: [
       {
-        heading: "2.1 Information Collected Without Account (Free Tier)",
+        heading: "2.1 Information We Collect",
         paragraphs: [
-          "If you use the app without creating an account, we may collect:",
+          "When you use the app, we may collect:",
         ],
         bullets: [
           "Device type and OS version",
@@ -79,29 +78,16 @@ export const PRIVACY_POLICY_SECTIONS: LegalSection[] = [
         ],
       },
       {
-        heading: "2.2 Information Collected With Account Registration",
-        paragraphs: [
-          "When authentication is implemented and you create an account, we may collect:",
-        ],
-        bullets: [
-          "Name",
-          "Email address",
-          "Encrypted authentication credentials",
-          "Subscription status",
-          "Account preferences",
-        ],
-      },
-      {
-        heading: "2.3 Payment Information",
+        heading: "2.2 Payment Information",
         paragraphs: ["If you purchase premium features:"],
         bullets: [
           "Payments are processed through third-party payment processors (e.g., Google Play Billing, Apple In-App Purchases, or other processors).",
           "We do not store your full payment card details.",
-          "We may store transaction IDs and subscription status for account management.",
+          "We may store transaction IDs and subscription status for subscription management.",
         ],
       },
       {
-        heading: "2.4 Document and File Data",
+        heading: "2.3 Document and File Data",
         paragraphs: ["You may upload, create, edit, or process:"],
         bullets: [
           "PDF files",
@@ -120,22 +106,10 @@ export const PRIVACY_POLICY_SECTIONS: LegalSection[] = [
         bullets: [
           "Stored locally on your device",
           "Processed on secure backend servers",
-          "Backed up to Google Drive upon your request",
         ],
       },
       {
-        heading: "2.5 Google Drive Backup",
-        paragraphs: ["If you choose to connect Google Drive:"],
-        bullets: [
-          "We request permission to access your Google Drive only for backup and restore functionality.",
-          "We do not access unrelated files.",
-          "Access tokens are stored securely.",
-          "You may revoke access at any time through your Google account settings.",
-          "We comply with Google API Services User Data Policy.",
-        ],
-      },
-      {
-        heading: "2.6 AI Processing",
+        heading: "2.4 AI Processing",
         paragraphs: ["When you use AI features:"],
         bullets: [
           "Submitted content may be securely transmitted to third-party AI providers.",
@@ -151,8 +125,7 @@ export const PRIVACY_POLICY_SECTIONS: LegalSection[] = [
     paragraphs: ["We use your information to:"],
     bullets: [
       "Provide document tools and AI features",
-      "Process subscriptions and manage accounts",
-      "Enable file backups and restores",
+      "Process subscriptions",
       "Improve app performance",
       "Prevent fraud and abuse",
       "Comply with legal obligations",
@@ -178,15 +151,8 @@ export const PRIVACY_POLICY_SECTIONS: LegalSection[] = [
     heading: "5. Data Retention",
     paragraphs: ["We retain data:"],
     bullets: [
-      "While your account is active",
       "As required for subscription management",
       "As required by law",
-    ],
-    subsections: [
-      {
-        heading: "",
-        paragraphs: ["You may request account deletion at any time."],
-      },
     ],
   },
   {
@@ -196,7 +162,6 @@ export const PRIVACY_POLICY_SECTIONS: LegalSection[] = [
       "HTTPS encryption",
       "Secure backend architecture",
       "Access controls",
-      "Token-based authentication",
       "Industry-standard safeguards",
     ],
     subsections: [
@@ -222,7 +187,7 @@ export const PRIVACY_POLICY_SECTIONS: LegalSection[] = [
       {
         heading: "",
         paragraphs: [
-          "To exercise your rights, contact us at support@pdflab.app.",
+          "To exercise your rights, contact us via our Facebook page: facebook.com/the-inscribedsoftware",
         ],
       },
     ],
@@ -249,6 +214,6 @@ export const PRIVACY_POLICY_SECTIONS: LegalSection[] = [
   },
   {
     heading: "11. Contact",
-    paragraphs: ["PDFlab\nEmail: support@pdflab.app"],
+    paragraphs: ["Inscribed\nFacebook: facebook.com/the-inscribedsoftware"],
   },
 ];

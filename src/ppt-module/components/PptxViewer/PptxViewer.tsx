@@ -227,8 +227,6 @@ const PptxViewer = forwardRef<PptxViewerHandle, PptxViewerProps>(
           bounces={false}
           showsHorizontalScrollIndicator={false}
           showsVerticalScrollIndicator={false}
-          // Android hardware acceleration
-          androidHardwareAccelerationDisabled={false}
           // Send a post-message once the WebView HTML is fully loaded
           onLoad={handleWebViewLoad}
           onMessage={handleMessage}

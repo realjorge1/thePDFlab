@@ -11,6 +11,7 @@ const {
   toDownloadUrl,
   cleanupFiles,
 } = require("../utils/fileOutputUtils");
+const { safeLoadPDF } = require("../services/pdfService");
 
 /**
  * POST /api/extract-images
@@ -39,7 +40,7 @@ router.post("/", async (req, res, next) => {
     // nesting depth. Handles JPEG (DCTDecode), JP2 (JPXDecode), and
     // raw/FlateDecode pixel data.
     try {
-      const pdfDoc = await PDFDocument.load(pdfBytes, {
+      const pdfDoc = await safeLoadPDF(pdfBytes, {
         ignoreEncryption: true,
       });
 

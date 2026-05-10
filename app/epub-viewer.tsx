@@ -75,6 +75,7 @@ import {
   saveStrikethrough,
   saveUnderline,
 } from "@/services/viewerStorageService";
+import { setReadingProgress } from "@/services/readingProgressService";
 import type { Highlight, Strikethrough, Underline } from "@/src/types/document-viewer.types";
 
 import {
@@ -381,7 +382,7 @@ export default function EpubViewerScreen() {
   <div id="area"></div>
   <script>
     var book=null,rendition=null,currentCfi=null;
-    var __pdflabAnnotations=[];
+    var __inscribedAnnotations=[];
 
     function sendMsg(type,data){
       window.ReactNativeWebView.postMessage(JSON.stringify({type:type,data:data||{}}));
@@ -531,17 +532,17 @@ export default function EpubViewerScreen() {
 
           // ── Reapply persisted annotations on each render ──────
           rendition.on('rendered',function(){
-            if(!__pdflabAnnotations||!__pdflabAnnotations.length) return;
+            if(!__inscribedAnnotations||!__inscribedAnnotations.length) return;
             setTimeout(function(){
               try{
                 var contents=rendition.getContents();
                 if(!contents||!contents.length) return;
                 for(var ci=0;ci<contents.length;ci++){
                   var d=contents[ci].document;
-                  if(!d||!d.body||d.__pdflabAnnotated) continue;
-                  d.__pdflabAnnotated=true;
-                  for(var ai=0;ai<__pdflabAnnotations.length;ai++){
-                    var ann=__pdflabAnnotations[ai];
+                  if(!d||!d.body||d.__inscribedAnnotated) continue;
+                  d.__inscribedAnnotated=true;
+                  for(var ai=0;ai<__inscribedAnnotations.length;ai++){
+                    var ann=__inscribedAnnotations[ai];
                     var q=ann.text;if(!q) continue;
                     var walker=d.createTreeWalker(d.body,NodeFilter.SHOW_TEXT,null,false);
                     var nd;
@@ -559,20 +560,20 @@ export default function EpubViewerScreen() {
                         if(ann.kind==='highlight'){
                           sp.style.backgroundColor=ann.color||'rgba(255,235,59,0.4)';
                           sp.style.borderRadius='2px';sp.style.padding='0 1px';
-                          sp.className='pdflab-hl';
+                          sp.className='inscribed-hl';
                           sp.setAttribute('data-hl-id',ann.id);
                         }else if(ann.kind==='underline'){
                           sp.style.textDecoration='underline';
                           sp.style.textDecorationColor='#1976D2';
                           sp.style.textDecorationThickness='2px';
                           sp.style.textUnderlineOffset='3px';
-                          sp.className='pdflab-ul';
+                          sp.className='inscribed-ul';
                           sp.setAttribute('data-ul-id',ann.id);
                         }else if(ann.kind==='strikethrough'){
                           sp.style.textDecoration='line-through';
                           sp.style.textDecorationColor='#E53935';
                           sp.style.textDecorationThickness='2px';
-                          sp.className='pdflab-st';
+                          sp.className='inscribed-st';
                           sp.setAttribute('data-st-id',ann.id);
                         }
                         r.insertNode(sp);
@@ -621,7 +622,7 @@ export default function EpubViewerScreen() {
     function goToHref(href){if(rendition)rendition.display(href);}
     function changeTheme(t){if(rendition)rendition.themes.select(t);document.body.style.background=t==='dark'?'#1a1a1a':t==='sepia'?'#f5f1e8':'#ffffff';}
     function changeFontSize(s){if(rendition)rendition.themes.fontSize(s+"%");}
-    function setAnnotations(anns){__pdflabAnnotations=anns||[];}
+    function setAnnotations(anns){__inscribedAnnotations=anns||[];}
 
     // Poll for ReactNativeWebView bridge before signaling ready
     (function waitForBridge(){
@@ -774,6 +775,9 @@ export default function EpubViewerScreen() {
                 percentage: loc.percentage,
                 lastRead: Date.now(),
               }).catch(console.error);
+              setReadingProgress(uri, (loc.percentage || 0) / 100, {
+                source: "epub",
+              }).catch(() => {});
             }
             break;
           }
@@ -939,7 +943,7 @@ export default function EpubViewerScreen() {
                   span.style.backgroundColor=${safeColor};
                   span.style.borderRadius='2px';
                   span.style.padding='0 1px';
-                  span.className='pdflab-hl';
+                  span.className='inscribed-hl';
                   span.setAttribute('data-hl-id',${safeId});
                   range.insertNode(span);
                 }catch(e){}
@@ -985,7 +989,7 @@ export default function EpubViewerScreen() {
                 span.style.textDecorationColor='#1976D2';
                 span.style.textDecorationThickness='2px';
                 span.style.textUnderlineOffset='3px';
-                span.className='pdflab-ul';
+                span.className='inscribed-ul';
                 span.setAttribute('data-ul-id',${safeId});
                 range.insertNode(span);
               }catch(e){}
@@ -1027,7 +1031,7 @@ export default function EpubViewerScreen() {
                 span.style.textDecoration='line-through';
                 span.style.textDecorationColor='#E53935';
                 span.style.textDecorationThickness='2px';
-                span.className='pdflab-st';
+                span.className='inscribed-st';
                 span.setAttribute('data-st-id',${safeId});
                 range.insertNode(span);
               }catch(e){}
@@ -1070,7 +1074,7 @@ export default function EpubViewerScreen() {
 
   const handleSelectionSearch = useCallback(() => {
     if (!selectionText) return;
-    router.push({ pathname: "/ai", params: { prompt: selectionText } });
+    router.push({ pathname: "/gozlin", params: { prompt: selectionText } });
     setSelectionVisible(false);
   }, [selectionText]);
 

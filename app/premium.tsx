@@ -12,6 +12,7 @@ import { useTheme } from "@/services/ThemeProvider";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import {
+  Atom,
   BarChart3,
   FileText,
   Lock,
@@ -19,6 +20,7 @@ import {
   Package,
   PenSquare,
   Search,
+  Sparkles,
   Zap,
 } from "lucide-react-native";
 import React, { useState } from "react";
@@ -36,8 +38,8 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 
 // Pricing — single source of truth
-const MONTHLY_PRICE = 4.99;
-const ANNUAL_PRICE = 46.89;
+const MONTHLY_PRICE = 3.49;
+const ANNUAL_PRICE = 31.88;
 const ANNUAL_IF_MONTHLY = parseFloat((MONTHLY_PRICE * 12).toFixed(2)); // 59.88
 const ANNUAL_SAVINGS = parseFloat(
   (ANNUAL_IF_MONTHLY - ANNUAL_PRICE).toFixed(2),
@@ -523,6 +525,53 @@ export default function PremiumScreen() {
                         { backgroundColor: "#22C55E" },
                       ]}
                     />
+                  </View>
+                </View>
+              </View>
+            ))}
+          </View>
+
+          {/* ── Gozlin WorkSpace card ── */}
+          <View
+            style={[
+              styles.featCard,
+              {
+                backgroundColor: themeColors.card,
+                borderColor: "#9333EA" + "40",
+                borderWidth: 1.5,
+                marginTop: 14,
+              },
+            ]}
+          >
+            <View style={styles.featCardHeader}>
+              <View style={[styles.featCardIconWrap, { backgroundColor: "#9333EA18" }]}>
+                <Sparkles size={14} color="#9333EA" />
+              </View>
+              <Text style={[styles.featCardTitle, { color: themeColors.text }]}>
+                Gozlin WorkSpace
+              </Text>
+            </View>
+
+            {[
+              { label: "AI-Powered Notebook", icon: Zap, detail: "Notes, tasks, charts & AI in one doc" },
+              { label: "GozlinScientia", icon: Atom, detail: "Scientific calc across all disciplines" },
+              { label: "Persistent Sessions", icon: FileText, detail: "Auto-saves exactly where you left off" },
+              { label: "Smart Summaries", icon: BarChart3, detail: "Convert notes to summaries or tasks" },
+            ].map((feat, idx) => (
+              <View key={idx}>
+                {idx > 0 && (
+                  <View style={[styles.featDivider, { backgroundColor: themeColors.border }]} />
+                )}
+                <View style={styles.featRow}>
+                  <View style={[styles.featIconWrap, { backgroundColor: "#9333EA12" }]}>
+                    <feat.icon size={15} color="#9333EA" />
+                  </View>
+                  <View style={styles.featText}>
+                    <Text style={[styles.featName, { color: themeColors.text }]}>{feat.label}</Text>
+                    <Text style={[styles.featDetail, { color: themeColors.textSecondary }]}>{feat.detail}</Text>
+                  </View>
+                  <View style={[styles.checkDot, { backgroundColor: "#22C55E20" }]}>
+                    <View style={[styles.checkDotInner, { backgroundColor: "#22C55E" }]} />
                   </View>
                 </View>
               </View>

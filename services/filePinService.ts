@@ -6,7 +6,7 @@
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
-const PIN_KEY = "@pdflab_pinned_files";
+const PIN_KEY = "@inscribed_pinned_files";
 
 /** Maximum number of files that can be pinned simultaneously */
 export const MAX_PINS = 4;

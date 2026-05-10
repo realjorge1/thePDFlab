@@ -165,7 +165,7 @@ export default function QRCodeScreen() {
       const data = await response.json();
       if (!data.downloadUrl) throw new Error("No download URL returned from server");
 
-      const outputDir = `${FileSystem.documentDirectory}pdfiq-outputs/`;
+      const outputDir = `${FileSystem.documentDirectory}inscribed-outputs/`;
       await FileSystem.makeDirectoryAsync(outputDir, { intermediates: true });
       const outputName = `qr_${selectedFile.name}`;
       const outputUri = `${outputDir}${outputName}`;
@@ -386,7 +386,7 @@ const styles = StyleSheet.create({
   },
   backBtn: { width: 40, alignItems: "flex-start" },
   headerTitle: { flex: 1, textAlign: "center", fontSize: 18, fontWeight: "700" },
-  content: { padding: 16, paddingBottom: 40 },
+  content: { paddingHorizontal: 10, paddingTop: 16, paddingBottom: 40 },
   label: { fontSize: 14, fontWeight: "600", marginBottom: 6 },
   input: {
     padding: 12,

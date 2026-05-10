@@ -783,7 +783,7 @@ const styles = StyleSheet.create({
 
   // Scroll
   scroll: { flex: 1 },
-  scrollContent: { padding: 14 },
+  scrollContent: { paddingHorizontal: 8, paddingTop: 14, paddingBottom: 14 },
 
   // PPTX slides
   slideList: { gap: 12 },

@@ -186,8 +186,8 @@ router.post("/split", async (req, res) => {
     // If splitAfterLastPoint is set, append remaining pages as a final range
     if (splitAfterLastPoint && ranges.length > 0) {
       const pdfBytes = await fs.readFile(req.files.pdf.tempFilePath);
-      const { PDFDocument } = require("pdf-lib");
-      const tmpDoc = await PDFDocument.load(pdfBytes, { ignoreEncryption: true });
+      const { safeLoadPDF } = require("../services/pdfService");
+      const tmpDoc = await safeLoadPDF(pdfBytes, { ignoreEncryption: true });
       const totalPages = tmpDoc.getPageCount();
 
       // Find highest page index used in existing ranges
@@ -480,6 +480,7 @@ router.post("/compress", async (req, res) => {
 
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader("Content-Disposition", "attachment; filename=compressed.pdf");
+    res.setHeader("Content-Length", String(compressedSize));
     res.setHeader("X-Processing-Time", `${duration}ms`);
     res.setHeader("X-Original-Size", String(originalSize));
     res.setHeader("X-Compressed-Size", String(compressedSize));

@@ -327,8 +327,33 @@ class ConvertService {
   // Convert PDF to HTML with structured output
   async pdfToHTML(pdfFile) {
     const { parsePDF } = require("../utils/pdfParser");
-    const dataBuffer = await fs.readFile(pdfFile.tempFilePath);
-    const data = await parsePDF(dataBuffer);
+    const pdfService = require("./pdfService");
+    const dataBuffer = await pdfService.readFileBytes(pdfFile);
+
+    // Validate magic bytes — parsePDF crashes obscurely on non-PDF input.
+    if (dataBuffer.length < 5 || dataBuffer.slice(0, 5).toString("binary") !== "%PDF-") {
+      const head = dataBuffer.slice(0, 4).toString("hex");
+      if (head === "504b0304") {
+        throw new Error("This file is a ZIP-based document (DOCX/EPUB/XLSX), not a PDF.");
+      }
+      throw new Error("This file is not a valid PDF and cannot be opened for editing.");
+    }
+
+    let data;
+    try {
+      data = await parsePDF(dataBuffer);
+    } catch (err) {
+      throw new Error(
+        "Could not extract text from this PDF. It may be encrypted, scanned, or corrupted: " +
+          (err.message || "unknown error"),
+      );
+    }
+
+    if (!data?.text || !data.text.trim()) {
+      throw new Error(
+        "No editable text found in this PDF. Scanned or image-only PDFs need OCR before editing.",
+      );
+    }
 
     // Process text into paragraphs
     const paragraphs = data.text

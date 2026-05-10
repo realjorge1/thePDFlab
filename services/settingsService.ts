@@ -9,7 +9,7 @@ import { useCallback, useEffect, useState } from "react";
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 export type ThemeMode = "system" | "light" | "dark";
-export type StartScreen = "home" | "ai" | "library" | "tools" | "downloads" | "folders";
+export type StartScreen = "home" | "gozlin" | "library" | "tools" | "downloads" | "folders";
 export type PageRangeFormat = "comma" | "dash";
 export type ReadingVoice = "system" | "voice_a" | "voice_b";
 export type StorageLocation = "internal" | "external";
@@ -20,8 +20,9 @@ export interface ScreenLockSettings {
   library: boolean;
   downloads: boolean;
   createFiles: boolean;
-  ai: boolean;
+  gozlin: boolean;
   folders: boolean;
+  ai: boolean;
 }
 
 export interface AuthState {
@@ -120,8 +121,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
     library: false,
     downloads: false,
     createFiles: false,
-    ai: false,
+    gozlin: false,
     folders: false,
+    ai: false,
   },
   hideRecentFiles: false,
 
@@ -135,7 +137,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
 
 // ─── Storage key ──────────────────────────────────────────────────────────────
 
-const SETTINGS_KEY = "@pdflab_settings";
+const SETTINGS_KEY = "@inscribed_settings";
 
 // ─── Read / Write ─────────────────────────────────────────────────────────────
 

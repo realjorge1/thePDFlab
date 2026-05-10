@@ -104,14 +104,24 @@ export function PDFTextExtractor({ uri, active, onPageTexts, onError }: Props) {
 
   if (!html) return null;
 
+  // IMPORTANT: Android WebViews with 0×0 dimensions often skip layout/JS
+  // execution. We render at 1×1, positioned off-screen with opacity 0 so
+  // pdf.js actually runs while remaining invisible to the user.
   return (
     <View
-      style={{ height: 0, width: 0, overflow: "hidden", position: "absolute" }}
+      style={{
+        position: "absolute",
+        left: -10000,
+        top: -10000,
+        width: 1,
+        height: 1,
+        opacity: 0,
+      }}
       pointerEvents="none"
     >
       <WebView
         source={{ html }}
-        style={{ height: 0, width: 0 }}
+        style={{ width: 1, height: 1, backgroundColor: "transparent" }}
         originWhitelist={["*"]}
         javaScriptEnabled
         domStorageEnabled

@@ -1,5 +1,5 @@
 /**
- * Terms of Service content for PDFlab
+ * Terms of Service content for Inscribed
  * Structured data extracted from the original legal document.
  */
 
@@ -10,49 +10,38 @@ export const TERMS_OF_SERVICE_LAST_UPDATED = "February 2026";
 export const TERMS_OF_SERVICE_TITLE = "Terms of Service";
 
 export const TERMS_OF_SERVICE_SUBTITLE =
-  "Freemium · Subscription · Google Backup · AI · Account Terms";
+  "Freemium · Subscription · AI";
 
 export const TERMS_OF_SERVICE_SECTIONS: LegalSection[] = [
   {
     heading: "1. Acceptance of Terms",
     paragraphs: [
-      "By accessing or using PDFlab, you agree to these Terms.",
+      "By accessing or using Inscribed, you agree to these Terms.",
       "If you do not agree, do not use the app.",
     ],
   },
   {
     heading: "2. Description of Service",
-    paragraphs: ["PDFlab provides:"],
+    paragraphs: ["Inscribed provides:"],
     bullets: [
       "Document viewing and editing",
       "Conversion tools",
       "File encryption and annotation",
       "AI-powered assistance",
       "Legal open-source content access",
-      "Google Drive backup functionality",
       "Premium subscription features",
     ],
     subsections: [
       {
         heading: "",
         paragraphs: [
-          "Some features are available without registration. Others require account creation and/or payment.",
+          "Some features are free. Premium features require payment.",
         ],
       },
     ],
   },
   {
-    heading: "3. Accounts",
-    paragraphs: ["When implemented:"],
-    bullets: [
-      "You are responsible for maintaining account confidentiality.",
-      "You must provide accurate information.",
-      "You are responsible for activity under your account.",
-      "We reserve the right to suspend accounts for abuse.",
-    ],
-  },
-  {
-    heading: "4. Subscriptions and Payments",
+    heading: "3. Subscriptions and Payments",
     paragraphs: ["Premium features may require payment."],
     bullets: [
       "Fees are displayed before purchase.",
@@ -63,16 +52,7 @@ export const TERMS_OF_SERVICE_SECTIONS: LegalSection[] = [
     ],
   },
   {
-    heading: "5. Google Drive Backup",
-    paragraphs: ["If you enable Google Drive backup:"],
-    bullets: [
-      "You authorize us to access your Drive for backup/restore.",
-      "We are not responsible for Google service interruptions.",
-      "Backup integrity depends on third-party infrastructure.",
-    ],
-  },
-  {
-    heading: "6. User Responsibilities",
+    heading: "4. User Responsibilities",
     paragraphs: ["You agree not to:"],
     bullets: [
       "Upload illegal content",
@@ -89,7 +69,7 @@ export const TERMS_OF_SERVICE_SECTIONS: LegalSection[] = [
     ],
   },
   {
-    heading: "7. AI Disclaimer",
+    heading: "5. AI Disclaimer",
     paragraphs: ["AI responses:"],
     bullets: [
       "May contain inaccuracies",
@@ -106,7 +86,7 @@ export const TERMS_OF_SERVICE_SECTIONS: LegalSection[] = [
     ],
   },
   {
-    heading: "8. Intellectual Property",
+    heading: "6. Intellectual Property",
     subsections: [
       {
         heading: "Your Content",
@@ -118,13 +98,13 @@ export const TERMS_OF_SERVICE_SECTIONS: LegalSection[] = [
       {
         heading: "Our Content",
         paragraphs: [
-          "All software, branding, and intellectual property belong to PDFlab.",
+          "All software, branding, and intellectual property belong to Inscribed.",
         ],
       },
     ],
   },
   {
-    heading: "9. File Encryption and Passwords",
+    heading: "7. File Encryption and Passwords",
     paragraphs: ["If you encrypt files:"],
     bullets: [
       "You are responsible for password management.",
@@ -132,7 +112,7 @@ export const TERMS_OF_SERVICE_SECTIONS: LegalSection[] = [
     ],
   },
   {
-    heading: "10. Limitation of Liability",
+    heading: "8. Limitation of Liability",
     paragraphs: [
       "To the maximum extent permitted by law, we are not liable for:",
     ],
@@ -140,7 +120,6 @@ export const TERMS_OF_SERVICE_SECTIONS: LegalSection[] = [
       "Data loss",
       "Service interruptions",
       "AI inaccuracies",
-      "Backup failures",
       "Indirect damages",
     ],
     subsections: [
@@ -151,7 +130,7 @@ export const TERMS_OF_SERVICE_SECTIONS: LegalSection[] = [
     ],
   },
   {
-    heading: "11. Termination",
+    heading: "9. Termination",
     paragraphs: ["We may suspend or terminate access if:"],
     bullets: [
       "You violate these Terms",
@@ -160,21 +139,21 @@ export const TERMS_OF_SERVICE_SECTIONS: LegalSection[] = [
     ],
   },
   {
-    heading: "12. Governing Law",
+    heading: "10. Governing Law",
     paragraphs: [
       "These Terms are governed by applicable law in the jurisdiction where the service operates.",
       "Disputes shall be resolved in that jurisdiction.",
     ],
   },
   {
-    heading: "13. Changes to Terms",
+    heading: "11. Changes to Terms",
     paragraphs: [
       "We may update these Terms at any time.",
       "Continued use after updates constitutes acceptance.",
     ],
   },
   {
-    heading: "14. Contact",
-    paragraphs: ["PDFlab\nEmail: support@pdflab.app"],
+    heading: "12. Contact",
+    paragraphs: ["Inscribed\nFacebook: facebook.com/the-inscribedsoftware"],
   },
 ];

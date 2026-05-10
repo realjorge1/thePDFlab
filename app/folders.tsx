@@ -7,6 +7,7 @@
 import { AppHeaderContainer } from "@/components/AppHeaderContainer";
 import { GradientView } from "@/components/GradientView";
 import { colors } from "@/constants/theme";
+import { useDocuments as useDocLibDocuments } from "@/hooks/useDocLib";
 import { useFileIndex } from "@/hooks/useFileIndex";
 import {
   type QuickAccessFile,
@@ -17,6 +18,7 @@ import {
   showOpenFailedAlert,
   useQuickAccess,
 } from "@/services/document-manager";
+import { cleanFileName } from "@/services/safFolderSync";
 import {
   addToFavorites,
   getFavorites,
@@ -61,10 +63,12 @@ import React, {
 } from "react";
 import {
   Alert,
+  Animated,
   Dimensions,
   FlatList,
   KeyboardAvoidingView,
   Modal,
+  PanResponder,
   Platform,
   Pressable,
   RefreshControl,
@@ -77,9 +81,315 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { PINGate } from "@/components/PINGate";
+import { ProgressRing } from "@/components/ProgressRing";
+import { useReadingProgressFor } from "@/hooks/useReadingProgress";
 
 const { width: SCREEN_WIDTH } = Dimensions.get("window");
-const FOLDER_VIEW_MODE_KEY = "@pdflab_folder_view_mode";
+const FOLDER_VIEW_MODE_KEY = "@inscribed_folder_view_mode";
+
+// ============================================================================
+// FILE ACTION SHEET (library-style: bottom panel, ProgressRing, slide-dismiss)
+// ============================================================================
+const FILE_SHEET_DISMISS_DISTANCE = 110;
+
+interface FolderFileActionSheetModalProps {
+  file: QuickAccessFile | null;
+  theme: any;
+  isFavorite: boolean;
+  currentFolderId: string | null;
+  onClose: () => void;
+  onOpen: () => void;
+  onShare: () => void;
+  onToggleFavorite: () => void;
+  onRemoveFromFolder: () => void;
+  onFileInfo: () => void;
+  onDelete: () => void;
+}
+
+const FolderFileActionSheetModal: React.FC<FolderFileActionSheetModalProps> = ({
+  file,
+  theme,
+  isFavorite,
+  currentFolderId,
+  onClose,
+  onOpen,
+  onShare,
+  onToggleFavorite,
+  onRemoveFromFolder,
+  onFileInfo,
+  onDelete,
+}) => {
+  const visible = file !== null;
+  const translateY = React.useRef(new Animated.Value(0)).current;
+
+  React.useEffect(() => {
+    if (visible) translateY.setValue(0);
+  }, [visible, translateY]);
+
+  const dismiss = React.useCallback(() => {
+    Animated.timing(translateY, {
+      toValue: 600,
+      duration: 220,
+      useNativeDriver: true,
+    }).start(() => onClose());
+  }, [translateY, onClose]);
+
+  const panResponder = React.useRef(
+    PanResponder.create({
+      onMoveShouldSetPanResponder: (_e, g) =>
+        Math.abs(g.dy) > 6 && Math.abs(g.dy) > Math.abs(g.dx),
+      onPanResponderMove: (_e, g) => {
+        if (g.dy > 0) translateY.setValue(g.dy);
+      },
+      onPanResponderRelease: (_e, g) => {
+        if (g.dy > FILE_SHEET_DISMISS_DISTANCE || g.vy > 0.8) {
+          Animated.timing(translateY, {
+            toValue: 600,
+            duration: 200,
+            useNativeDriver: true,
+          }).start(() => onClose());
+        } else {
+          Animated.spring(translateY, {
+            toValue: 0,
+            useNativeDriver: true,
+            bounciness: 4,
+          }).start();
+        }
+      },
+    }),
+  ).current;
+
+  return (
+    <Modal
+      visible={visible}
+      transparent
+      animationType="fade"
+      onRequestClose={dismiss}
+    >
+      <TouchableOpacity
+        style={fs.overlay}
+        onPress={dismiss}
+        activeOpacity={1}
+      >
+        <Animated.View
+          style={[
+            fs.sheet,
+            { backgroundColor: theme.card, transform: [{ translateY }] },
+          ]}
+          onStartShouldSetResponder={() => true}
+        >
+          <View style={fs.grabArea} {...panResponder.panHandlers}>
+            <TouchableOpacity
+              style={fs.closeBtn}
+              onPress={dismiss}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              activeOpacity={0.7}
+            >
+              <MaterialIcons
+                name="keyboard-arrow-down"
+                size={28}
+                color={theme.textSecondary}
+              />
+            </TouchableOpacity>
+          </View>
+          {file && (
+            <FolderFileActionSheetBody
+              file={file}
+              theme={theme}
+              isFavorite={isFavorite}
+              currentFolderId={currentFolderId}
+              onOpen={onOpen}
+              onShare={onShare}
+              onToggleFavorite={onToggleFavorite}
+              onRemoveFromFolder={onRemoveFromFolder}
+              onFileInfo={onFileInfo}
+              onDelete={onDelete}
+            />
+          )}
+        </Animated.View>
+      </TouchableOpacity>
+    </Modal>
+  );
+};
+
+interface FolderFileActionSheetBodyProps {
+  file: QuickAccessFile;
+  theme: any;
+  isFavorite: boolean;
+  currentFolderId: string | null;
+  onOpen: () => void;
+  onShare: () => void;
+  onToggleFavorite: () => void;
+  onRemoveFromFolder: () => void;
+  onFileInfo: () => void;
+  onDelete: () => void;
+}
+
+const FolderFileActionSheetBody: React.FC<FolderFileActionSheetBodyProps> = ({
+  file,
+  theme,
+  isFavorite,
+  currentFolderId,
+  onOpen,
+  onShare,
+  onToggleFavorite,
+  onRemoveFromFolder,
+  onFileInfo,
+  onDelete,
+}) => {
+  const progressEntry = useReadingProgressFor(file.uri);
+  const progress = progressEntry?.progress ?? 0;
+  const subtitleParts: string[] = [];
+  if (progressEntry?.currentPage && progressEntry?.totalPages) {
+    subtitleParts.push(`Page ${progressEntry.currentPage} of ${progressEntry.totalPages}`);
+  } else if (progress > 0) {
+    subtitleParts.push("Reading progress");
+  } else {
+    subtitleParts.push("Not started");
+  }
+
+  const actions: {
+    key: string;
+    icon: keyof typeof MaterialIcons.glyphMap;
+    label: string;
+    color: string;
+    onPress: () => void;
+  }[] = [
+    { key: "open", icon: "open-in-new", label: "Open", color: theme.text, onPress: onOpen },
+    { key: "share", icon: "share", label: "Share", color: theme.text, onPress: onShare },
+    {
+      key: "fav",
+      icon: isFavorite ? "star" : "star-outline",
+      label: isFavorite ? "Unfavorite" : "Favorite",
+      color: "#F59E0B",
+      onPress: onToggleFavorite,
+    },
+    ...(currentFolderId
+      ? [{ key: "remove", icon: "folder-off" as keyof typeof MaterialIcons.glyphMap, label: "Remove", color: theme.text, onPress: onRemoveFromFolder }]
+      : []),
+    { key: "info", icon: "info-outline", label: "File Info", color: theme.text, onPress: onFileInfo },
+    { key: "delete", icon: "delete-outline", label: "Delete", color: colors.error, onPress: onDelete },
+  ];
+
+  return (
+    <View>
+      <Text style={[fs.fileName, { color: theme.text }]} numberOfLines={2}>
+        {file.displayName}
+      </Text>
+      <View style={fs.ringWrap}>
+        <ProgressRing
+          progress={progress}
+          size={108}
+          strokeWidth={8}
+          color={theme.primary}
+          trackColor={theme.borderLight}
+          textColor={theme.text}
+          emptyLabel="0%"
+        />
+        <Text style={[fs.ringSubtitle, { color: theme.textSecondary }]} numberOfLines={1}>
+          {subtitleParts.join(" · ")}
+        </Text>
+      </View>
+      <View style={fs.grid}>
+        {actions.map((a) => (
+          <TouchableOpacity
+            key={a.key}
+            style={fs.gridItem}
+            onPress={a.onPress}
+            activeOpacity={0.7}
+          >
+            <View style={[fs.gridIconBg, { backgroundColor: theme.backgroundSecondary }]}>
+              <MaterialIcons name={a.icon} size={20} color={a.color} />
+            </View>
+            <Text style={[fs.gridLabel, { color: a.color }]} numberOfLines={1}>
+              {a.label}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+    </View>
+  );
+};
+
+// Styles for the file action sheet (separate sheet to avoid conflict with folder modal styles)
+const fs = StyleSheet.create({
+  overlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.45)",
+    justifyContent: "flex-end",
+    alignItems: "center",
+  },
+  sheet: {
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    paddingBottom: 20,
+    paddingTop: 4,
+    paddingHorizontal: 18,
+    width: "100%",
+    maxWidth: 440,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: -4 },
+    shadowOpacity: 0.18,
+    shadowRadius: 16,
+    elevation: 14,
+  },
+  grabArea: {
+    paddingTop: 6,
+    paddingBottom: 2,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  closeBtn: {
+    width: 36,
+    height: 32,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  fileName: {
+    fontSize: 14,
+    fontWeight: "700",
+    textAlign: "center",
+    paddingHorizontal: 28,
+    marginTop: 4,
+    marginBottom: 2,
+  },
+  ringWrap: {
+    alignItems: "center",
+    justifyContent: "center",
+    marginTop: 10,
+    marginBottom: 16,
+    gap: 6,
+  },
+  ringSubtitle: {
+    fontSize: 12,
+    fontWeight: "600",
+    letterSpacing: 0.2,
+  },
+  grid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    justifyContent: "space-between",
+    rowGap: 10,
+  },
+  gridItem: {
+    width: "31%",
+    alignItems: "center",
+    gap: 4,
+    paddingVertical: 4,
+  },
+  gridIconBg: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  gridLabel: {
+    fontSize: 11,
+    fontWeight: "600",
+    letterSpacing: 0.1,
+  },
+});
 
 function getTypeBgColor(color: string): string {
   if (color === colors.pdf) return "#FEE2E2";
@@ -148,8 +458,9 @@ export default function FoldersScreen() {
     updateLastOpened: updateIndexLastOpened,
     removeFile: removeIndexFile,
   } = useFileIndex();
+  const { documents: doclibDocs, refetch: refetchDoclib } = useDocLibDocuments();
 
-  // Combine files from both sources
+  // Combine files from all sources (legacy + index + SAF-scanned)
   const allFiles = useMemo(() => {
     const uriMap = new Map<string, QuickAccessFile>();
     for (const file of legacyFiles) uriMap.set(file.uri, file);
@@ -171,8 +482,31 @@ export default function FoldersScreen() {
         } as QuickAccessFile);
       }
     }
+    // SAF folder-scanned documents
+    for (const doc of doclibDocs) {
+      if (!uriMap.has(doc.uri)) {
+        const cleanName = cleanFileName(doc.name);
+        const ext = cleanName.includes(".")
+          ? cleanName.split(".").pop()?.toLowerCase() ?? ""
+          : doc.type;
+        uriMap.set(doc.uri, {
+          id: `saf:${doc.uri}`,
+          uri: doc.uri,
+          originalUri: doc.uri,
+          displayName: cleanName,
+          extension: ext,
+          mimeType: doc.mimeType,
+          size: doc.size,
+          lastOpenedAt: doc.lastOpened ?? doc.lastModified,
+          dateAdded: doc.lastModified,
+          source: "picked",
+          isSafUri: true,
+          cacheValid: true,
+        } as QuickAccessFile);
+      }
+    }
     return Array.from(uriMap.values());
-  }, [legacyFiles, indexFiles]);
+  }, [legacyFiles, indexFiles, doclibDocs]);
 
   // ── Data loading ────────────────────────────────────────────────────────
   const loadData = useCallback(async () => {
@@ -257,9 +591,9 @@ export default function FoldersScreen() {
   // ── Handlers ────────────────────────────────────────────────────────────
   const handleRefresh = useCallback(async () => {
     setRefreshing(true);
-    await Promise.all([refreshLegacy(), refreshIndex(), loadData()]);
+    await Promise.all([refreshLegacy(), refreshIndex(), refetchDoclib(), loadData()]);
     setRefreshing(false);
-  }, [refreshLegacy, refreshIndex, loadData]);
+  }, [refreshLegacy, refreshIndex, refetchDoclib, loadData]);
 
   const handleNavigateToFolder = useCallback((folderId: string | null) => {
     setCurrentFolderId(folderId);
@@ -626,15 +960,13 @@ export default function FoldersScreen() {
         <Pressable
           key={file.id}
           style={({ pressed }) => [
-            s.fileCard,
-            {
-              backgroundColor: pressed ? t.card + "CC" : t.card,
-              borderColor: t.borderLight,
-            },
+            s.flatFileRow,
+            pressed && { opacity: 0.7 },
           ]}
           onPress={() => handleFilePress(file)}
           onLongPress={() => setActionFile(file)}
           delayLongPress={500}
+          android_ripple={{ color: t.primary + "20" }}
         >
           <View
             style={[
@@ -656,24 +988,28 @@ export default function FoldersScreen() {
             >
               {file.displayName}
             </Text>
-            <Text style={[s.fileMeta, { color: t.textSecondary }]}>
-              {metaParts.join(" · ")}
-            </Text>
+            <View style={s.metaRow}>
+              <Text style={[s.fileMeta, { color: t.textSecondary }]}>
+                {metaParts.join(" · ")}
+              </Text>
+            </View>
           </View>
-          {isFav && (
-            <MaterialIcons
-              name="star"
-              size={18}
-              color="#F59E0B"
-              style={{ marginRight: 4 }}
-            />
-          )}
-          <TouchableOpacity
-            onPress={() => setActionFile(file)}
-            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-          >
-            <MaterialIcons name="more-vert" size={22} color={t.textTertiary} />
-          </TouchableOpacity>
+          <View style={s.chevronRow}>
+            {isFav && (
+              <MaterialIcons
+                name="star"
+                size={16}
+                color="#F59E0B"
+                style={{ marginRight: 4 }}
+              />
+            )}
+            <TouchableOpacity
+              onPress={() => setActionFile(file)}
+              hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+            >
+              <MaterialIcons name="more-vert" size={22} color={t.textTertiary} />
+            </TouchableOpacity>
+          </View>
         </Pressable>
       );
     },
@@ -1231,116 +1567,26 @@ export default function FoldersScreen() {
       </Modal>
 
       {/* ── File Action Sheet ──────────────────────────────────────────── */}
-      <Modal
-        visible={actionFile !== null}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setActionFile(null)}
-      >
-        <TouchableOpacity
-          style={s.modalOverlay}
-          activeOpacity={1}
-          onPress={() => setActionFile(null)}
-        >
-          <View
-            style={[s.actionSheet, { backgroundColor: t.card }]}
-            onStartShouldSetResponder={() => true}
-          >
-            <View style={[s.actionHandle, { backgroundColor: t.border }]} />
-            <Text style={[s.actionTitle, { color: t.text }]} numberOfLines={2}>
-              {actionFile?.displayName}
-            </Text>
-            {/* Open */}
-            <TouchableOpacity
-              style={[s.actionItem, { borderBottomColor: t.borderLight }]}
-              onPress={() => {
-                if (actionFile) {
-                  setActionFile(null);
-                  handleFilePress(actionFile);
-                }
-              }}
-            >
-              <MaterialIcons name="open-in-new" size={22} color={t.text} />
-              <Text style={[s.actionItemText, { color: t.text }]}>Open</Text>
-            </TouchableOpacity>
-            {/* Share */}
-            <TouchableOpacity
-              style={[s.actionItem, { borderBottomColor: t.borderLight }]}
-              onPress={() => actionFile && handleShareFile(actionFile)}
-            >
-              <MaterialIcons name="share" size={22} color={t.text} />
-              <Text style={[s.actionItemText, { color: t.text }]}>Share</Text>
-            </TouchableOpacity>
-            {/* Favorite */}
-            <TouchableOpacity
-              style={[s.actionItem, { borderBottomColor: t.borderLight }]}
-              onPress={() => actionFile && handleToggleFavorite(actionFile)}
-            >
-              <MaterialIcons
-                name={
-                  favoriteIds.has(actionFile?.id ?? "")
-                    ? "star"
-                    : "star-outline"
-                }
-                size={22}
-                color="#F59E0B"
-              />
-              <Text style={[s.actionItemText, { color: t.text }]}>
-                {favoriteIds.has(actionFile?.id ?? "")
-                  ? "Remove from Favorites"
-                  : "Add to Favorites"}
-              </Text>
-            </TouchableOpacity>
-            {/* Remove from folder */}
-            {currentFolderId && (
-              <TouchableOpacity
-                style={[s.actionItem, { borderBottomColor: t.borderLight }]}
-                onPress={() =>
-                  actionFile && handleRemoveFileFromFolder(actionFile)
-                }
-              >
-                <MaterialIcons name="folder-off" size={22} color={t.text} />
-                <Text style={[s.actionItemText, { color: t.text }]}>
-                  Remove from Folder
-                </Text>
-              </TouchableOpacity>
-            )}
-            {/* File Info */}
-            <TouchableOpacity
-              style={[s.actionItem, { borderBottomColor: t.borderLight }]}
-              onPress={() => actionFile && handleFileInfo(actionFile)}
-            >
-              <MaterialIcons name="info-outline" size={22} color={t.text} />
-              <Text style={[s.actionItemText, { color: t.text }]}>
-                File Info
-              </Text>
-            </TouchableOpacity>
-            {/* Delete */}
-            <TouchableOpacity
-              style={[s.actionItem, { borderBottomColor: t.borderLight }]}
-              onPress={() => actionFile && handleDeleteFile(actionFile)}
-            >
-              <MaterialIcons
-                name="delete-outline"
-                size={22}
-                color={colors.error}
-              />
-              <Text style={[s.actionItemText, { color: colors.error }]}>
-                Delete
-              </Text>
-            </TouchableOpacity>
-            {/* Cancel */}
-            <TouchableOpacity
-              style={s.actionCancel}
-              onPress={() => setActionFile(null)}
-            >
-              <Text style={[s.actionCancelText, { color: t.text }]}>
-                Cancel
-              </Text>
-            </TouchableOpacity>
-          </View>
-        </TouchableOpacity>
-      </Modal>
+      <FolderFileActionSheetModal
+        file={actionFile}
+        theme={t}
+        isFavorite={actionFile ? favoriteIds.has(actionFile.id) : false}
+        currentFolderId={currentFolderId}
+        onClose={() => setActionFile(null)}
+        onOpen={() => {
+          if (actionFile) {
+            setActionFile(null);
+            handleFilePress(actionFile);
+          }
+        }}
+        onShare={() => actionFile && handleShareFile(actionFile)}
+        onToggleFavorite={() => actionFile && handleToggleFavorite(actionFile)}
+        onRemoveFromFolder={() =>
+          actionFile && handleRemoveFileFromFolder(actionFile)
+        }
+        onFileInfo={() => actionFile && handleFileInfo(actionFile)}
+        onDelete={() => actionFile && handleDeleteFile(actionFile)}
+      />
 
       {/* ── Add Files Modal ────────────────────────────────────────────── */}
       <Modal
@@ -1598,8 +1844,25 @@ const s = StyleSheet.create({
   },
   // ── List ──
   listContent: {
-    paddingHorizontal: 12,
+    paddingHorizontal: 0,
     paddingBottom: 100,
+  },
+  // ── Flat file row (no border — matches library style) ──
+  flatFileRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 7,
+    paddingHorizontal: 16,
+    height: 62,
+  },
+  metaRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginTop: 3,
+  },
+  chevronRow: {
+    flexDirection: "row",
+    alignItems: "center",
   },
   sectionHeader: {
     paddingHorizontal: 4,

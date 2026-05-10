@@ -69,7 +69,7 @@ const AthemiHeaderInner: React.FC<AthemiHeaderProps> = ({
               style={s.pill}
             >
               <Text style={s.title} numberOfLines={1} ellipsizeMode="tail">
-                athemi AI
+                gozlin
               </Text>
             </GradientView>
           </View>

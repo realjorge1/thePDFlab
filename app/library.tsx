@@ -4,7 +4,7 @@ import { Ionicons } from "@expo/vector-icons";
 import MaterialIcons from "@expo/vector-icons/MaterialIcons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { router, useFocusEffect, useLocalSearchParams } from "expo-router";
-import { FolderOpen, Grid3x3, List, Plus, Search } from "lucide-react-native";
+import { FolderOpen, Grid3x3, List, Search } from "lucide-react-native";
 import React, {
   useCallback,
   useEffect,
@@ -14,9 +14,11 @@ import React, {
 } from "react";
 import {
   Alert,
+  Animated,
   Dimensions,
   FlatList,
   Modal,
+  PanResponder,
   Platform,
   Pressable,
   RefreshControl,
@@ -30,8 +32,18 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { PINGate } from "@/components/PINGate";
+import { ProgressRing } from "@/components/ProgressRing";
 import { colors } from "@/constants/theme";
 import { useFileIndex } from "@/hooks/useFileIndex";
+import { useReadingProgressFor } from "@/hooks/useReadingProgress";
+import { upsertFileRecord } from "@/services/fileIndexService";
+import {
+  useDocuments as useDocLibDocuments,
+  useFolders as useDocLibFolders,
+  useIndexingStatus as useDocLibIndexingStatus,
+} from "@/hooks/useDocLib";
+import docLibDb from "@/services/doclib/database";
+import docLibIndexer from "@/services/doclib/fileIndexer";
 import {
   SUPPORTED_FILE_TYPES,
   fileMatchesSearch,
@@ -57,9 +69,21 @@ import {
   type Folder,
 } from "@/services/folderService";
 import { recycleFile } from "@/services/recycleBinService";
+import { cleanFileName, syncSafFoldersToAppFolders } from "@/services/safFolderSync";
 import { useTheme } from "@/services/ThemeProvider";
 
-const VIEW_MODE_KEY = "@pdflab_library_view_mode";
+const VIEW_MODE_KEY = "@inscribed_library_view_mode";
+const SORT_BY_KEY = "@inscribed_library_sort_by";
+
+type SortBy = "size" | "dateAdded" | "dateModified" | "name" | "recentlyOpened";
+
+const SORT_OPTIONS: { key: SortBy; label: string }[] = [
+  { key: "size", label: "Size (largest first)" },
+  { key: "dateAdded", label: "Date added (newest)" },
+  { key: "dateModified", label: "Date modified (newest)" },
+  { key: "recentlyOpened", label: "Recently opened" },
+  { key: "name", label: "Name (A → Z)" },
+];
 
 function getTypeBgColor(color: string): string {
   if (color === colors.pdf) return "#FEE2E2";
@@ -124,6 +148,10 @@ export default function LibraryScreen() {
   // ── Grid / List view ──────────────────────────────────────────────────────
   const [viewMode, setViewMode] = useState<ViewMode>("list");
 
+  // ── Sort by ───────────────────────────────────────────────────────────────
+  const [sortBy, setSortBy] = useState<SortBy>("size");
+  const [showSortMenu, setShowSortMenu] = useState(false);
+
   // ── Folder picker for "Move to Folder" ────────────────────────────────────
   const [showFolderPicker, setShowFolderPicker] = useState(false);
   const [folderPickerFile, setFolderPickerFile] =
@@ -159,7 +187,13 @@ export default function LibraryScreen() {
     clearAllExceptDownloads,
   } = useFileIndex();
 
-  // Combine files from both sources (deduplicated by URI)
+  // ── DocLib (SAF folder-indexed documents) ────────────────────────────────
+  const { documents: doclibDocs, refetch: refetchDoclib } = useDocLibDocuments();
+  const { folders: doclibFolders, addFolder: addDoclibFolder } =
+    useDocLibFolders();
+  const indexingStatus = useDocLibIndexingStatus();
+
+  // Combine files from all sources (deduplicated by URI)
   const files = useMemo(() => {
     const uriMap = new Map<string, QuickAccessFile>();
 
@@ -193,24 +227,61 @@ export default function LibraryScreen() {
       }
     }
 
+    // Add doclib (SAF folder-scanned) documents
+    for (const doc of doclibDocs) {
+      if (!uriMap.has(doc.uri)) {
+        const cleanName = cleanFileName(doc.name);
+        const ext =
+          cleanName.includes(".")
+            ? cleanName.split(".").pop()?.toLowerCase() ?? ""
+            : doc.type;
+        const converted: QuickAccessFile = {
+          id: `saf:${doc.uri}`,
+          uri: doc.uri,
+          originalUri: doc.uri,
+          displayName: cleanName,
+          extension: ext,
+          mimeType: doc.mimeType,
+          size: doc.size,
+          lastOpenedAt: doc.lastOpened ?? doc.lastModified,
+          dateAdded: doc.lastModified,
+          source: "picked",
+          isSafUri: true,
+          cacheValid: true,
+          _sourceTags: ["imported"],
+          _type: doc.type,
+          _isSaf: true,
+          _lastModified: doc.lastModified,
+        } as QuickAccessFile & {
+          _sourceTags?: string[];
+          _type?: string;
+          _isSaf?: boolean;
+          _lastModified?: number;
+        };
+        uriMap.set(doc.uri, converted);
+      }
+    }
+
     // Sort by lastOpenedAt
     return Array.from(uriMap.values()).sort(
       (a, b) => b.lastOpenedAt - a.lastOpenedAt,
     );
-  }, [legacyFiles, indexFiles]);
+  }, [legacyFiles, indexFiles, doclibDocs]);
 
   const isLoading = legacyLoading || indexLoading;
 
-  // Refresh both sources
+  // Refresh all sources
   const refresh = useCallback(async () => {
-    await Promise.all([refreshLegacy(), refreshIndex()]);
-  }, [refreshLegacy, refreshIndex]);
+    await Promise.all([refreshLegacy(), refreshIndex(), refetchDoclib()]);
+  }, [refreshLegacy, refreshIndex, refetchDoclib]);
 
-  // Refresh on focus
+  // Refresh on focus + sync SAF folders → app folders
   useFocusEffect(
     useCallback(() => {
       refresh();
       getFavorites().then(setFavoriteIds);
+      // Idempotent: creates/updates app folders for every SAF-watched folder
+      syncSafFoldersToAppFolders().catch(console.warn);
     }, [refresh]),
   );
 
@@ -220,6 +291,17 @@ export default function LibraryScreen() {
     getFavorites().then(setFavoriteIds);
     AsyncStorage.getItem(VIEW_MODE_KEY).then((v) => {
       if (v === "grid" || v === "list") setViewMode(v);
+    });
+    AsyncStorage.getItem(SORT_BY_KEY).then((v) => {
+      if (
+        v === "size" ||
+        v === "dateAdded" ||
+        v === "dateModified" ||
+        v === "name" ||
+        v === "recentlyOpened"
+      ) {
+        setSortBy(v);
+      }
     });
   }, []);
 
@@ -300,11 +382,36 @@ export default function LibraryScreen() {
     }
   }, [addFile]);
 
+  const handleAccessFolder = useCallback(async () => {
+    try {
+      const result = await addDoclibFolder();
+      if (result) {
+        await refetchDoclib();
+        setToastMsg(`Connected ${result.displayName}`);
+        // Create matching app folder and map its files immediately
+        syncSafFoldersToAppFolders().catch(console.warn);
+      }
+    } catch (e: any) {
+      Alert.alert(
+        "Folder Access Failed",
+        e?.message ?? "Could not access the selected folder.",
+      );
+    }
+  }, [addDoclibFolder, refetchDoclib]);
+
   const handleRefresh = useCallback(async () => {
     setRefreshing(true);
+    try {
+      // Re-scan SAF folders before refreshing the merged list
+      if (doclibFolders.length > 0) {
+        await docLibIndexer.runFullScan();
+      }
+    } catch (e) {
+      console.warn("[Library] doclib scan failed:", e);
+    }
     await refresh();
     setRefreshing(false);
-  }, [refresh]);
+  }, [refresh, doclibFolders.length]);
 
   const handleFilePress = useCallback(
     async (file: QuickAccessFile) => {
@@ -319,14 +426,39 @@ export default function LibraryScreen() {
 
       // Update last opened timestamp in both systems
       await updateLastOpened(file.id);
-      updateIndexLastOpened(file.id).catch(console.error);
+
+      // SAF doclib files live in their own store and aren't in the unified
+      // index until first tap. Upsert here so progress + recent tracking
+      // work; upsertFileRecord already bumps lastOpenedAt for existing rows.
+      const isSafDoclib =
+        (file as any)._isSaf === true || file.id.startsWith("saf:");
+      if (isSafDoclib) {
+        upsertFileRecord({
+          uri: file.uri,
+          name: file.displayName,
+          extension: file.extension,
+          mimeType: file.mimeType,
+          size: file.size,
+          isSafUri: true,
+          sourceTags: ["imported"],
+        }).catch(console.error);
+      } else {
+        updateIndexLastOpened(file.id).catch(console.error);
+      }
+
+      // expo-router decodes URI-encoded params on read, which corrupts SAF
+      // tree-document URIs whose document IDs contain literal '/' (the slash
+      // gets interpreted as a path separator → Android resolves the URI as a
+      // directory → EISDIR). Wrap with encodeURIComponent before push so the
+      // viewer's decodeURIComponent yields the original encoded URI.
+      const safeUri = encodeURIComponent(file.uri);
 
       if (isImage) {
         // Navigate to image viewer
         router.push({
           pathname: "/image-viewer",
           params: {
-            uri: file.uri,
+            uri: safeUri,
             name: file.displayName,
             type: file.mimeType || "image/jpeg",
           },
@@ -336,7 +468,7 @@ export default function LibraryScreen() {
         router.push({
           pathname: "/pdf-viewer",
           params: {
-            uri: file.uri,
+            uri: safeUri,
             name: file.displayName,
           },
         });
@@ -345,7 +477,7 @@ export default function LibraryScreen() {
         (router as any).push({
           pathname: "/docx-viewer",
           params: {
-            uri: file.uri,
+            uri: safeUri,
             name: file.displayName,
           },
         });
@@ -354,7 +486,7 @@ export default function LibraryScreen() {
         router.push({
           pathname: "/epub-viewer",
           params: {
-            uri: file.uri,
+            uri: safeUri,
             name: file.displayName,
           },
         });
@@ -363,7 +495,7 @@ export default function LibraryScreen() {
         router.push({
           pathname: "/ppt-viewer",
           params: {
-            uri: file.uri,
+            uri: safeUri,
             name: file.displayName,
           },
         });
@@ -465,26 +597,34 @@ export default function LibraryScreen() {
         onPress: async () => {
           const snapshot = Array.from(selectedIds);
           let failed = 0;
+          let removedSaf = false;
           for (const id of snapshot) {
             const file = files.find((f) => f.id === id);
             if (!file) continue;
             try {
-              await recycleFile({
-                id: file.id,
-                name: file.displayName,
-                uri: file.uri,
-                size: file.size || 0,
-                type: (file as any)._type || file.extension || "unknown",
-                mimeType: file.mimeType || "application/octet-stream",
-                source: file.source,
-              });
-              removeFile(file.id);
-              await removeIndexFile(file.id);
-              await removeFileFromAllFolders(file.id).catch(console.error);
+              if ((file as any)._isSaf) {
+                // SAF-indexed file: just drop from doclib index (we don't own it)
+                await docLibDb.removeDocument(file.uri);
+                removedSaf = true;
+              } else {
+                await recycleFile({
+                  id: file.id,
+                  name: file.displayName,
+                  uri: file.uri,
+                  size: file.size || 0,
+                  type: (file as any)._type || file.extension || "unknown",
+                  mimeType: file.mimeType || "application/octet-stream",
+                  source: file.source,
+                });
+                removeFile(file.id);
+                await removeIndexFile(file.id);
+                await removeFileFromAllFolders(file.id).catch(console.error);
+              }
             } catch {
               failed++;
             }
           }
+          if (removedSaf) await refetchDoclib();
           setMarkMode(false);
           setSelectedIds(new Set());
           if (failed > 0) {
@@ -495,7 +635,7 @@ export default function LibraryScreen() {
         },
       },
     ]);
-  }, [selectedIds, files, removeFile, removeIndexFile]);
+  }, [selectedIds, files, removeFile, removeIndexFile, refetchDoclib]);
 
   const handleBulkShare = useCallback(async () => {
     const ids = Array.from(selectedIds);
@@ -515,6 +655,13 @@ export default function LibraryScreen() {
       setToastMsg("Failed to share file.");
     }
   }, [selectedIds, files]);
+
+  // ── Sort selection ───────────────────────────────────────────────────────
+  const handleSelectSort = useCallback((value: SortBy) => {
+    setSortBy(value);
+    setShowSortMenu(false);
+    AsyncStorage.setItem(SORT_BY_KEY, value).catch(console.error);
+  }, []);
 
   // ── View mode toggle ─────────────────────────────────────────────────────
   const toggleViewMode = useCallback(() => {
@@ -600,25 +747,6 @@ export default function LibraryScreen() {
       setToastMsg("Rename is available via File Info");
   }, []);
 
-  // ── File Info navigation ────────────────────────────────────────────────
-  const handleFileInfo = useCallback((file: QuickAccessFile) => {
-    setActionFile(null);
-    router.push({
-      pathname: "/file-details",
-      params: {
-        fileId: file.id,
-        fileName: file.displayName,
-        fileUri: file.uri,
-        fileSize: String(file.size || 0),
-        fileType: file.extension || "unknown",
-        fileMimeType: file.mimeType || "application/octet-stream",
-        dateAdded: String(file.dateAdded || ""),
-        lastOpened: String(file.lastOpenedAt || ""),
-        source: file.source || "imported",
-      },
-    });
-  }, []);
-
   // ── Action-sheet item handlers ───────────────────────────────────────────
 
   const handleActionShare = useCallback(async (file: QuickAccessFile) => {
@@ -638,16 +766,21 @@ export default function LibraryScreen() {
   const handleActionDelete = useCallback(
     (file: QuickAccessFile) => {
       setActionFile(null);
-      Alert.alert(
-        "Delete File",
-        `Delete "${file.displayName}"? It will be moved to the Recycle Bin and removed from all folders.`,
-        [
-          { text: "Cancel", style: "cancel" },
-          {
-            text: "Delete",
-            style: "destructive",
-            onPress: async () => {
-              try {
+      const isSaf = (file as any)._isSaf === true;
+      const message = isSaf
+        ? `Remove "${file.displayName}" from your library? The original file on your device will not be deleted.`
+        : `Delete "${file.displayName}"? It will be moved to the Recycle Bin and removed from all folders.`;
+      Alert.alert(isSaf ? "Remove From Library" : "Delete File", message, [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: isSaf ? "Remove" : "Delete",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              if (isSaf) {
+                await docLibDb.removeDocument(file.uri);
+                await refetchDoclib();
+              } else {
                 await recycleFile({
                   id: file.id,
                   name: file.displayName,
@@ -660,17 +793,17 @@ export default function LibraryScreen() {
                 removeFile(file.id);
                 await removeIndexFile(file.id);
                 await removeFileFromAllFolders(file.id).catch(console.error);
-              } catch (err: any) {
-                setToastMsg(
-                  `Delete failed${err?.message ? `: ${err.message}` : "."}`,
-                );
               }
-            },
+            } catch (err: any) {
+              setToastMsg(
+                `Delete failed${err?.message ? `: ${err.message}` : "."}`,
+              );
+            }
           },
-        ],
-      );
+        },
+      ]);
     },
-    [removeFile, removeIndexFile],
+    [removeFile, removeIndexFile, refetchDoclib],
   );
 
   // ============================================================================
@@ -738,17 +871,39 @@ export default function LibraryScreen() {
       });
     }
 
-    // Sort: pinned files first (in pin order), unpinned files follow
+    // Apply user-selected sort to the unpinned set; pinned stays in pin order.
+    const sortFn = (a: QuickAccessFile, b: QuickAccessFile): number => {
+      switch (sortBy) {
+        case "size":
+          return (b.size || 0) - (a.size || 0);
+        case "dateAdded":
+          return (b.dateAdded || 0) - (a.dateAdded || 0);
+        case "dateModified": {
+          const am = (a as any)._lastModified ?? a.dateAdded ?? 0;
+          const bm = (b as any)._lastModified ?? b.dateAdded ?? 0;
+          return bm - am;
+        }
+        case "recentlyOpened":
+          return (b.lastOpenedAt || 0) - (a.lastOpenedAt || 0);
+        case "name":
+          return a.displayName.localeCompare(b.displayName, undefined, {
+            sensitivity: "base",
+          });
+        default:
+          return 0;
+      }
+    };
+
     if (pinnedIds.length > 0) {
       const pinned = result
         .filter((f) => pinnedIds.includes(f.id))
         .sort((a, b) => pinnedIds.indexOf(a.id) - pinnedIds.indexOf(b.id));
-      const unpinned = result.filter((f) => !pinnedIds.includes(f.id));
+      const unpinned = result.filter((f) => !pinnedIds.includes(f.id)).sort(sortFn);
       return [...pinned, ...unpinned];
     }
 
-    return result;
-  }, [files, searchQuery, typeFilter, sourceFilter, pinnedIds, favoriteIds]);
+    return [...result].sort(sortFn);
+  }, [files, searchQuery, typeFilter, sourceFilter, pinnedIds, favoriteIds, sortBy]);
 
   // Check if any filters are active
   const hasActiveFilters = typeFilter !== "all" || sourceFilter !== "all";
@@ -994,7 +1149,7 @@ export default function LibraryScreen() {
               hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
             >
               <MaterialIcons
-                name="more-horiz"
+                name="more-vert"
                 size={20}
                 color={t.textTertiary}
               />
@@ -1026,12 +1181,12 @@ export default function LibraryScreen() {
       </GradientView>
 
       <Text style={[styles.emptyDescription, { color: t.textSecondary }]}>
-        Import files from your device or create new ones to make up your
-        library.
+        Access a folder on your device and we&apos;ll bring every PDF, Word,
+        Excel and PowerPoint file inside straight into your library.
       </Text>
       <TouchableOpacity
         style={styles.emptyButton}
-        onPress={handleImportFile}
+        onPress={handleAccessFolder}
         activeOpacity={0.8}
       >
         <GradientView
@@ -1040,8 +1195,8 @@ export default function LibraryScreen() {
           end={{ x: 1, y: 0 }}
           style={styles.emptyButtonGradient}
         >
-          <Plus color="white" size={20} strokeWidth={2.5} />
-          <Text style={styles.emptyButtonText}>Import File</Text>
+          <FolderOpen color="white" size={20} strokeWidth={2.5} />
+          <Text style={styles.emptyButtonText}>Access Folder</Text>
         </GradientView>
       </TouchableOpacity>
     </View>
@@ -1158,11 +1313,10 @@ export default function LibraryScreen() {
               </TouchableOpacity>
               <TouchableOpacity
                 style={styles.headerImportBtn}
-                onPress={handleImportFile}
+                onPress={handleAccessFolder}
                 activeOpacity={0.8}
               >
-                <Plus color="#FFFFFF" size={18} strokeWidth={2.5} />
-                <Text style={styles.headerImportBtnText}>Import</Text>
+                <Text style={styles.headerImportBtnText}>Files</Text>
               </TouchableOpacity>
             </View>
           </GradientView>
@@ -1599,6 +1753,30 @@ export default function LibraryScreen() {
           )}
         </View>
 
+        {/* Indexing status banner (folder scan in progress / error) */}
+        {indexingStatus.phase !== "idle" &&
+          indexingStatus.phase !== "done" && (
+            <View
+              style={[
+                styles.indexBanner,
+                {
+                  backgroundColor:
+                    indexingStatus.phase === "error"
+                      ? colors.error
+                      : t.primary,
+                },
+              ]}
+            >
+              <Text style={styles.indexBannerText} numberOfLines={1}>
+                {indexingStatus.phase === "scanning"
+                  ? `Scanning ${indexingStatus.folder}… ${indexingStatus.found} found`
+                  : indexingStatus.phase === "saving"
+                    ? `Saving ${indexingStatus.total} documents…`
+                    : indexingStatus.message}
+              </Text>
+            </View>
+          )}
+
         {/* Mark Mode Toolbar */}
         {markMode && (
           <View
@@ -1695,7 +1873,7 @@ export default function LibraryScreen() {
               showsVerticalScrollIndicator={false}
               ListHeaderComponent={
                 <View style={styles.listHeaderContainer}>
-                  {/* Files Count & Clear All */}
+                  {/* Files Count & Sort By + Clear All */}
                   {files.length > 0 && !searchQuery && !hasActiveFilters && (
                     <View style={styles.filesHeader}>
                       <Text
@@ -1704,11 +1882,25 @@ export default function LibraryScreen() {
                         {filteredFiles.length} file
                         {filteredFiles.length !== 1 ? "s" : ""}
                       </Text>
-                      <TouchableOpacity onPress={handleClearAll}>
-                        <Text style={[styles.clearAllText, { color: t.error }]}>
-                          Clear All
-                        </Text>
-                      </TouchableOpacity>
+                      <View style={styles.headerActionsRow}>
+                        <TouchableOpacity
+                          onPress={() => setShowSortMenu(true)}
+                          hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                        >
+                          <Text
+                            style={[styles.sortByText, { color: t.primary }]}
+                          >
+                            Sort by
+                          </Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity onPress={handleClearAll}>
+                          <Text
+                            style={[styles.clearAllText, { color: t.error }]}
+                          >
+                            Clear All
+                          </Text>
+                        </TouchableOpacity>
+                      </View>
                     </View>
                   )}
 
@@ -1729,163 +1921,82 @@ export default function LibraryScreen() {
           </View>
         )}
         {/* ── Action Sheet Modal ───────────────────────────────────────────── */}
+        <FileActionSheetModal
+          file={actionFile}
+          theme={t}
+          isFavorite={
+            actionFile ? favoriteIds.has(actionFile.id) : false
+          }
+          onClose={() => setActionFile(null)}
+          onOpen={() => {
+            const f = actionFile;
+            if (!f) return;
+            setActionFile(null);
+            handleFilePress(f);
+          }}
+          onShare={() => actionFile && handleActionShare(actionFile)}
+          onToggleFavorite={() =>
+            actionFile && handleToggleFavorite(actionFile)
+          }
+          onMoveToFolder={() =>
+            actionFile && handleMoveToFolder(actionFile)
+          }
+          onRename={() => actionFile && handleRenameFile(actionFile)}
+          onDelete={() => actionFile && handleActionDelete(actionFile)}
+        />
+
+        {/* ── Sort By Modal ────────────────────────────────────────────────── */}
         <Modal
-          visible={actionFile !== null}
+          visible={showSortMenu}
           transparent
           animationType="fade"
-          onRequestClose={() => setActionFile(null)}
+          onRequestClose={() => setShowSortMenu(false)}
         >
           <TouchableOpacity
-            style={styles.modalOverlay}
-            onPress={() => setActionFile(null)}
+            style={[styles.modalOverlay, { justifyContent: "center" }]}
+            onPress={() => setShowSortMenu(false)}
             activeOpacity={1}
           >
             <View
-              style={[styles.actionSheet, { backgroundColor: t.card }]}
+              style={[styles.sortMenuModal, { backgroundColor: t.card }]}
               onStartShouldSetResponder={() => true}
             >
-              {/* Handle bar */}
-              <View
-                style={[
-                  styles.actionSheetHandle,
-                  { backgroundColor: t.border },
-                ]}
-              />
-              {/* File name */}
-              <Text
-                style={[styles.actionSheetTitle, { color: t.text }]}
-                numberOfLines={2}
-              >
-                {actionFile?.displayName}
+              <Text style={[styles.sortMenuTitle, { color: t.text }]}>
+                Sort by
               </Text>
-
-              {/* Open */}
-              <TouchableOpacity
-                style={[
-                  styles.actionSheetItem,
-                  { borderBottomColor: t.borderLight },
-                ]}
-                onPress={() => {
-                  const f = actionFile!;
-                  setActionFile(null);
-                  handleFilePress(f);
-                }}
-              >
-                <MaterialIcons name="open-in-new" size={22} color={t.text} />
-                <Text style={[styles.actionSheetItemText, { color: t.text }]}>
-                  Open
-                </Text>
-              </TouchableOpacity>
-
-              {/* Share */}
-              <TouchableOpacity
-                style={[
-                  styles.actionSheetItem,
-                  { borderBottomColor: t.borderLight },
-                ]}
-                onPress={() => handleActionShare(actionFile!)}
-              >
-                <MaterialIcons name="share" size={22} color={t.text} />
-                <Text style={[styles.actionSheetItemText, { color: t.text }]}>
-                  Share
-                </Text>
-              </TouchableOpacity>
-
-              {/* Add to Favorites / Remove */}
-              <TouchableOpacity
-                style={[
-                  styles.actionSheetItem,
-                  { borderBottomColor: t.borderLight },
-                ]}
-                onPress={() => handleToggleFavorite(actionFile!)}
-              >
-                <MaterialIcons
-                  name={
-                    favoriteIds.has(actionFile?.id ?? "")
-                      ? "star"
-                      : "star-outline"
-                  }
-                  size={22}
-                  color="#F59E0B"
-                />
-                <Text style={[styles.actionSheetItemText, { color: t.text }]}>
-                  {favoriteIds.has(actionFile?.id ?? "")
-                    ? "Remove from Favorites"
-                    : "Add to Favorites"}
-                </Text>
-              </TouchableOpacity>
-
-              {/* Move to Folder */}
-              <TouchableOpacity
-                style={[
-                  styles.actionSheetItem,
-                  { borderBottomColor: t.borderLight },
-                ]}
-                onPress={() => handleMoveToFolder(actionFile!)}
-              >
-                <MaterialIcons name="folder" size={22} color={t.text} />
-                <Text style={[styles.actionSheetItemText, { color: t.text }]}>
-                  Move to Folder
-                </Text>
-              </TouchableOpacity>
-
-              {/* Rename */}
-              <TouchableOpacity
-                style={[
-                  styles.actionSheetItem,
-                  { borderBottomColor: t.borderLight },
-                ]}
-                onPress={() => handleRenameFile(actionFile!)}
-              >
-                <MaterialIcons name="edit" size={22} color={t.text} />
-                <Text style={[styles.actionSheetItemText, { color: t.text }]}>
-                  Rename
-                </Text>
-              </TouchableOpacity>
-
-              {/* File Info */}
-              <TouchableOpacity
-                style={[
-                  styles.actionSheetItem,
-                  { borderBottomColor: t.borderLight },
-                ]}
-                onPress={() => handleFileInfo(actionFile!)}
-              >
-                <MaterialIcons name="info-outline" size={22} color={t.text} />
-                <Text style={[styles.actionSheetItemText, { color: t.text }]}>
-                  File Info
-                </Text>
-              </TouchableOpacity>
-
-              {/* Delete */}
-              <TouchableOpacity
-                style={[
-                  styles.actionSheetItem,
-                  { borderBottomColor: t.borderLight },
-                ]}
-                onPress={() => handleActionDelete(actionFile!)}
-              >
-                <MaterialIcons
-                  name="delete-outline"
-                  size={22}
-                  color={colors.error}
-                />
-                <Text
-                  style={[styles.actionSheetItemText, { color: colors.error }]}
-                >
-                  Delete
-                </Text>
-              </TouchableOpacity>
-
-              {/* Cancel */}
-              <TouchableOpacity
-                style={styles.actionSheetCancel}
-                onPress={() => setActionFile(null)}
-              >
-                <Text style={[styles.actionSheetCancelText, { color: t.text }]}>
-                  Cancel
-                </Text>
-              </TouchableOpacity>
+              {SORT_OPTIONS.map((opt) => {
+                const active = sortBy === opt.key;
+                return (
+                  <TouchableOpacity
+                    key={opt.key}
+                    style={[
+                      styles.sortMenuItem,
+                      active && { backgroundColor: t.primary + "15" },
+                    ]}
+                    onPress={() => handleSelectSort(opt.key)}
+                    activeOpacity={0.7}
+                  >
+                    <Text
+                      style={[
+                        styles.sortMenuItemText,
+                        {
+                          color: active ? t.primary : t.text,
+                          fontWeight: active ? "700" : "500",
+                        },
+                      ]}
+                    >
+                      {opt.label}
+                    </Text>
+                    {active && (
+                      <Ionicons
+                        name="checkmark"
+                        size={20}
+                        color={t.primary}
+                      />
+                    )}
+                  </TouchableOpacity>
+                );
+              })}
             </View>
           </TouchableOpacity>
         </Modal>
@@ -1989,6 +2100,268 @@ export default function LibraryScreen() {
 }
 
 // ============================================================================
+// FILE ACTION SHEET MODAL (with reading progress ring + slide-down dismiss)
+// ============================================================================
+interface FileActionSheetModalProps {
+  file: QuickAccessFile | null;
+  theme: any;
+  isFavorite: boolean;
+  onClose: () => void;
+  onOpen: () => void;
+  onShare: () => void;
+  onToggleFavorite: () => void;
+  onMoveToFolder: () => void;
+  onRename: () => void;
+  onDelete: () => void;
+}
+
+const SHEET_DISMISS_DISTANCE = 110;
+
+const FileActionSheetModal: React.FC<FileActionSheetModalProps> = ({
+  file,
+  theme,
+  isFavorite,
+  onClose,
+  onOpen,
+  onShare,
+  onToggleFavorite,
+  onMoveToFolder,
+  onRename,
+  onDelete,
+}) => {
+  const visible = file !== null;
+  const translateY = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    if (visible) {
+      translateY.setValue(0);
+    }
+  }, [visible, translateY]);
+
+  const dismiss = useCallback(() => {
+    Animated.timing(translateY, {
+      toValue: 600,
+      duration: 220,
+      useNativeDriver: true,
+    }).start(() => {
+      onClose();
+    });
+  }, [translateY, onClose]);
+
+  const panResponder = useRef(
+    PanResponder.create({
+      onMoveShouldSetPanResponder: (_evt, gesture) =>
+        Math.abs(gesture.dy) > 6 && Math.abs(gesture.dy) > Math.abs(gesture.dx),
+      onPanResponderMove: (_evt, gesture) => {
+        if (gesture.dy > 0) {
+          translateY.setValue(gesture.dy);
+        }
+      },
+      onPanResponderRelease: (_evt, gesture) => {
+        if (gesture.dy > SHEET_DISMISS_DISTANCE || gesture.vy > 0.8) {
+          Animated.timing(translateY, {
+            toValue: 600,
+            duration: 200,
+            useNativeDriver: true,
+          }).start(() => onClose());
+        } else {
+          Animated.spring(translateY, {
+            toValue: 0,
+            useNativeDriver: true,
+            bounciness: 4,
+          }).start();
+        }
+      },
+    }),
+  ).current;
+
+  return (
+    <Modal
+      visible={visible}
+      transparent
+      animationType="fade"
+      onRequestClose={dismiss}
+    >
+      <TouchableOpacity
+        style={styles.modalOverlay}
+        onPress={dismiss}
+        activeOpacity={1}
+      >
+        <Animated.View
+          style={[
+            styles.actionSheet,
+            { backgroundColor: theme.card, transform: [{ translateY }] },
+          ]}
+          onStartShouldSetResponder={() => true}
+        >
+          <View
+            style={styles.actionSheetGrabArea}
+            {...panResponder.panHandlers}
+          >
+            <TouchableOpacity
+              style={styles.actionSheetCloseBtn}
+              onPress={dismiss}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              activeOpacity={0.7}
+            >
+              <MaterialIcons
+                name="keyboard-arrow-down"
+                size={28}
+                color={theme.textSecondary}
+              />
+            </TouchableOpacity>
+          </View>
+          {file && (
+            <FileActionSheetBody
+              file={file}
+              theme={theme}
+              isFavorite={isFavorite}
+              onOpen={onOpen}
+              onShare={onShare}
+              onToggleFavorite={onToggleFavorite}
+              onMoveToFolder={onMoveToFolder}
+              onRename={onRename}
+              onDelete={onDelete}
+            />
+          )}
+        </Animated.View>
+      </TouchableOpacity>
+    </Modal>
+  );
+};
+
+interface FileActionSheetBodyProps {
+  file: QuickAccessFile;
+  theme: any;
+  isFavorite: boolean;
+  onOpen: () => void;
+  onShare: () => void;
+  onToggleFavorite: () => void;
+  onMoveToFolder: () => void;
+  onRename: () => void;
+  onDelete: () => void;
+}
+
+const FileActionSheetBody: React.FC<FileActionSheetBodyProps> = ({
+  file,
+  theme,
+  isFavorite,
+  onOpen,
+  onShare,
+  onToggleFavorite,
+  onMoveToFolder,
+  onRename,
+  onDelete,
+}) => {
+  const progressEntry = useReadingProgressFor(file.uri);
+  const progress = progressEntry?.progress ?? 0;
+  const subtitleParts: string[] = [];
+  if (progressEntry?.currentPage && progressEntry?.totalPages) {
+    subtitleParts.push(
+      `Page ${progressEntry.currentPage} of ${progressEntry.totalPages}`,
+    );
+  } else if (progress > 0) {
+    subtitleParts.push("Reading progress");
+  } else {
+    subtitleParts.push("Not started");
+  }
+
+  const actions: {
+    key: string;
+    icon: keyof typeof MaterialIcons.glyphMap;
+    label: string;
+    color: string;
+    onPress: () => void;
+  }[] = [
+    { key: "open", icon: "open-in-new", label: "Open", color: theme.text, onPress: onOpen },
+    { key: "send", icon: "send", label: "Send", color: theme.text, onPress: onShare },
+    {
+      key: "fav",
+      icon: isFavorite ? "star" : "star-outline",
+      label: isFavorite ? "Unfavorite" : "Favorite",
+      color: "#F59E0B",
+      onPress: onToggleFavorite,
+    },
+    {
+      key: "move",
+      icon: "folder",
+      label: "Move",
+      color: theme.text,
+      onPress: onMoveToFolder,
+    },
+    {
+      key: "rename",
+      icon: "edit",
+      label: "Rename",
+      color: theme.text,
+      onPress: onRename,
+    },
+    {
+      key: "delete",
+      icon: "delete-outline",
+      label: "Delete",
+      color: colors.error,
+      onPress: onDelete,
+    },
+  ];
+
+  return (
+    <View>
+      <Text
+        style={[styles.actionSheetFileName, { color: theme.text }]}
+        numberOfLines={2}
+      >
+        {file.displayName}
+      </Text>
+
+      <View style={styles.actionSheetRingWrap}>
+        <ProgressRing
+          progress={progress}
+          size={108}
+          strokeWidth={8}
+          color={theme.primary}
+          trackColor={theme.borderLight}
+          textColor={theme.text}
+          emptyLabel="0%"
+        />
+        <Text
+          style={[styles.actionSheetRingSubtitle, { color: theme.textSecondary }]}
+          numberOfLines={1}
+        >
+          {subtitleParts.join(" · ")}
+        </Text>
+      </View>
+
+      <View style={styles.actionSheetGrid}>
+        {actions.map((a) => (
+          <TouchableOpacity
+            key={a.key}
+            style={styles.actionSheetGridItem}
+            onPress={a.onPress}
+            activeOpacity={0.7}
+          >
+            <View
+              style={[
+                styles.actionSheetGridIconBg,
+                { backgroundColor: theme.backgroundSecondary },
+              ]}
+            >
+              <MaterialIcons name={a.icon} size={20} color={a.color} />
+            </View>
+            <Text
+              style={[styles.actionSheetGridLabel, { color: a.color }]}
+              numberOfLines={1}
+            >
+              {a.label}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+    </View>
+  );
+};
+
+// ============================================================================
 // STYLES
 // ============================================================================
 const styles = StyleSheet.create({
@@ -2023,14 +2396,12 @@ const styles = StyleSheet.create({
   headerImportBtn: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 5,
-    paddingHorizontal: 12,
-    paddingVertical: 9,
-    borderRadius: 14,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 12,
     backgroundColor: "rgba(255,255,255,0.15)",
     borderWidth: 1,
     borderColor: "rgba(255,255,255,0.4)",
-    minWidth: 48,
     justifyContent: "center",
   },
   headerImportBtnText: {
@@ -2118,6 +2489,45 @@ const styles = StyleSheet.create({
   clearAllText: {
     fontSize: 14,
     fontWeight: "700",
+  },
+  headerActionsRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 16,
+  },
+  sortByText: {
+    fontSize: 14,
+    fontWeight: "700",
+  },
+  sortMenuModal: {
+    borderRadius: 18,
+    padding: 12,
+    width: SCREEN_WIDTH * 0.82,
+    maxWidth: 380,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.22,
+    shadowRadius: 24,
+    elevation: 16,
+  },
+  sortMenuTitle: {
+    fontSize: 16,
+    fontWeight: "700",
+    paddingHorizontal: 6,
+    paddingTop: 4,
+    paddingBottom: 8,
+  },
+  sortMenuItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 12,
+    paddingVertical: 13,
+    borderRadius: 10,
+  },
+  sortMenuItemText: {
+    fontSize: 15,
+    fontWeight: "500",
   },
   listContent: {
     paddingHorizontal: 0,
@@ -2354,6 +2764,20 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
   },
 
+  // ── Index banner ─────────────────────────────────────────────────────────
+  indexBanner: {
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    marginHorizontal: 16,
+    marginTop: 6,
+    borderRadius: 10,
+  },
+  indexBannerText: {
+    color: "#FFFFFF",
+    fontSize: 12,
+    fontWeight: "600",
+  },
+
   // ── Mark toolbar ─────────────────────────────────────────────────────────
   markToolbar: {
     flexDirection: "row",
@@ -2411,55 +2835,77 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: "rgba(0,0,0,0.45)",
     justifyContent: "flex-end",
-    alignItems: "flex-end",
+    alignItems: "center",
   },
   actionSheet: {
-    borderRadius: 10,
-    paddingBottom: 16,
-    paddingTop: 5,
-    paddingHorizontal: 16,
-    marginRight: 16,
-    marginBottom: 20,
-    width: SCREEN_WIDTH * 0.52,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    paddingBottom: 20,
+    paddingTop: 4,
+    paddingHorizontal: 18,
+    width: "100%",
+    maxWidth: 440,
     shadowColor: "#000",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.2,
+    shadowOffset: { width: 0, height: -4 },
+    shadowOpacity: 0.18,
     shadowRadius: 16,
-    elevation: 12,
+    elevation: 14,
   },
-  actionSheetHandle: {
-    width: 40,
-    height: 4,
-    borderRadius: 2,
-    alignSelf: "center",
-    marginBottom: 16,
-  },
-  actionSheetTitle: {
-    fontSize: 15,
-    fontWeight: "600",
-    marginBottom: 20,
-    paddingHorizontal: 4,
-  },
-  actionSheetItem: {
-    flexDirection: "row",
+  actionSheetGrabArea: {
+    paddingTop: 6,
+    paddingBottom: 2,
     alignItems: "center",
-    gap: 10,
-    paddingVertical: 12,
-    paddingHorizontal: 4,
-    borderBottomWidth: StyleSheet.hairlineWidth,
+    justifyContent: "center",
   },
-  actionSheetItemText: {
-    fontSize: 16,
-    fontWeight: "500",
+  actionSheetCloseBtn: {
+    width: 36,
+    height: 32,
+    alignItems: "center",
+    justifyContent: "center",
   },
-  actionSheetCancel: {
+  actionSheetFileName: {
+    fontSize: 14,
+    fontWeight: "700",
+    textAlign: "center",
+    paddingHorizontal: 28,
     marginTop: 4,
-    paddingVertical: 12,
-    alignItems: "center",
+    marginBottom: 2,
   },
-  actionSheetCancelText: {
-    fontSize: 16,
+  actionSheetRingWrap: {
+    alignItems: "center",
+    justifyContent: "center",
+    marginTop: 10,
+    marginBottom: 16,
+    gap: 6,
+  },
+  actionSheetRingSubtitle: {
+    fontSize: 12,
     fontWeight: "600",
+    letterSpacing: 0.2,
+  },
+  actionSheetGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    justifyContent: "space-between",
+    rowGap: 10,
+  },
+  actionSheetGridItem: {
+    width: "31%",
+    alignItems: "center",
+    gap: 4,
+    paddingVertical: 4,
+  },
+  actionSheetGridIconBg: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  actionSheetGridLabel: {
+    fontSize: 11,
+    fontWeight: "600",
+    letterSpacing: 0.1,
   },
 
   // ── Header view toggle ──────────────────────────────────────────────────

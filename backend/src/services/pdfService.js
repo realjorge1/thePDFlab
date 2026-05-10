@@ -1,6 +1,7 @@
 const { PDFDocument, rgb, degrees, PDFName, PDFArray, PDFString, PDFStream } = require("pdf-lib");
 const fs = require("fs").promises;
 const path = require("path");
+const os = require("os");
 const crypto = require("crypto");
 const { execFile } = require("child_process");
 const { promisify } = require("util");
@@ -8,11 +9,140 @@ const execFileAsync = promisify(execFile);
 const sharp = require("sharp");
 const { parsePDF: pdfParse } = require("../utils/pdfParser");
 const { encryptPdfBuffer, decryptPdfBuffer } = require("./pdfEncryption");
+const pdfRepairService = require("./pdfRepairService");
+
+// ── readFileBytes ────────────────────────────────────────────────────────────
+// Robustly read an express-fileupload file object's bytes regardless of whether
+// the upload was stored in-memory (file.data) or via a temp file (tempFilePath).
+// Falls back to file.mv() → temp copy if the primary path is missing/empty.
+async function readFileBytes(file) {
+  // 1. In-memory path (useTempFiles: false)
+  if (file.data && file.data.length > 0) {
+    return file.data;
+  }
+
+  // 2. Temp-file path (useTempFiles: true)
+  if (file.tempFilePath) {
+    try {
+      const bytes = await fs.readFile(file.tempFilePath);
+      if (bytes.length > 0) return bytes;
+      console.warn("[readFileBytes] tempFilePath read returned 0 bytes, trying mv fallback");
+    } catch (e) {
+      console.warn("[readFileBytes] tempFilePath read failed:", e.message);
+    }
+  }
+
+  // 3. mv() fallback — write to a fresh temp file and read from there
+  const tmpPath = path.join(os.tmpdir(), `inscribed_read_${crypto.randomBytes(8).toString("hex")}.pdf`);
+  await file.mv(tmpPath);
+  try {
+    return await fs.readFile(tmpPath);
+  } finally {
+    fs.unlink(tmpPath).catch(() => {});
+  }
+}
+
+// ── safeLoadPDF ─────────────────────────────────────────────────────────────
+// pdf-lib requires the %PDF- signature to appear at or very near byte 0.
+// Some files have a leading BOM, whitespace, or a partial HTTP header prepended
+// (common when uploading via certain proxies/clients). Scan the first 1 KB;
+// if the marker is offset > 0, strip the prefix and retry. If it is absent
+// entirely, route through pdfRepairService before giving up.
+async function safeLoadPDF(bytes, opts = {}) {
+  const defaultOpts = { ignoreEncryption: true, throwOnInvalidObject: false, ...opts };
+
+  // Fast path — header at offset 0 (the common case).
+  if (bytes.slice(0, 5).toString("binary") === "%PDF-") {
+    try {
+      return await PDFDocument.load(bytes, defaultOpts);
+    } catch (fastPathErr) {
+      // Valid %PDF- header but structural issue (corrupt xref, object streams, etc.)
+      // Fall through to repair service rather than propagating.
+      console.warn(`[safeLoadPDF] fast-path load failed (${fastPathErr.message.slice(0, 100)}), attempting repair`);
+    }
+  } else {
+    console.warn(`[safeLoadPDF] no %%PDF- header — first 20 bytes: ${bytes.slice(0, 20).toString("hex")}`);
+  }
+
+  // 1. Search up to 8 KB for a %PDF- marker (BOM / whitespace / proxy prefix).
+  const scanLimit = Math.min(bytes.length, 8192);
+  const probe = bytes.slice(0, scanLimit).toString("binary");
+  const markerIdx = probe.indexOf("%PDF-");
+  if (markerIdx > 0) {
+    console.warn(`[safeLoadPDF] stripping ${markerIdx}-byte prefix before %PDF- header`);
+    try {
+      return await PDFDocument.load(bytes.slice(markerIdx), defaultOpts);
+    } catch (e) {
+      console.warn(`[safeLoadPDF] stripped load failed: ${e.message.slice(0, 80)}`);
+    }
+  }
+
+  // 2. Detect base64-on-disk: if the file starts with "JVBERi0" it is the
+  //    base64 encoding of "%PDF-1."; decode and retry before repair.
+  const leadAscii = bytes.slice(0, 100).toString("ascii");
+  if (leadAscii.startsWith("JVBERi0") || leadAscii.startsWith("data:application/pdf;base64,")) {
+    console.warn("[safeLoadPDF] content appears to be base64-encoded — decoding");
+    try {
+      const b64str = leadAscii.startsWith("data:")
+        ? bytes.toString("ascii").replace(/^data:[^,]+,/, "").replace(/[\r\n]/g, "")
+        : bytes.toString("ascii").replace(/[\r\n]/g, "");
+      const decoded = Buffer.from(b64str, "base64");
+      if (decoded.slice(0, 5).toString("binary") === "%PDF-") {
+        return await PDFDocument.load(decoded, defaultOpts);
+      }
+    } catch (e) {
+      console.warn(`[safeLoadPDF] base64 decode/load failed: ${e.message.slice(0, 80)}`);
+    }
+  }
+
+  // Detect common non-PDF formats by magic bytes and fail fast with a clear message.
+  if (bytes.length >= 4) {
+    const magic = bytes.slice(0, 4).toString("hex");
+    if (magic === "504b0304" || magic === "504b0506" || magic === "504b0708") {
+      throw new Error("The uploaded file is not a PDF (it appears to be a ZIP-based format such as DOCX, XLSX, or EPUB). Please upload a valid PDF.");
+    }
+    if (bytes.slice(0, 3).toString("hex") === "ffd8ff") {
+      throw new Error("The uploaded file is not a PDF (it is a JPEG image). Please upload a valid PDF.");
+    }
+    if (bytes.slice(0, 4).toString("hex") === "89504e47") {
+      throw new Error("The uploaded file is not a PDF (it is a PNG image). Please upload a valid PDF.");
+    }
+  }
+
+  // 3. All direct load attempts failed — route through pdfRepairService.
+  console.warn("[safeLoadPDF] routing through pdfRepairService for structural repair");
+  const tmpIn = path.join(os.tmpdir(), `inscribed_safe_${crypto.randomBytes(8).toString("hex")}.pdf`);
+  await fs.writeFile(tmpIn, bytes);
+  try {
+    const { buffer: repairedBuf } = await pdfRepairService.repairPdf(tmpIn);
+    const repaired = Buffer.isBuffer(repairedBuf) ? repairedBuf : Buffer.from(repairedBuf);
+    return await PDFDocument.load(repaired, defaultOpts);
+  } finally {
+    fs.unlink(tmpIn).catch(() => {});
+  }
+}
+
+// ── Memory-bounded sharp configuration ─────────────────────────────────────
+// Sharp's default thread pool grows to libuv's UV_THREADPOOL_SIZE (4) and its
+// in-memory cache buffers decoded pixel data. On a 30 MB PDF with hundreds of
+// embedded images, this can spike RSS by hundreds of MB and trigger OOM kills
+// on free-tier hosts. Cap thread count and disable the cache for predictable
+// memory use; correctness is unchanged.
+try {
+  sharp.concurrency(parseInt(process.env.SHARP_CONCURRENCY, 10) || 1);
+  sharp.cache(false);
+} catch {
+  // Older sharp versions may not expose these — safe to ignore.
+}
+
+// Image-recompression batch size. Each batch is processed sequentially to keep
+// the resident set predictable on large PDFs.
+const IMAGE_BATCH_SIZE = parseInt(process.env.PDF_IMAGE_BATCH_SIZE, 10) || 8;
 
 class PDFService {
   async addTextToPDF(file, options) {
-    const pdfBytes = await fs.readFile(file.tempFilePath);
-    const pdf = await PDFDocument.load(pdfBytes);
+    const pdfBytes = await readFileBytes(file);
+    const pdf = await safeLoadPDF(pdfBytes);
 
     const {
       text,
@@ -46,8 +176,8 @@ class PDFService {
 
   // Redact/blackout area
   async redactPDF(file, options) {
-    const pdfBytes = await fs.readFile(file.tempFilePath);
-    const pdf = await PDFDocument.load(pdfBytes);
+    const pdfBytes = await readFileBytes(file);
+    const pdf = await safeLoadPDF(pdfBytes);
 
     const { pageNumber = 0, x = 0, y = 0, width = 100, height = 20 } = options;
 
@@ -78,8 +208,8 @@ class PDFService {
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
       try {
-        const pdfBytes = await fs.readFile(file.tempFilePath);
-        const pdf = await PDFDocument.load(pdfBytes, {
+        const pdfBytes = await readFileBytes(file);
+        const pdf = await safeLoadPDF(pdfBytes, {
           ignoreEncryption: true,
         });
         const copiedPages = await mergedPdf.copyPages(
@@ -100,8 +230,8 @@ class PDFService {
 
   // Split PDF
   async splitPDF(file, pageRanges) {
-    const pdfBytes = await fs.readFile(file.tempFilePath);
-    const pdf = await PDFDocument.load(pdfBytes);
+    const pdfBytes = await readFileBytes(file);
+    const pdf = await safeLoadPDF(pdfBytes);
     const results = [];
 
     for (const range of pageRanges) {
@@ -118,8 +248,8 @@ class PDFService {
 
   // Remove pages
   async removePages(file, pagesToRemove) {
-    const pdfBytes = await fs.readFile(file.tempFilePath);
-    const pdf = await PDFDocument.load(pdfBytes);
+    const pdfBytes = await readFileBytes(file);
+    const pdf = await safeLoadPDF(pdfBytes);
     const newPdf = await PDFDocument.create();
 
     const totalPages = pdf.getPageCount();
@@ -140,8 +270,8 @@ class PDFService {
 
   // Extract pages
   async extractPages(file, pagesToExtract) {
-    const pdfBytes = await fs.readFile(file.tempFilePath);
-    const pdf = await PDFDocument.load(pdfBytes);
+    const pdfBytes = await readFileBytes(file);
+    const pdf = await safeLoadPDF(pdfBytes);
     const newPdf = await PDFDocument.create();
 
     const copiedPages = await newPdf.copyPages(pdf, pagesToExtract);
@@ -153,8 +283,8 @@ class PDFService {
 
   // Rotate PDF
   async rotatePDF(file, rotation) {
-    const pdfBytes = await fs.readFile(file.tempFilePath);
-    const pdf = await PDFDocument.load(pdfBytes);
+    const pdfBytes = await readFileBytes(file);
+    const pdf = await safeLoadPDF(pdfBytes);
 
     const pages = pdf.getPages();
     pages.forEach((page) => {
@@ -167,8 +297,8 @@ class PDFService {
 
   // Add watermark
   async addWatermark(file, watermarkText, options = {}) {
-    const pdfBytes = await fs.readFile(file.tempFilePath);
-    const pdf = await PDFDocument.load(pdfBytes);
+    const pdfBytes = await readFileBytes(file);
+    const pdf = await safeLoadPDF(pdfBytes);
     const pages = pdf.getPages();
 
     const {
@@ -196,8 +326,8 @@ class PDFService {
 
   // Add page numbers
   async addPageNumbers(file, options = {}) {
-    const pdfBytes = await fs.readFile(file.tempFilePath);
-    const pdf = await PDFDocument.load(pdfBytes);
+    const pdfBytes = await readFileBytes(file);
+    const pdf = await safeLoadPDF(pdfBytes);
     const pages = pdf.getPages();
 
     const {
@@ -244,16 +374,16 @@ class PDFService {
     };
     const level = LEVELS[quality] || LEVELS.medium;
 
-    const pdfBytes = await fs.readFile(file.tempFilePath);
-    const pdf = await PDFDocument.load(pdfBytes, { ignoreEncryption: true });
+    const pdfBytes = await readFileBytes(file);
+    const pdf = await safeLoadPDF(pdfBytes, { ignoreEncryption: true });
 
     // 1. Strip metadata
     pdf.setTitle("");
     pdf.setAuthor("");
     pdf.setSubject("");
     pdf.setKeywords([]);
-    pdf.setCreator("PDFiQ");
-    pdf.setProducer("PDFiQ");
+    pdf.setCreator("Inscribed");
+    pdf.setProducer("Inscribed");
 
     // 2. Re-compress embedded JPEG images
     const context = pdf.context;
@@ -296,6 +426,11 @@ class PDFService {
       } catch {
         // Skip images that can't be re-encoded
       }
+      // Yield every IMAGE_BATCH_SIZE images so the event loop can serve health
+      // checks and other requests on large PDFs.
+      if (imagesProcessed > 0 && imagesProcessed % IMAGE_BATCH_SIZE === 0) {
+        await new Promise((r) => setImmediate(r));
+      }
     }
 
     // 3. Save with structural compression
@@ -321,8 +456,8 @@ class PDFService {
 
   // Get PDF info
   async getPDFInfo(file) {
-    const pdfBytes = await fs.readFile(file.tempFilePath);
-    const pdf = await PDFDocument.load(pdfBytes, {
+    const pdfBytes = await readFileBytes(file);
+    const pdf = await safeLoadPDF(pdfBytes, {
       ignoreEncryption: true,
       throwOnInvalidObject: false,
     });
@@ -430,8 +565,8 @@ class PDFService {
 
   // Organize pages (reorder)
   async organizePDF(file, pageOrder) {
-    const pdfBytes = await fs.readFile(file.tempFilePath);
-    const pdf = await PDFDocument.load(pdfBytes);
+    const pdfBytes = await readFileBytes(file);
+    const pdf = await safeLoadPDF(pdfBytes);
     const newPdf = await PDFDocument.create();
 
     const copiedPages = await newPdf.copyPages(pdf, pageOrder);
@@ -443,8 +578,8 @@ class PDFService {
 
   // Reverse page order
   async reversePDF(file) {
-    const pdfBytes = await fs.readFile(file.tempFilePath);
-    const pdf = await PDFDocument.load(pdfBytes);
+    const pdfBytes = await readFileBytes(file);
+    const pdf = await safeLoadPDF(pdfBytes);
     const newPdf = await PDFDocument.create();
 
     const totalPages = pdf.getPageCount();
@@ -462,8 +597,8 @@ class PDFService {
 
   // Duplicate pages
   async duplicatePDF(file, pagesToDuplicate) {
-    const pdfBytes = await fs.readFile(file.tempFilePath);
-    const pdf = await PDFDocument.load(pdfBytes);
+    const pdfBytes = await readFileBytes(file);
+    const pdf = await safeLoadPDF(pdfBytes);
     const newPdf = await PDFDocument.create();
 
     const totalPages = pdf.getPageCount();
@@ -485,8 +620,8 @@ class PDFService {
 
   // Repair PDF (reload and save with recovery options)
   async repairPDF(file) {
-    const pdfBytes = await fs.readFile(file.tempFilePath);
-    const pdf = await PDFDocument.load(pdfBytes, {
+    const pdfBytes = await readFileBytes(file);
+    const pdf = await safeLoadPDF(pdfBytes, {
       ignoreEncryption: true,
       updateMetadata: false,
       throwOnInvalidObject: false,
@@ -507,8 +642,8 @@ class PDFService {
     const scale = quality >= 80 ? 1.0 : quality >= 50 ? 0.85 : 0.7;
     const jpegQuality = Math.max(20, Math.min(95, quality));
 
-    const pdfBytes = await fs.readFile(file.tempFilePath);
-    const pdf = await PDFDocument.load(pdfBytes, { ignoreEncryption: true });
+    const pdfBytes = await readFileBytes(file);
+    const pdf = await safeLoadPDF(pdfBytes, { ignoreEncryption: true });
 
     const context = pdf.context;
     let imagesOptimized = 0;
@@ -580,6 +715,9 @@ class PDFService {
       } catch {
         // Skip images that can't be processed
       }
+      if (imagesOptimized > 0 && imagesOptimized % IMAGE_BATCH_SIZE === 0) {
+        await new Promise((r) => setImmediate(r));
+      }
     }
 
     const optimizedBytes = await pdf.save({
@@ -597,34 +735,60 @@ class PDFService {
 
   // Remove duplicate pages using content hash comparison
   async removeDuplicatesPDF(file) {
-    const pdfBytes = await fs.readFile(file.tempFilePath);
-    const pdf = await PDFDocument.load(pdfBytes);
+    const pdfBytes = await readFileBytes(file);
+    const pdf = await safeLoadPDF(pdfBytes);
     const newPdf = await PDFDocument.create();
 
     const totalPages = pdf.getPageCount();
     const pageHashes = new Map();
     const uniquePageIndices = [];
 
-    // Generate hash for each page content
+    // Hash each page by sampling its raw content-stream bytes and geometry.
+    // This avoids the O(n) full-PDF serialization of the previous approach
+    // while still catching identical pages reliably.
     for (let i = 0; i < totalPages; i++) {
-      const tempPdf = await PDFDocument.create();
-      const [copiedPage] = await tempPdf.copyPages(pdf, [i]);
-      tempPdf.addPage(copiedPage);
-      const singlePageBytes = await tempPdf.save();
+      let fingerprint = `page:${i}`;  // fallback: treat every page as unique
+      try {
+        const page = pdf.getPage(i);
+        const { width, height } = page.getSize();
+        const rot = page.getRotation().angle;
+        const node = page.node;
 
-      // Create content hash
-      const hash = crypto
-        .createHash("md5")
-        .update(singlePageBytes)
-        .digest("hex");
+        // Collect raw bytes from all content streams on the page
+        const hasher = crypto.createHash("md5");
+        hasher.update(`${Math.round(width)}x${Math.round(height)}r${rot}`);
 
-      if (!pageHashes.has(hash)) {
-        pageHashes.set(hash, i);
+        const contentsRef = node.get(PDFName.of("Contents"));
+        if (contentsRef) {
+          const resolved = pdf.context.lookup(contentsRef);
+          if (resolved) {
+            // Could be a single stream or an array of streams
+            const streams = resolved.constructor?.name === "PDFArray"
+              ? Array.from({ length: resolved.size() }, (_, k) => pdf.context.lookup(resolved.get(k)))
+              : [resolved];
+            for (const stream of streams) {
+              if (stream && typeof stream.getContents === "function") {
+                try {
+                  hasher.update(stream.getContents());
+                } catch {}
+              }
+            }
+          }
+        }
+        fingerprint = hasher.digest("hex");
+      } catch {
+        // Hashing failed — keep the page (safe default)
+      }
+
+      if (!pageHashes.has(fingerprint)) {
+        pageHashes.set(fingerprint, i);
         uniquePageIndices.push(i);
       }
+
+      // Yield every 20 pages so the event loop stays responsive
+      if (i % 20 === 0 && i > 0) await new Promise((r) => setImmediate(r));
     }
 
-    // Copy only unique pages
     if (uniquePageIndices.length > 0) {
       const copiedPages = await newPdf.copyPages(pdf, uniquePageIndices);
       copiedPages.forEach((page) => newPdf.addPage(page));
@@ -636,7 +800,7 @@ class PDFService {
 
   // Protect PDF with password
   async protectPDF(file, password, permissions = {}) {
-    const pdfBytes = await fs.readFile(file.tempFilePath);
+    const pdfBytes = await readFileBytes(file);
 
     // Try qpdf first (best quality encryption)
     try {
@@ -683,7 +847,7 @@ class PDFService {
 
   // Unlock PDF (remove password protection)
   async unlockPDF(file, password) {
-    const pdfBytes = await fs.readFile(file.tempFilePath);
+    const pdfBytes = await readFileBytes(file);
     console.log(
       `[DEBUG unlock] pwdLen=${password.length} hasSpace=${password.includes(" ")} ` +
         `pdfSize=${pdfBytes.length}`,
@@ -720,7 +884,7 @@ class PDFService {
     // Fallback 1: pdf-lib (handles owner-password-only PDFs where user
     // password is empty — it cannot actually decrypt user-password PDFs)
     try {
-      const pdf = await PDFDocument.load(pdfBytes, {
+      const pdf = await safeLoadPDF(pdfBytes, {
         password: password,
       });
       const unlockedBytes = await pdf.save();
@@ -778,7 +942,7 @@ class PDFService {
 
   // Encrypt PDF with password protection
   async encryptPDF(file, password, encryptionType = "AES-256") {
-    const pdfBytes = await fs.readFile(file.tempFilePath);
+    const pdfBytes = await readFileBytes(file);
     const keyLength = encryptionType === "AES-128" ? 128 : 256;
 
     // Try qpdf first (supports AES-256)
@@ -829,8 +993,8 @@ class PDFService {
 
   // Add header/footer
   async addHeaderFooterPDF(file, header, footer) {
-    const pdfBytes = await fs.readFile(file.tempFilePath);
-    const pdf = await PDFDocument.load(pdfBytes);
+    const pdfBytes = await readFileBytes(file);
+    const pdf = await safeLoadPDF(pdfBytes);
     const pages = pdf.getPages();
 
     pages.forEach((page, index) => {
@@ -861,8 +1025,8 @@ class PDFService {
 
   // Crop PDF
   async cropPDF(file, cropBox) {
-    const pdfBytes = await fs.readFile(file.tempFilePath);
-    const pdf = await PDFDocument.load(pdfBytes);
+    const pdfBytes = await readFileBytes(file);
+    const pdf = await safeLoadPDF(pdfBytes);
     const pages = pdf.getPages();
 
     const { x, y, width, height } = cropBox;
@@ -877,8 +1041,8 @@ class PDFService {
 
   // Resize PDF
   async resizePDF(file, width, height) {
-    const pdfBytes = await fs.readFile(file.tempFilePath);
-    const pdf = await PDFDocument.load(pdfBytes);
+    const pdfBytes = await readFileBytes(file);
+    const pdf = await safeLoadPDF(pdfBytes);
     const pages = pdf.getPages();
 
     pages.forEach((page) => {
@@ -895,8 +1059,8 @@ class PDFService {
 
   // Edit text (simplified - adds new text)
   async editTextPDF(file, edits) {
-    const pdfBytes = await fs.readFile(file.tempFilePath);
-    const pdf = await PDFDocument.load(pdfBytes);
+    const pdfBytes = await readFileBytes(file);
+    const pdf = await safeLoadPDF(pdfBytes);
     const pages = pdf.getPages();
 
     edits.forEach((edit) => {
@@ -917,8 +1081,8 @@ class PDFService {
 
   // Highlight text
   async highlightPDF(file, highlights) {
-    const pdfBytes = await fs.readFile(file.tempFilePath);
-    const pdf = await PDFDocument.load(pdfBytes);
+    const pdfBytes = await readFileBytes(file);
+    const pdf = await safeLoadPDF(pdfBytes);
     const pages = pdf.getPages();
 
     highlights.forEach((highlight) => {
@@ -941,8 +1105,8 @@ class PDFService {
 
   // Annotate PDF
   async annotatePDF(file, annotations) {
-    const pdfBytes = await fs.readFile(file.tempFilePath);
-    const pdf = await PDFDocument.load(pdfBytes);
+    const pdfBytes = await readFileBytes(file);
+    const pdf = await safeLoadPDF(pdfBytes);
     const pages = pdf.getPages();
 
     annotations.forEach((annotation) => {
@@ -963,8 +1127,8 @@ class PDFService {
 
   // Draw on PDF - Freehand drawing with paths/lines
   async drawOnPDF(file, drawings) {
-    const pdfBytes = await fs.readFile(file.tempFilePath);
-    const pdf = await PDFDocument.load(pdfBytes);
+    const pdfBytes = await readFileBytes(file);
+    const pdf = await safeLoadPDF(pdfBytes);
     const pages = pdf.getPages();
 
     drawings.forEach((drawing) => {
@@ -1032,8 +1196,8 @@ class PDFService {
 
   // Add stamp - draws a visible, bordered stamp on every page
   async stampPDF(file, stamp) {
-    const pdfBytes = await fs.readFile(file.tempFilePath);
-    const pdf = await PDFDocument.load(pdfBytes);
+    const pdfBytes = await readFileBytes(file);
+    const pdf = await safeLoadPDF(pdfBytes);
     const pages = pdf.getPages();
     const font = await pdf.embedFont("Helvetica-Bold");
 
@@ -1094,8 +1258,8 @@ class PDFService {
 
   // Get/Set metadata
   async setMetadataPDF(file, metadata) {
-    const pdfBytes = await fs.readFile(file.tempFilePath);
-    const pdf = await PDFDocument.load(pdfBytes);
+    const pdfBytes = await readFileBytes(file);
+    const pdf = await safeLoadPDF(pdfBytes);
 
     if (metadata.title) pdf.setTitle(metadata.title);
     if (metadata.author) pdf.setAuthor(metadata.author);
@@ -1110,7 +1274,7 @@ class PDFService {
 
   // Search in PDF
   async searchPDF(file, query) {
-    const dataBuffer = await fs.readFile(file.tempFilePath);
+    const dataBuffer = await readFileBytes(file);
     const data = await pdfParse(dataBuffer);
 
     const results = [];
@@ -1126,7 +1290,7 @@ class PDFService {
 
   // Validate PDF - comprehensive validation
   async validatePDF(file) {
-    const pdfBytes = await fs.readFile(file.tempFilePath);
+    const pdfBytes = await readFileBytes(file);
     const validation = {
       valid: false,
       pageCount: 0,
@@ -1143,11 +1307,11 @@ class PDFService {
       // Try loading with different options to detect encryption
       let pdf;
       try {
-        pdf = await PDFDocument.load(pdfBytes);
+        pdf = await safeLoadPDF(pdfBytes, { ignoreEncryption: false });
       } catch (encError) {
         if (encError.message.includes("encrypt")) {
           validation.isEncrypted = true;
-          pdf = await PDFDocument.load(pdfBytes, { ignoreEncryption: true });
+          pdf = await safeLoadPDF(pdfBytes, { ignoreEncryption: true });
         } else {
           throw encError;
         }
@@ -1210,8 +1374,8 @@ class PDFService {
 
   // Fill form — handles text, checkbox, radio, dropdown, and listbox fields
   async fillFormPDF(file, data) {
-    const pdfBytes = await fs.readFile(file.tempFilePath);
-    const pdf = await PDFDocument.load(pdfBytes);
+    const pdfBytes = await readFileBytes(file);
+    const pdf = await safeLoadPDF(pdfBytes);
     const form = pdf.getForm();
 
     for (const [key, value] of Object.entries(data)) {
@@ -1248,8 +1412,8 @@ class PDFService {
 
   // Flatten form
   async flattenFormPDF(file) {
-    const pdfBytes = await fs.readFile(file.tempFilePath);
-    const pdf = await PDFDocument.load(pdfBytes);
+    const pdfBytes = await readFileBytes(file);
+    const pdf = await safeLoadPDF(pdfBytes);
     const form = pdf.getForm();
 
     form.flatten();
@@ -1260,8 +1424,8 @@ class PDFService {
 
   // Extract form data with field types
   async extractFormDataPDF(file) {
-    const pdfBytes = await fs.readFile(file.tempFilePath);
-    const pdf = await PDFDocument.load(pdfBytes);
+    const pdfBytes = await readFileBytes(file);
+    const pdf = await safeLoadPDF(pdfBytes);
     const form = pdf.getForm();
 
     const fields = form.getFields();
@@ -1307,11 +1471,11 @@ class PDFService {
 
   // Compare PDFs - Create side-by-side comparison document
   async comparePDFs(file1, file2) {
-    const pdfBytes1 = await fs.readFile(file1.tempFilePath);
-    const pdfBytes2 = await fs.readFile(file2.tempFilePath);
+    const pdfBytes1 = await readFileBytes(file1);
+    const pdfBytes2 = await readFileBytes(file2);
 
-    const pdf1 = await PDFDocument.load(pdfBytes1);
-    const pdf2 = await PDFDocument.load(pdfBytes2);
+    const pdf1 = await safeLoadPDF(pdfBytes1);
+    const pdf2 = await safeLoadPDF(pdfBytes2);
 
     const mergedPdf = await PDFDocument.create();
 
@@ -1350,8 +1514,8 @@ class PDFService {
   async diffPDFs(file1, file2) {
     const { extractTextWithPositions } = require("../utils/pdfTextExtractor");
 
-    const buf1 = await fs.readFile(file1.tempFilePath);
-    const buf2 = await fs.readFile(file2.tempFilePath);
+    const buf1 = await readFileBytes(file1);
+    const buf2 = await readFileBytes(file2);
 
     // Extract text per page using pdfjs-dist (reliable, no module format issues)
     const [result1, result2] = await Promise.all([
@@ -1434,11 +1598,11 @@ class PDFService {
 
   // Merge with review - Copy annotations from file2 onto matching pages of file1
   async mergeReviewPDFs(file1, file2) {
-    const pdfBytes1 = await fs.readFile(file1.tempFilePath);
-    const pdfBytes2 = await fs.readFile(file2.tempFilePath);
+    const pdfBytes1 = await readFileBytes(file1);
+    const pdfBytes2 = await readFileBytes(file2);
 
-    const basePdf = await PDFDocument.load(pdfBytes1, { ignoreEncryption: true });
-    const reviewPdf = await PDFDocument.load(pdfBytes2, { ignoreEncryption: true });
+    const basePdf = await safeLoadPDF(pdfBytes1, { ignoreEncryption: true });
+    const reviewPdf = await safeLoadPDF(pdfBytes2, { ignoreEncryption: true });
 
     const basePages = basePdf.getPages();
     const reviewPages = reviewPdf.getPages();
@@ -1535,8 +1699,8 @@ class PDFService {
   // Strategy 2: pdfjs-dist + node-canvas — pure JS fallback.
   // Strategy 3: pdf-lib image-only grayscale — converts embedded images only.
   async blackWhitePDF(file) {
-    const pdfBytes = await fs.readFile(file.tempFilePath);
-    const srcPdf = await PDFDocument.load(pdfBytes, { ignoreEncryption: true });
+    const pdfBytes = await readFileBytes(file);
+    const srcPdf = await safeLoadPDF(pdfBytes, { ignoreEncryption: true });
     const pageCount = srcPdf.getPageCount();
 
     // ── Strategy 1: pdf2pic full-page rasterization ──────────────────
@@ -1694,8 +1858,8 @@ class PDFService {
 
   // Fix orientation — rotate specific pages or all pages
   async fixOrientationPDF(file, rotation = 90, pageIndices = null) {
-    const pdfBytes = await fs.readFile(file.tempFilePath);
-    const pdf = await PDFDocument.load(pdfBytes);
+    const pdfBytes = await readFileBytes(file);
+    const pdf = await safeLoadPDF(pdfBytes);
     const pages = pdf.getPages();
 
     const targetIndices = (pageIndices && pageIndices.length > 0)
@@ -1723,14 +1887,25 @@ class PDFService {
   // 2. XObject references (images/forms in the page)
   // 3. Visual pixel analysis via pdfjs-dist + sharp (catches scanned blanks)
   async removeBlankPagesPDF(file) {
-    const pdfBytes = await fs.readFile(file.tempFilePath);
-    const pdf = await PDFDocument.load(pdfBytes);
+    const pdfBytes = await readFileBytes(file);
+    const pdf = await safeLoadPDF(pdfBytes);
     const newPdf = await PDFDocument.create();
 
     const pageCount = pdf.getPageCount();
     const nonBlankIndices = [];
 
     // ── Signal 1 & 2: text + XObject checks via pdf-lib ──────────────
+    // Parse the full document once for text extraction (much cheaper than
+    // creating a separate PDF per page).
+    let fullDocText = "";
+    let perPageTextFallback = false;
+    try {
+      const parsed = await pdfParse(Buffer.from(pdfBytes));
+      fullDocText = parsed.text || "";
+    } catch {
+      perPageTextFallback = true; // fall back to the per-page approach below
+    }
+
     const textBlankFlags = []; // true if page appears blank from text+xobject
     for (let i = 0; i < pageCount; i++) {
       let hasText = false;
@@ -1743,7 +1918,6 @@ class PDFService {
         if (resources) {
           const xobjects = resources.lookup?.(PDFName.of("XObject")) || resources.get?.(PDFName.of("XObject"));
           if (xobjects) {
-            // If the page references any XObjects, it likely has visual content
             const entries = xobjects.entries?.() || [];
             for (const [, val] of entries) {
               if (val) { hasXObjects = true; break; }
@@ -1755,18 +1929,47 @@ class PDFService {
       }
 
       // Check text content
-      try {
-        const tempPdf = await PDFDocument.create();
-        const [copiedPage] = await tempPdf.copyPages(pdf, [i]);
-        tempPdf.addPage(copiedPage);
-        const singlePageBytes = await tempPdf.save();
-        const pageData = await pdfParse(Buffer.from(singlePageBytes));
-        const textContent = pageData.text.trim();
-        // Even a single meaningful character counts as text
-        if (textContent.length > 0) hasText = true;
-      } catch {
-        // If parsing fails, assume non-blank (safe default)
-        hasText = true;
+      if (perPageTextFallback) {
+        // Expensive fallback: per-page PDF serialization (only used when full-doc parse fails)
+        try {
+          const tempPdf = await PDFDocument.create();
+          const [copiedPage] = await tempPdf.copyPages(pdf, [i]);
+          tempPdf.addPage(copiedPage);
+          const singlePageBytes = await tempPdf.save();
+          const pageData = await pdfParse(Buffer.from(singlePageBytes));
+          if (pageData.text.trim().length > 0) hasText = true;
+        } catch {
+          hasText = true; // assume non-blank on error
+        }
+      } else {
+        // Fast path: check content streams for text operators
+        try {
+          const page = pdf.getPage(i);
+          const node = page.node;
+          const contentsRef = node.get(PDFName.of("Contents"));
+          if (contentsRef) {
+            const resolved = pdf.context.lookup(contentsRef);
+            if (resolved) {
+              const streams = resolved.constructor?.name === "PDFArray"
+                ? Array.from({ length: resolved.size() }, (_, k) => pdf.context.lookup(resolved.get(k)))
+                : [resolved];
+              for (const stream of streams) {
+                if (stream && typeof stream.getContents === "function") {
+                  try {
+                    const raw = stream.getContents().toString("latin1");
+                    // Presence of text operators (Tj, TJ, Td, Tf) indicates text content
+                    if (raw.length > 10 && /Tj|TJ|Td|Tf|BT/.test(raw)) {
+                      hasText = true;
+                      break;
+                    }
+                  } catch {}
+                }
+              }
+            }
+          }
+        } catch {
+          // If stream inspection fails, fall back to trusting XObject result
+        }
       }
 
       if (hasText || hasXObjects) {
@@ -1775,6 +1978,9 @@ class PDFService {
       } else {
         textBlankFlags.push(true);
       }
+
+      // Yield every 10 pages to keep the event loop responsive
+      if (i % 10 === 0 && i > 0) await new Promise((r) => setImmediate(r));
     }
 
     // ── Signal 3: Visual analysis for pages flagged as blank ─────────
@@ -1854,8 +2060,8 @@ class PDFService {
 
   // Add bookmarks (table of contents)
   async addBookmarksPDF(file, bookmarks) {
-    const pdfBytes = await fs.readFile(file.tempFilePath);
-    const pdf = await PDFDocument.load(pdfBytes);
+    const pdfBytes = await readFileBytes(file);
+    const pdf = await safeLoadPDF(pdfBytes);
 
     // pdf-lib doesn't have native bookmark support
     // Add bookmark info as document outline in metadata as workaround
@@ -1869,8 +2075,8 @@ class PDFService {
 
   // Add hyperlinks with proper clickable link annotations
   async addHyperlinksPDF(file, links) {
-    const pdfBytes = await fs.readFile(file.tempFilePath);
-    const pdf = await PDFDocument.load(pdfBytes);
+    const pdfBytes = await readFileBytes(file);
+    const pdf = await safeLoadPDF(pdfBytes);
     const pages = pdf.getPages();
     const context = pdf.context;
 
@@ -1941,8 +2147,8 @@ class PDFService {
 
   // Manage attachments - Embed files in PDF
   async addAttachmentsPDF(file, attachments) {
-    const pdfBytes = await fs.readFile(file.tempFilePath);
-    const pdf = await PDFDocument.load(pdfBytes);
+    const pdfBytes = await readFileBytes(file);
+    const pdf = await safeLoadPDF(pdfBytes);
 
     const attachList = Array.isArray(attachments)
       ? attachments
@@ -1970,4 +2176,7 @@ class PDFService {
   }
 }
 
-module.exports = new PDFService();
+const pdfServiceInstance = new PDFService();
+pdfServiceInstance.safeLoadPDF = safeLoadPDF;
+pdfServiceInstance.readFileBytes = readFileBytes;
+module.exports = pdfServiceInstance;

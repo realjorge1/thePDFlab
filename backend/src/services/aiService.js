@@ -9,6 +9,7 @@ const documentProcessor = require("./documentProcessor");
 const aiConfig = require("../config/aiConfig");
 const logger = require("../utils/logger");
 const { enrichHighlights, locateSnippet, normalize } = require("./sourceMapper");
+const { mapReduceLong, CHUNK_THRESHOLD } = require("./aiChunker");
 
 // Categories tuned per detected document type. The model is free to use its
 // own labels if none of these apply — we never coerce the output.
@@ -501,15 +502,32 @@ class AIService {
       aiConfig.maxDocumentLength,
     );
 
-    const messages = [
-      { role: "system", content: PROMPT_TEMPLATES.summarize.system },
-      {
-        role: "user",
-        content: PROMPT_TEMPLATES.summarize.userPrompt(safeText, summaryMode),
-      },
-    ];
-
-    return aiProvider.chat(messages, options);
+    return mapReduceLong({
+      text: safeText,
+      chatOptions: options,
+      buildMapMessages: (chunk, i) => [
+        { role: "system", content: PROMPT_TEMPLATES.summarize.system },
+        {
+          role: "user",
+          content:
+            `You are summarizing PART ${i + 1} of a longer document. ` +
+            `Produce a partial summary covering ONLY this part — do not invent ` +
+            `content from sections you cannot see.\n\n` +
+            PROMPT_TEMPLATES.summarize.userPrompt(chunk, summaryMode),
+        },
+      ],
+      buildReduceMessages: (parts) => [
+        { role: "system", content: PROMPT_TEMPLATES.summarize.system },
+        {
+          role: "user",
+          content:
+            `Below are partial summaries of consecutive sections of a long document. ` +
+            `Merge them into ONE final ${summaryMode || "detailed"} summary that reads as a single coherent piece. ` +
+            `Remove redundancy. Preserve every distinct fact, finding, or recommendation.\n\n` +
+            parts.map((p, i) => `--- Part ${i + 1} ---\n${p}`).join("\n\n"),
+        },
+      ],
+    });
   }
 
   async _translate(text, file, targetLanguage, options) {
@@ -548,18 +566,33 @@ class AIService {
       aiConfig.maxDocumentLength,
     );
 
-    const messages = [
-      {
-        role: "system",
-        content: PROMPT_TEMPLATES.analyze.system,
-      },
-      {
-        role: "user",
-        content: PROMPT_TEMPLATES.analyze.userPrompt(safeText, analysisType),
-      },
-    ];
-
-    const result = await aiProvider.chat(messages, options);
+    const result = await mapReduceLong({
+      text: safeText,
+      chatOptions: options,
+      buildMapMessages: (chunk, i) => [
+        { role: "system", content: PROMPT_TEMPLATES.analyze.system },
+        {
+          role: "user",
+          content:
+            `Analyze PART ${i + 1} of a longer document. Focus only on this part. ` +
+            `Return the same JSON shape requested below.\n\n` +
+            PROMPT_TEMPLATES.analyze.userPrompt(chunk, analysisType),
+        },
+      ],
+      buildReduceMessages: (parts) => [
+        { role: "system", content: PROMPT_TEMPLATES.analyze.system },
+        {
+          role: "user",
+          content:
+            `Below are JSON analyses of consecutive parts of a long document. ` +
+            `Merge them into ONE final JSON object using the SAME schema (summary, sentiment, sentimentScore, ` +
+            `insights, strengths, weaknesses, recommendations, topics, readability). ` +
+            `Deduplicate, keep the most useful items, and average the sentimentScore. ` +
+            `Return ONLY the merged JSON.\n\n` +
+            parts.map((p, i) => `--- Part ${i + 1} JSON ---\n${p}`).join("\n\n"),
+        },
+      ],
+    });
 
     // Parse JSON response
     try {
@@ -580,12 +613,32 @@ class AIService {
       aiConfig.maxDocumentLength,
     );
 
-    const messages = [
-      { role: "system", content: PROMPT_TEMPLATES.tasks.system },
-      { role: "user", content: PROMPT_TEMPLATES.tasks.userPrompt(safeText) },
-    ];
-
-    const result = await aiProvider.chat(messages, options);
+    const result = await mapReduceLong({
+      text: safeText,
+      chatOptions: options,
+      buildMapMessages: (chunk, i) => [
+        { role: "system", content: PROMPT_TEMPLATES.tasks.system },
+        {
+          role: "user",
+          content:
+            `Extract action items from PART ${i + 1} of a longer document only. ` +
+            `Do not invent tasks not in this part.\n\n` +
+            PROMPT_TEMPLATES.tasks.userPrompt(chunk),
+        },
+      ],
+      buildReduceMessages: (parts) => [
+        { role: "system", content: PROMPT_TEMPLATES.tasks.system },
+        {
+          role: "user",
+          content:
+            `Below are JSON task lists from consecutive parts of one document. ` +
+            `Merge into ONE final {"tasks":[...]} JSON. Drop duplicates (same action ` +
+            `+ owner). Preserve all unique tasks. Re-number ids "task-1"..."task-N". ` +
+            `Return ONLY valid JSON, no markdown.\n\n` +
+            parts.map((p, i) => `--- Part ${i + 1} ---\n${p}`).join("\n\n"),
+        },
+      ],
+    });
 
     // Strip markdown code fences if present, then parse JSON
     try {
@@ -769,20 +822,36 @@ class AIService {
     const allowedCategories =
       CATEGORY_PROFILES[documentType] || DEFAULT_CATEGORIES;
 
-    // ── Step 2: Highlight extraction ────────────────────────────────────────
-    const messages = [
-      { role: "system", content: PROMPT_TEMPLATES.highlight.system },
-      {
-        role: "user",
-        content: PROMPT_TEMPLATES.highlight.userPrompt(
-          safeText,
-          documentType,
-          allowedCategories,
-        ),
-      },
-    ];
-
-    const result = await aiProvider.chat(messages, options);
+    // ── Step 2: Highlight extraction (chunked for long documents) ──────────
+    const result = await mapReduceLong({
+      text: safeText,
+      chatOptions: options,
+      buildMapMessages: (chunk, i) => [
+        { role: "system", content: PROMPT_TEMPLATES.highlight.system },
+        {
+          role: "user",
+          content:
+            `Extract highlights from PART ${i + 1} of a longer document. ` +
+            `Only quote text that appears in this part — NEVER fabricate.\n\n` +
+            PROMPT_TEMPLATES.highlight.userPrompt(chunk, documentType, allowedCategories),
+        },
+      ],
+      // For the reduce step, the LLM merges per-chunk highlight arrays into
+      // one master JSON. We keep the same schema.
+      buildReduceMessages: (parts) => [
+        { role: "system", content: PROMPT_TEMPLATES.highlight.system },
+        {
+          role: "user",
+          content:
+            `You will receive highlight JSON arrays extracted from consecutive parts of a long ` +
+            `document. Merge them into ONE final JSON object with the SAME schema ` +
+            `(highlights[] and meta{summary, keyThemes, documentType}). ` +
+            `Keep the 10–15 MOST important highlights overall — drop duplicates and ` +
+            `near-duplicates, preserve verbatim quotes exactly. Return ONLY valid JSON.\n\n` +
+            parts.map((p, i) => `--- Part ${i + 1} JSON ---\n${p}`).join("\n\n"),
+        },
+      ],
+    });
 
     // Parse JSON response
     let parsed = null;
@@ -910,15 +979,29 @@ class AIService {
         ? PROMPT_TEMPLATES.explain.system(mode)
         : PROMPT_TEMPLATES.explain.system;
 
-    const messages = [
-      { role: "system", content: systemContent },
-      {
-        role: "user",
-        content: PROMPT_TEMPLATES.explain.userPrompt(safeText, mode, depth),
-      },
-    ];
-
-    return aiProvider.chat(messages, options);
+    return mapReduceLong({
+      text: safeText,
+      chatOptions: options,
+      buildMapMessages: (chunk, i) => [
+        { role: "system", content: systemContent },
+        {
+          role: "user",
+          content:
+            `Explain PART ${i + 1} of a longer text in the same style.\n\n` +
+            PROMPT_TEMPLATES.explain.userPrompt(chunk, mode, depth),
+        },
+      ],
+      buildReduceMessages: (parts) => [
+        { role: "system", content: systemContent },
+        {
+          role: "user",
+          content:
+            `Combine these per-part explanations into ONE smooth explanation in the ` +
+            `same tone and depth. Remove redundancy, preserve every distinct point.\n\n` +
+            parts.map((p, i) => `--- Part ${i + 1} ---\n${p}`).join("\n\n"),
+        },
+      ],
+    });
   }
 
   async _quiz(text, file, questionType, count, options, difficulty, weakTopics, retrievedContext) {

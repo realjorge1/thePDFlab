@@ -367,7 +367,6 @@ function buildSlide(
         fontFace: fonts.heading,
         color: hex(colors.secondary),
         align: 'center',
-        letterSpacing: 1,
       });
 
       // The big stat
@@ -403,7 +402,6 @@ function buildSlide(
         fontFace: fonts.body,
         color: hex(colors.textOnDark),
         align: 'center',
-        letterSpacing: 0.5,
       });
 
       if (content.footnote) {
@@ -720,7 +718,6 @@ function buildSlide(
           fontFace: fonts.body,
           color: hex(colors.secondary),
           align: 'center',
-          letterSpacing: 0.5,
         });
       }
 

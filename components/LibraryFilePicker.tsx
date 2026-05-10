@@ -6,10 +6,12 @@
 
 import { colors, spacing } from "@/constants/theme";
 import { useFileIndex } from "@/hooks/useFileIndex";
+import { useDocuments as useDocLibDocuments } from "@/hooks/useDocLib";
 import {
   formatFileSize,
   formatRelativeTime,
 } from "@/services/document-manager";
+import { cleanFileName } from "@/services/safFolderSync";
 import { useTheme } from "@/services/ThemeProvider";
 import { Check, ChevronLeft, FolderOpen, Search, X } from "lucide-react-native";
 import React, { useCallback, useMemo, useState } from "react";
@@ -134,7 +136,9 @@ export function LibraryFilePicker({
   multiple = false,
   title = "Select from Library",
 }: LibraryFilePickerProps) {
-  const { files, isLoading, refresh } = useFileIndex();
+  const { files: indexFiles, isLoading, refresh } = useFileIndex();
+  const { documents: doclibDocs, refetch: refetchDoclib } =
+    useDocLibDocuments();
   const { colors: t } = useTheme();
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -145,8 +149,61 @@ export function LibraryFilePicker({
       setSelectedIds(new Set());
       setSearchQuery("");
       refresh();
+      refetchDoclib();
     }
-  }, [visible, refresh]);
+  }, [visible, refresh, refetchDoclib]);
+
+  // Merge files from the unified index (legacy/imported) and the doclib SAF
+  // index (folder-scanned). De-duplicate by URI; sort by recency.
+  const files = useMemo(() => {
+    type PickerFile = {
+      id: string;
+      name: string;
+      uri: string;
+      extension: string;
+      mimeType?: string;
+      size?: number;
+      lastOpenedAt: number;
+      type: string;
+    };
+    const map = new Map<string, PickerFile>();
+
+    for (const f of indexFiles) {
+      map.set(f.uri, {
+        id: f.id,
+        name: f.name,
+        uri: f.uri,
+        extension: f.extension,
+        mimeType: f.mimeType,
+        size: f.size,
+        lastOpenedAt: f.lastOpenedAt,
+        type: f.type,
+      });
+    }
+
+    for (const d of doclibDocs) {
+      if (map.has(d.uri)) continue;
+      const cleanName = cleanFileName(d.name);
+      const ext =
+        cleanName.includes(".")
+          ? cleanName.split(".").pop()?.toLowerCase() ?? d.type
+          : d.type;
+      map.set(d.uri, {
+        id: `saf:${d.uri}`,
+        name: cleanName,
+        uri: d.uri,
+        extension: ext,
+        mimeType: d.mimeType,
+        size: d.size,
+        lastOpenedAt: d.lastOpened ?? d.lastModified,
+        type: d.type,
+      });
+    }
+
+    return Array.from(map.values()).sort(
+      (a, b) => b.lastOpenedAt - a.lastOpenedAt,
+    );
+  }, [indexFiles, doclibDocs]);
 
   // Filter files based on allowed types and search query
   const filteredFiles = useMemo(() => {

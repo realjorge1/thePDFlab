@@ -186,7 +186,7 @@ async function singleAttempt(
       {
         headers: {
           Accept: "application/pdf, */*",
-          "User-Agent": "PDFlab/1.0",
+          "User-Agent": "Inscribed/1.0",
         },
       },
       (dp) => {
@@ -283,7 +283,7 @@ async function resolveAndCheckHeaders(url: string): Promise<HeaderCheckResult> {
       signal: controller.signal,
       headers: {
         Accept: "application/pdf, */*",
-        "User-Agent": "PDFlab/1.0",
+        "User-Agent": "Inscribed/1.0",
       },
     });
 

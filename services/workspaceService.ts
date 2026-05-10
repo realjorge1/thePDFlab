@@ -1,6 +1,6 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
-const WORKSPACE_KEY = "@pdflab/ai_workspace_state_v1";
+const WORKSPACE_KEY = "@inscribed/ai_workspace_state_v1";
 
 let _uid = 0;
 const newId = (prefix: string) => `${prefix}_${Date.now()}_${_uid++}`;

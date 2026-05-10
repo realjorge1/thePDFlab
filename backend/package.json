@@ -1,7 +1,7 @@
 {
-  "name": "pdflab-backend",
+  "name": "inscribed-backend",
   "version": "1.0.0",
-  "description": "PDFlab Backend — Document processing, PDF tools, and AI API server",
+  "description": "Inscribed Backend — Document processing, PDF tools, and AI API server",
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",

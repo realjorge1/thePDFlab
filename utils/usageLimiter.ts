@@ -1,5 +1,5 @@
 /**
- * Usage Limiter — PDFlab
+ * Usage Limiter — Inscribed
  *
  * Enforces the 3-download free tier limit.
  * Pro users bypass all limits.

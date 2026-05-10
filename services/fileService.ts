@@ -271,7 +271,7 @@ const getMimeTypeFromExtension = (ext: string): string => {
 
 // Create a new document
 export const createDocument = async (
-  type: "pdf" | "docx" | "pptx" | "xlsx",
+  type: "pdf" | "docx" | "pptx",
   title: string = "Untitled",
   template: string = "blank",
 ): Promise<FileInfo | null> => {
@@ -301,8 +301,6 @@ export const createDocument = async (
           fileSize = await createPdfFile(fileUri, title);
         } else if (type === "pptx") {
           fileSize = await createPptxFile(fileUri, title);
-        } else if (type === "xlsx") {
-          fileSize = await createXlsxFile(fileUri, title);
         }
       }
     } else {
@@ -330,9 +328,7 @@ export const createDocument = async (
           ? "word"
           : type === "pptx"
             ? "ppt"
-            : type === "xlsx"
-              ? "excel"
-              : type,
+            : type,
       mimeType: getMimeType(type),
       lastModified: Date.now(),
       dateAdded: Date.now(),
@@ -344,11 +340,10 @@ export const createDocument = async (
     await saveFileReference(fileInfo);
 
     // Also sync to unified file index
-    const fileTypeMap: Record<string, "pdf" | "docx" | "ppt" | "excel"> = {
+    const fileTypeMap: Record<string, "pdf" | "docx" | "ppt"> = {
       pdf: "pdf",
       docx: "docx",
       pptx: "ppt",
-      xlsx: "excel",
     };
     upsertFileRecord({
       uri: fileUri,
@@ -466,43 +461,12 @@ const createPptxFile = async (uri: string, title: string): Promise<number> => {
   );
 };
 
-// Create XLSX file with proper structure
-const createXlsxFile = async (uri: string, title: string): Promise<number> => {
-  // Minimal valid XLSX structure (ZIP format with XML)
-  const xlsxContent = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
-  <sheetData>
-    <row r="1">
-      <c t="inlineStr" r="A1">
-        <is><t>${title}</t></is>
-      </c>
-    </row>
-    <row r="2">
-      <c t="inlineStr" r="A2">
-        <is><t>Created with Docu-Assistant</t></is>
-      </c>
-    </row>
-  </sheetData>
-</worksheet>`;
-
-  await FileSystem.writeAsStringAsync(uri, xlsxContent, {
-    encoding: FileSystem.EncodingType.UTF8,
-  });
-
-  const info = await FileSystem.getInfoAsync(uri);
-  return (
-    (info.exists && "size" in info ? info.size : xlsxContent.length) ||
-    xlsxContent.length
-  );
-};
-
 // Get MIME type for document
 const getMimeType = (type: string): string => {
   const mimeTypes: Record<string, string> = {
     pdf: "application/pdf",
     docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-    xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
   };
   return mimeTypes[type] || "application/octet-stream";
 };

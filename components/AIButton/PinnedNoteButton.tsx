@@ -4,7 +4,7 @@ import { StickyNote } from "lucide-react-native";
 import React, { useCallback, useEffect, useState } from "react";
 import { DeviceEventEmitter, StyleSheet, TouchableOpacity, View } from "react-native";
 
-export const PINNED_NOTE_KEY = "@pdflab/pinned_note_v1";
+export const PINNED_NOTE_KEY = "@inscribed/pinned_note_v1";
 
 export interface PinnedNoteRecord {
   id: string;

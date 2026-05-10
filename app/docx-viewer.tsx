@@ -50,6 +50,10 @@ import {
   removeStrikethrough,
   removeUnderline,
 } from "@/services/viewerStorageService";
+import {
+  getReadingProgress,
+  setReadingProgress,
+} from "@/services/readingProgressService";
 
 import {
   DarkTheme,
@@ -81,6 +85,56 @@ import {
 } from "@/services/fileService";
 import { loadMobileViewVendorScripts } from "@/services/mobileViewVendorLoader";
 import { recycleFile } from "@/services/recycleBinService";
+
+// ============================================================================
+// SCROLL TRACKER (injected into WebView)
+// ============================================================================
+// Installs a passive scroll listener and a global restore function. On scroll,
+// posts {type:"scroll-progress", percent} to RN; RN persists it via the shared
+// reading-progress service. RN can later call window.__inscribedRestoreScroll
+// to seek back to a previous position when reopening the file.
+const SCROLL_TRACKER_JS = `
+(function(){
+  if (window.__inscribedScrollTracker) return;
+  window.__inscribedScrollTracker = true;
+  function compute() {
+    var doc = document.documentElement;
+    var body = document.body;
+    var scrollTop = window.pageYOffset || doc.scrollTop || (body && body.scrollTop) || 0;
+    var scrollHeight = Math.max(doc.scrollHeight, body ? body.scrollHeight : 0);
+    var clientHeight = doc.clientHeight || window.innerHeight || 0;
+    var maxScroll = Math.max(0, scrollHeight - clientHeight);
+    var percent = maxScroll > 0 ? scrollTop / maxScroll : 0;
+    if (percent > 1) percent = 1;
+    if (percent < 0) percent = 0;
+    return percent;
+  }
+  var t = null;
+  function post() {
+    if (!window.ReactNativeWebView) return;
+    window.ReactNativeWebView.postMessage(JSON.stringify({
+      type: 'scroll-progress',
+      percent: compute()
+    }));
+  }
+  window.addEventListener('scroll', function(){
+    if (t) clearTimeout(t);
+    t = setTimeout(post, 250);
+  }, { passive: true });
+  window.__inscribedRestoreScroll = function(percent) {
+    try {
+      var doc = document.documentElement;
+      var body = document.body;
+      var scrollHeight = Math.max(doc.scrollHeight, body ? body.scrollHeight : 0);
+      var clientHeight = doc.clientHeight || window.innerHeight || 0;
+      var maxScroll = Math.max(0, scrollHeight - clientHeight);
+      var p = Math.max(0, Math.min(1, percent || 0));
+      window.scrollTo(0, maxScroll * p);
+    } catch(e) {}
+  };
+})();
+true;
+`;
 
 // ============================================================================
 // TYPES
@@ -135,6 +189,8 @@ export default function DocxViewerScreen() {
   const webViewRef = useRef<WebView>(null);
   const mobileRendererRef = useRef<MobileRendererHandle>(null);
   const mammothJsRef = useRef<string | null>(null);
+  /** Whether we've already attempted to restore the saved scroll position. */
+  const restoredScrollRef = useRef(false);
 
   const { uri, name } = useLocalSearchParams<{ uri: string; name: string }>();
   const displayName = name || getDocxDisplayName(uri || "");
@@ -192,6 +248,7 @@ export default function DocxViewerScreen() {
       }));
       return;
     }
+    restoredScrollRef.current = false;
     loadDocument();
     checkStarStatus();
   }, [uri]);
@@ -222,6 +279,12 @@ export default function DocxViewerScreen() {
       setState((prev) => ({ ...prev, loading: true, error: null }));
 
       const normalized = await normalizeDocxUri(uri!);
+
+      // Fire vendor load immediately so it overlaps with the validity check
+      // and, for valid files, the base64 read. loadMobileViewVendorScripts
+      // is idempotent and module-cached, so calling it early has no downside.
+      const vendorPromise = loadMobileViewVendorScripts();
+
       const isValid = await isValidDocxFile(normalized);
 
       let html: string;
@@ -229,15 +292,21 @@ export default function DocxViewerScreen() {
       let textContent: string | null = null;
 
       if (isValid) {
-        base64 = await readDocxAsBase64(normalized);
-        if (!mammothJsRef.current) {
-          const vendor = await loadMobileViewVendorScripts();
-          mammothJsRef.current = vendor.mammothBrowserMinJs;
-        }
+        // Read file content and finish vendor load in parallel.
+        const [b64, vendor] = await Promise.all([
+          readDocxAsBase64(normalized),
+          vendorPromise,
+        ]);
+        base64 = b64;
+        mammothJsRef.current = vendor.mammothBrowserMinJs;
         html = generateDocxViewerHtml(base64, mammothJsRef.current);
       } else {
         textContent = await readFileAsText(normalized);
         html = generatePlainTextViewerHtml(textContent);
+        // Populate the ref cache anyway for a future valid-DOCX open.
+        vendorPromise
+          .then((v) => { mammothJsRef.current = v.mammothBrowserMinJs; })
+          .catch(() => {});
       }
 
       setState((prev) => ({
@@ -463,12 +532,12 @@ export default function DocxViewerScreen() {
         // Search in original WebView
         webViewRef.current.injectJavaScript(`
           (function(){
-            if(window.__pdfiqHighlights){
-              window.__pdfiqHighlights.forEach(function(el){
+            if(window.__inscribedHighlights){
+              window.__inscribedHighlights.forEach(function(el){
                 var p=el.parentNode;p.replaceChild(document.createTextNode(el.textContent),el);p.normalize();
               });
             }
-            window.__pdfiqHighlights=[];
+            window.__inscribedHighlights=[];
             var q=${JSON.stringify(query)}.toLowerCase();
             if(!q){window.ReactNativeWebView.postMessage(JSON.stringify({type:'search-count',count:0}));return;}
             var walker=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT,null,false);
@@ -483,14 +552,14 @@ export default function DocxViewerScreen() {
                 var span=document.createElement('span');
                 span.style.backgroundColor='#FFEB3B';span.style.color='#000';span.style.borderRadius='2px';
                 span.textContent=text.substring(idx,idx+q.length);
-                frag.appendChild(span);window.__pdfiqHighlights.push(span);count++;
+                frag.appendChild(span);window.__inscribedHighlights.push(span);count++;
                 last=idx+q.length;idx=lower.indexOf(q,last);
               }
               frag.appendChild(document.createTextNode(text.substring(last)));
               node.parentNode.replaceChild(frag,node);
             });
-            if(window.__pdfiqHighlights.length>0){
-              window.__pdfiqHighlights[0].scrollIntoView({behavior:'smooth',block:'center'});
+            if(window.__inscribedHighlights.length>0){
+              window.__inscribedHighlights[0].scrollIntoView({behavior:'smooth',block:'center'});
             }
             window.ReactNativeWebView.postMessage(JSON.stringify({type:'search-count',count:count}));
           })(); true;
@@ -515,11 +584,11 @@ export default function DocxViewerScreen() {
       webViewRef.current.injectJavaScript(`
         (function(){
           window.getSelection().removeAllRanges();
-          if(window.__pdfiqHighlights){
-            window.__pdfiqHighlights.forEach(function(el){
+          if(window.__inscribedHighlights){
+            window.__inscribedHighlights.forEach(function(el){
               var parent=el.parentNode;parent.replaceChild(document.createTextNode(el.textContent),el);parent.normalize();
             });
-            window.__pdfiqHighlights=[];
+            window.__inscribedHighlights=[];
           }
         })(); true;
       `);
@@ -698,6 +767,32 @@ export default function DocxViewerScreen() {
                   );
                 })
                 .catch(() => {});
+
+              // Restore saved scroll position once per open. If user previously
+              // reached the end, start from the top instead.
+              if (!restoredScrollRef.current) {
+                restoredScrollRef.current = true;
+                getReadingProgress(uri)
+                  .then((entry) => {
+                    if (!entry || typeof entry.progress !== "number") return;
+                    if (entry.progress >= 0.99) return; // finished — start fresh
+                    if (entry.progress <= 0) return;
+                    // Defer slightly so layout has settled.
+                    setTimeout(() => {
+                      webViewRef.current?.injectJavaScript(
+                        `window.__inscribedRestoreScroll && window.__inscribedRestoreScroll(${entry.progress}); true;`,
+                      );
+                    }, 200);
+                  })
+                  .catch(() => {});
+              }
+            }
+            break;
+          case "scroll-progress":
+            if (uri && typeof data.percent === "number") {
+              setReadingProgress(uri, data.percent, { source: "scroll" }).catch(
+                () => {},
+              );
             }
             break;
           case "editor-loaded":
@@ -970,7 +1065,7 @@ export default function DocxViewerScreen() {
 
   const handleSelectionAskAthemi = useCallback(() => {
     if (!state.selectionText) return;
-    router.push({ pathname: "/ai", params: { prompt: state.selectionText } });
+    router.push({ pathname: "/gozlin", params: { prompt: state.selectionText } });
     setState((prev) => ({ ...prev, selectionVisible: false }));
   }, [state.selectionText]);
 
@@ -1208,6 +1303,7 @@ export default function DocxViewerScreen() {
               originWhitelist={["*"]}
               javaScriptEnabled
               domStorageEnabled
+              injectedJavaScript={SCROLL_TRACKER_JS}
               onMessage={handleWebViewMessage}
               onError={() => {
                 setState((prev) => ({

@@ -34,6 +34,7 @@ import {
 } from "react-native-gesture-handler";
 import Pdf from "react-native-pdf";
 import Animated, {
+  runOnJS,
   useAnimatedStyle,
   useSharedValue,
   withTiming,
@@ -43,6 +44,7 @@ import SignatureScreen, {
   type SignatureViewRef,
 } from "react-native-signature-canvas";
 
+import { API_BASE_URL } from "@/config/api";
 import { useTheme } from "@/services/ThemeProvider";
 import { upsertFileRecord } from "@/services/fileIndexService";
 import { applyVisualSignature } from "@/services/signingService";
@@ -116,6 +118,10 @@ export default function SignDocumentScreen() {
   const [showDate, setShowDate] = useState(true);
 
   // Visual placement state (PDF points, bottom-left origin)
+  // ── PERF: placementX/Y are mirrored as shared values for the drag overlay so
+  // pointer-move events update the UI thread directly (no React re-render of
+  // the FlatList / native Pdf instances). React state is synced only on drag
+  // end, which is what the review/apply screens actually need.
   const [placementPage, setPlacementPage] = useState(0);
   const [placementX, setPlacementX] = useState(
     (PDF_PAGE_WIDTH - SIG_DEFAULT_W) / 2,
@@ -123,6 +129,8 @@ export default function SignDocumentScreen() {
   const [placementY, setPlacementY] = useState(80);
   const [placementW] = useState(SIG_DEFAULT_W);
   const [placementH] = useState(SIG_DEFAULT_H);
+  const placementXSV = useSharedValue((PDF_PAGE_WIDTH - SIG_DEFAULT_W) / 2);
+  const placementYSV = useSharedValue(80);
 
   // PDF page info
   const [pageCount, setPageCount] = useState(1);
@@ -180,20 +188,15 @@ export default function SignDocumentScreen() {
       if (zoomScale.value < 1.05) {
         zoomScale.value = withTiming(1, { duration: 150 });
         savedScale.value = 1;
+        runOnJS(setCurrentZoom)(1);
+      } else {
+        runOnJS(setCurrentZoom)(zoomScale.value);
       }
     });
 
   const zoomAnimatedStyle = useAnimatedStyle(() => ({
     transform: [{ scale: zoomScale.value }],
   }));
-
-  // Sync currentZoom state for coordinate calculations (updated less frequently)
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setCurrentZoom(zoomScale.value);
-    }, 100);
-    return () => clearInterval(interval);
-  }, [zoomScale]);
 
   const handleZoomIn = useCallback(() => {
     const next = Math.min(MAX_ZOOM, savedScale.value + 0.5);
@@ -216,6 +219,10 @@ export default function SignDocumentScreen() {
   }, [zoomScale, savedScale]);
 
   // ── PDF load complete — get real page count from the PDF itself ─────
+  // Three independent detection paths run in parallel so pageCount always
+  // resolves: backend /pdf/info, hidden 1×1 native detector, and the visible
+  // viewer's onLoadComplete. Whichever returns first wins; later sources only
+  // upgrade pageCount (Math.max), never downgrade.
 
   const handlePdfLoadComplete = useCallback(
     (
@@ -223,12 +230,67 @@ export default function SignDocumentScreen() {
       _path: string,
       dimensions?: { width: number; height: number },
     ) => {
-      if (numberOfPages > 0) setPageCount(numberOfPages);
-      if (dimensions?.width) setPageWidth(dimensions.width);
-      if (dimensions?.height) setPageHeight(dimensions.height);
+      if (numberOfPages > 0) {
+        setPageCount((prev) => Math.max(prev, numberOfPages));
+      }
+      if (dimensions?.width) {
+        setPageWidth((prev) => dimensions.width || prev);
+      }
+      if (dimensions?.height) {
+        setPageHeight((prev) => dimensions.height || prev);
+      }
     },
     [],
   );
+
+  // Backend page-info call — fires on mount so the page-nav bar is ready by
+  // the time the user enters the "place" step, even if react-native-pdf's
+  // onLoadComplete is slow or unreliable for the current document.
+  useEffect(() => {
+    if (!fileUri) return;
+    let cancelled = false;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8000);
+
+    (async () => {
+      try {
+        const form = new FormData();
+        form.append("pdf", {
+          uri: fileUri,
+          name: file || "document.pdf",
+          type: "application/pdf",
+        } as any);
+        const resp = await fetch(`${API_BASE_URL}/pdf/info`, {
+          method: "POST",
+          body: form,
+          signal: controller.signal,
+        });
+        if (cancelled || !resp.ok) return;
+        const json = await resp.json();
+        const data = json?.data || json;
+        const count = Number(data?.pageCount) || 0;
+        if (count > 0) {
+          setPageCount((prev) => Math.max(prev, count));
+        }
+        if (data?.pageWidth) {
+          setPageWidth((prev) => Number(data.pageWidth) || prev);
+        }
+        if (data?.pageHeight) {
+          setPageHeight((prev) => Number(data.pageHeight) || prev);
+        }
+      } catch {
+        // Backend unavailable — local detectors below will handle it.
+      } finally {
+        clearTimeout(timeout);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timeout);
+      controller.abort();
+    };
+  }, [fileUri, file]);
 
   // ── Computed preview dimensions (scrollable multi-page) ────────────
 
@@ -237,9 +299,8 @@ export default function SignDocumentScreen() {
   const pageRenderH = previewContainerW * pageAspect;
   const itemTotalH = pageRenderH + PAGE_GAP;
 
-  // Convert PDF placement (bottom-left origin) to screen coords (top-left)
-  const sigScreenX = placementX * scale;
-  const sigScreenY = (pageHeight - placementY - placementH) * scale;
+  // Overlay screen size — only depends on layout-stable values (not drag).
+  // Position is handled by overlayAnimatedStyle on the UI thread.
   const sigScreenW = placementW * scale;
   const sigScreenH = placementH * scale;
 
@@ -299,11 +360,11 @@ export default function SignDocumentScreen() {
       dragStartRef.current = {
         pageX,
         pageY,
-        startPdfX: placementX,
-        startPdfY: placementY,
+        startPdfX: placementXSV.value,
+        startPdfY: placementYSV.value,
       };
     },
-    [placementX, placementY],
+    [placementXSV, placementYSV],
   );
 
   const handleDragMove = useCallback(
@@ -311,33 +372,40 @@ export default function SignDocumentScreen() {
       const { pageX, pageY } = evt.nativeEvent;
       const start = dragStartRef.current;
 
-      // Delta in screen pixels — divide by zoom to account for zoomed container
       const deltaScreenX = pageX - start.pageX;
       const deltaScreenY = pageY - start.pageY;
 
-      // Convert to PDF points — Y is inverted (PDF = bottom-up, screen = top-down)
-      // Divide by currentZoom because the container is scaled
-      const effectiveScale = scale * currentZoom;
+      // Read zoom from shared value directly (no React state dependency)
+      const effectiveScale = scale * zoomScale.value;
       const deltaPdfX = deltaScreenX / effectiveScale;
       const deltaPdfY = -(deltaScreenY / effectiveScale);
 
-      // Apply delta to the initial position captured at drag start
       let newX = start.startPdfX + deltaPdfX;
       let newY = start.startPdfY + deltaPdfY;
 
-      // Clamp to page bounds
       newX = Math.max(0, Math.min(newX, pageWidth - placementW));
       newY = Math.max(0, Math.min(newY, pageHeight - placementH));
 
-      setPlacementX(Math.round(newX));
-      setPlacementY(Math.round(newY));
+      // Update shared values — UI thread re-positions overlay without
+      // triggering a React re-render of the FlatList / Pdf instances.
+      placementXSV.value = newX;
+      placementYSV.value = newY;
     },
-    [scale, currentZoom, pageWidth, pageHeight, placementW, placementH],
+    [scale, pageWidth, pageHeight, placementW, placementH, placementXSV, placementYSV, zoomScale],
   );
 
   const handleDragEnd = useCallback(() => {
     setIsDragging(false);
-  }, []);
+    // Sync final position back to React state for the review screen / apply
+    setPlacementX(Math.round(placementXSV.value));
+    setPlacementY(Math.round(placementYSV.value));
+  }, [placementXSV, placementYSV]);
+
+  // Animated style for the signature overlay — runs on UI thread.
+  const overlayAnimatedStyle = useAnimatedStyle(() => ({
+    left: placementXSV.value * scale,
+    top: (pageHeight - placementYSV.value - placementH) * scale,
+  }));
 
   const handlePreviewLayout = useCallback((e: LayoutChangeEvent) => {
     const { width, height } = e.nativeEvent.layout;
@@ -461,15 +529,14 @@ export default function SignDocumentScreen() {
           )}
           {isSignaturePage && (
             <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
-              <View
+              <Animated.View
                 style={[
                   styles.signatureOverlay,
                   {
-                    left: sigScreenX,
-                    top: sigScreenY,
                     width: sigScreenW,
                     height: sigScreenH,
                   },
+                  overlayAnimatedStyle,
                 ]}
                 onStartShouldSetResponder={() => true}
                 onMoveShouldSetResponder={() => true}
@@ -505,7 +572,7 @@ export default function SignDocumentScreen() {
                 <View style={styles.dragHandle}>
                   <MaterialIcons name="open-with" size={14} color="#fff" />
                 </View>
-              </View>
+              </Animated.View>
             </View>
           )}
           {/* Page number badge */}
@@ -531,8 +598,6 @@ export default function SignDocumentScreen() {
       previewContainerW,
       pageRenderH,
       placementPage,
-      sigScreenX,
-      sigScreenY,
       sigScreenW,
       sigScreenH,
       fileUri,
@@ -540,6 +605,7 @@ export default function SignDocumentScreen() {
       typedName,
       signerName,
       showDate,
+      overlayAnimatedStyle,
       handleDragStart,
       handleDragMove,
       handleDragEnd,
@@ -710,6 +776,37 @@ export default function SignDocumentScreen() {
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: t.background }]}>
+      {/* Hidden 1×1 native page-count detector. Runs on screen mount so the
+          place-step page-nav bar is populated before the user clicks Next.
+          Unmounts as soon as pageCount > 1 to free the native PDF instance. */}
+      {fileUri && pageCount <= 1 && (
+        <View
+          pointerEvents="none"
+          style={{
+            position: "absolute",
+            width: 1,
+            height: 1,
+            opacity: 0,
+            top: -10,
+            left: -10,
+          }}
+        >
+          <Pdf
+            source={{ uri: fileUri }}
+            page={1}
+            singlePage
+            scale={1}
+            minScale={1}
+            maxScale={1}
+            style={{ width: 1, height: 1 }}
+            onLoadComplete={handlePdfLoadComplete}
+            onError={() => {
+              /* swallow — visible viewer / backend will surface real errors */
+            }}
+          />
+        </View>
+      )}
+
       {/* Header */}
       <View
         style={[
@@ -1102,7 +1199,7 @@ export default function SignDocumentScreen() {
                           animated: true,
                         });
                       }}
-                      extraData={`${placementPage}-${placementX}-${placementY}`}
+                      extraData={placementPage}
                     />
                   </Animated.View>
                 </GestureDetector>

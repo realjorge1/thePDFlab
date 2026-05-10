@@ -4,13 +4,19 @@
 
 import { AppHeaderContainer } from "@/components/AppHeaderContainer";
 import { GradientView } from "@/components/GradientView";
+import { SCHEDULE_PENDING_KEY_PREFIX } from "@/app/schedule-task";
+import type { PendingScheduleData } from "@/app/schedule-task";
 import { colors as appColors } from "@/constants/theme";
 import { useTheme } from "@/services/ThemeProvider";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { useRouter } from "expo-router";
 import {
+  AlarmClock,
   BookOpen,
   Check,
   ChevronLeft,
   FileText,
+  RefreshCw,
   ScanSearch,
   Sparkles,
   Wand2,
@@ -175,6 +181,7 @@ export default function GenerateDocumentModal({
 }: GenerateDocumentModalProps) {
   const { colors: t, mode } = useTheme();
   const isDark = mode === "dark";
+  const router = useRouter();
 
   const [step, setStep] = useState<1 | 2 | 3>(1);
   const [fileType, setFileType] = useState<"docx" | "pdf" | "ppt">("docx");
@@ -266,6 +273,31 @@ export default function GenerateDocumentModal({
     fileType, effectiveCategory, tone, wordCount, audience,
     selectedFormat, handleReset,
   ]);
+
+  // ── Schedule ─────────────────────────────────────────────────────────────────
+  const handleSchedule = useCallback(async () => {
+    const finalTitle = title.trim() || `${effectiveCategory} ${selectedFormat?.label ?? 'Document'}`;
+    const key = `${Date.now()}`;
+    const pending: PendingScheduleData = {
+      type: 'generate_document',
+      title: finalTitle,
+      payload: {
+        type: 'generate_document',
+        data: {
+          prompt: prompt.trim(),
+          title: finalTitle,
+          fileType,
+          category: effectiveCategory,
+          tone,
+          wordCount,
+          audience,
+        },
+      },
+    };
+    await AsyncStorage.setItem(SCHEDULE_PENDING_KEY_PREFIX + key, JSON.stringify(pending));
+    onClose();
+    router.push({ pathname: '/schedule-task', params: { pendingKey: key, taskType: 'generate_document', taskTitle: finalTitle, allowRecurring: 'true' } } as any);
+  }, [title, prompt, fileType, effectiveCategory, tone, wordCount, audience, selectedFormat, onClose, router]);
 
   if (!visible) return null;
 
@@ -757,6 +789,19 @@ export default function GenerateDocumentModal({
               </Text>
             </TouchableOpacity>
 
+            {/* Schedule for later (step 3 only) */}
+            {step === 3 && (
+              <TouchableOpacity
+                onPress={handleSchedule}
+                disabled={!canSubmit || isLoading}
+                activeOpacity={0.8}
+                style={[s.scheduleBtn, { opacity: (!canSubmit || isLoading) ? 0.4 : 1 }]}
+              >
+                <AlarmClock size={15} color={INDIGO} />
+                <Text style={s.scheduleBtnText}>Schedule</Text>
+              </TouchableOpacity>
+            )}
+
             {/* Continue / Generate gradient button */}
             <TouchableOpacity
               onPress={step < 3 ? handleNext : handleSubmit}
@@ -799,6 +844,7 @@ export default function GenerateDocumentModal({
           </View>
         </KeyboardAvoidingView>
       </SafeAreaView>
+
     </Modal>
   );
 }
@@ -1048,6 +1094,19 @@ const s = StyleSheet.create({
     alignItems: "center", justifyContent: "center",
   },
   footerGhostText: { fontSize: 14, fontWeight: "700" },
+  scheduleBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 5,
+    paddingVertical: 15,
+    paddingHorizontal: 14,
+    borderRadius: 14,
+    borderWidth: 1.5,
+    borderColor: `${INDIGO}50`,
+    backgroundColor: `${INDIGO}0D`,
+  },
+  scheduleBtnText: { fontSize: 13, fontWeight: '700', color: INDIGO },
   footerPrimaryWrap: { flex: 1.8 },
   footerPrimary: {
     paddingVertical: 15, borderRadius: 14,

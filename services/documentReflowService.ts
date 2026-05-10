@@ -628,13 +628,29 @@ export async function generatePdfTextExtractionHtml(
     return;
   }
 
+  // Worker init: a Blob URL works on most platforms, but some Android
+  // WebViews block Blob URLs for workers. Fall back to in-thread execution
+  // (slower, but always works) if worker setup throws.
   try{
     var workerEl=document.getElementById('pdf-worker-src');
     var blob=new Blob([workerEl.textContent],{type:'application/javascript'});
     pdfjsLib.GlobalWorkerOptions.workerSrc=URL.createObjectURL(blob);
   }catch(e){
-    post({type:'pdf-text-error',message:'Worker init failed: '+e.message});
-    return;
+    try{ pdfjsLib.GlobalWorkerOptions.workerSrc=''; }catch(_){}
+  }
+
+  function buildPageText(content){
+    var out='';
+    var items=content.items||[];
+    for(var i=0;i<items.length;i++){
+      var it=items[i];
+      var s=(it && typeof it.str==='string')?it.str:'';
+      out+=s;
+      // Preserve line breaks where pdf.js reports them.
+      if(it && it.hasEOL) out+='\\n';
+      else out+=' ';
+    }
+    return out;
   }
 
   try{
@@ -642,7 +658,7 @@ export async function generatePdfTextExtractionHtml(
     var uint8=new Uint8Array(raw.length);
     for(var i=0;i<raw.length;i++) uint8[i]=raw.charCodeAt(i);
 
-    pdfjsLib.getDocument({data:uint8}).promise.then(function(pdf){
+    pdfjsLib.getDocument({data:uint8, disableWorker:!pdfjsLib.GlobalWorkerOptions.workerSrc}).promise.then(function(pdf){
       var total=pdf.numPages;
       var pageTexts=new Array(total);
       var done=0;
@@ -652,39 +668,29 @@ export async function generatePdfTextExtractionHtml(
         return;
       }
 
+      function finalize(){
+        post({type:'pdf-page-texts',pageTexts:pageTexts});
+      }
+
       for(var p=1;p<=total;p++){
         (function(pageNum){
           pdf.getPage(pageNum).then(function(page){
-            page.getTextContent().then(function(content){
-              var text=content.items.map(function(item){
-                return item.str;
-              }).join(' ');
-              pageTexts[pageNum-1]=text||'';
-              done++;
-              if(done===total){
-                post({type:'pdf-page-texts',pageTexts:pageTexts});
-              }
-            }).catch(function(){
-              pageTexts[pageNum-1]='';
-              done++;
-              if(done===total){
-                post({type:'pdf-page-texts',pageTexts:pageTexts});
-              }
-            });
+            return page.getTextContent();
+          }).then(function(content){
+            pageTexts[pageNum-1]=buildPageText(content);
           }).catch(function(){
             pageTexts[pageNum-1]='';
+          }).then(function(){
             done++;
-            if(done===total){
-              post({type:'pdf-page-texts',pageTexts:pageTexts});
-            }
+            if(done===total) finalize();
           });
         })(p);
       }
     }).catch(function(err){
-      post({type:'pdf-text-error',message:err.message||'PDF load failed'});
+      post({type:'pdf-text-error',message:(err && err.message)||'PDF load failed'});
     });
   }catch(e){
-    post({type:'pdf-text-error',message:e.message||'Decode failed'});
+    post({type:'pdf-text-error',message:(e && e.message)||'Decode failed'});
   }
 })();
 <\/script>

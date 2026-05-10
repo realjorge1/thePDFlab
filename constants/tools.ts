@@ -164,7 +164,7 @@ export const toolCategories = [
       {
         id: "decrypt",
         name: "Decrypt PDF",
-        description: "Decrypt .pdflab file",
+        description: "Decrypt .inscribed file",
       },
       {
         id: "sign",
