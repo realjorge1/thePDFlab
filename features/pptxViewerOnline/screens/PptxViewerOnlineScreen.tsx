@@ -17,6 +17,10 @@ import {
   PptxPdfViewer,
   type PptxPdfViewerHandle,
 } from "../components/PptxPdfViewer";
+import {
+  PptxOfflineViewer,
+  type PptxOfflineViewerHandle,
+} from "../components/PptxOfflineViewer";
 import { SlideStrip } from "../components/SlideStrip";
 import { usePptxRender } from "../hooks/usePptxRender";
 
@@ -32,9 +36,12 @@ export default function PptxViewerOnlineScreen() {
   const [currentPage, setCurrentPage] = useState(1);
   const [totalPages, setTotalPages] = useState(0);
   const viewerRef = useRef<PptxPdfViewerHandle | null>(null);
+  const offlineViewerRef = useRef<PptxOfflineViewerHandle | null>(null);
 
   const handleJump = useCallback((page: number) => {
+    // Only one viewer is mounted at a time; the other ref is null.
     viewerRef.current?.goToPage(page);
+    offlineViewerRef.current?.goToPage(page);
   }, []);
 
   const handleBack = useCallback(() => router.back(), []);
@@ -47,6 +54,8 @@ export default function PptxViewerOnlineScreen() {
               stage.fromCache ? " • cached" : ""
             }`
           : "";
+      case "ready_offline":
+        return totalPages > 0 ? `Slide ${currentPage} / ${totalPages}` : "";
       case "preparing":
       case "uploading":
       case "rendering":
@@ -95,6 +104,22 @@ export default function PptxViewerOnlineScreen() {
           />
           <SlideStrip
             totalPages={totalPages}
+            currentPage={currentPage}
+            onJump={handleJump}
+          />
+        </View>
+      ) : stage.phase === "ready_offline" ? (
+        <View style={styles.body}>
+          <PptxOfflineViewer
+            ref={offlineViewerRef}
+            html={stage.html}
+            onPageChanged={(page) => {
+              setCurrentPage(page);
+              setTotalPages(stage.totalSlides);
+            }}
+          />
+          <SlideStrip
+            totalPages={stage.totalSlides}
             currentPage={currentPage}
             onJump={handleJump}
           />

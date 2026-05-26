@@ -609,6 +609,10 @@ export async function generatePdfTextExtractionHtml(
     });
 
     const pdfMinJs = escapeForScriptTag(vendor.pdfMinJs);
+    // Loaded as a REAL (executable) script — not a Blob worker. Running the
+    // worker UMD on the main thread defines globalThis.pdfjsWorker, which
+    // pdf.js then uses for in-thread parsing (disableWorker). This avoids the
+    // Blob-worker-that-never-responds hang inside a hidden Android WebView.
     const pdfWorkerMinJs = escapeForScriptTag(vendor.pdfWorkerMinJs);
 
     const html = `<!DOCTYPE html>
@@ -616,7 +620,7 @@ export async function generatePdfTextExtractionHtml(
 <head><meta charset="UTF-8"></head>
 <body>
 <script>${pdfMinJs}<\/script>
-<script id="pdf-worker-src" type="text/plain">${pdfWorkerMinJs}<\/script>
+<script>${pdfWorkerMinJs}<\/script>
 <script>
 (function(){
   function post(obj){
@@ -628,16 +632,14 @@ export async function generatePdfTextExtractionHtml(
     return;
   }
 
-  // Worker init: a Blob URL works on most platforms, but some Android
-  // WebViews block Blob URLs for workers. Fall back to in-thread execution
-  // (slower, but always works) if worker setup throws.
-  try{
-    var workerEl=document.getElementById('pdf-worker-src');
-    var blob=new Blob([workerEl.textContent],{type:'application/javascript'});
-    pdfjsLib.GlobalWorkerOptions.workerSrc=URL.createObjectURL(blob);
-  }catch(e){
-    try{ pdfjsLib.GlobalWorkerOptions.workerSrc=''; }catch(_){}
-  }
+  // IMPORTANT: run pdf.js entirely in-thread (no Web Worker).
+  // In a hidden WebView, a Blob-URL worker often *appears* to initialise but
+  // never actually responds on Android, so getDocument() hangs forever and
+  // Read Aloud sees nothing (then times out). In-thread parsing is a little
+  // slower per page but always works — and because we stream page-by-page,
+  // page 1 still arrives within a second or two.
+  try{ pdfjsLib.GlobalWorkerOptions.workerSrc=''; }catch(_){}
+  try{ pdfjsLib.disableWorker=true; }catch(_){}
 
   function buildPageText(content){
     var out='';
@@ -658,34 +660,44 @@ export async function generatePdfTextExtractionHtml(
     var uint8=new Uint8Array(raw.length);
     for(var i=0;i<raw.length;i++) uint8[i]=raw.charCodeAt(i);
 
-    pdfjsLib.getDocument({data:uint8, disableWorker:!pdfjsLib.GlobalWorkerOptions.workerSrc}).promise.then(function(pdf){
+    pdfjsLib.getDocument({data:uint8, disableWorker:true}).promise.then(function(pdf){
       var total=pdf.numPages;
       var pageTexts=new Array(total);
-      var done=0;
 
       if(total===0){
         post({type:'pdf-page-texts',pageTexts:[]});
         return;
       }
 
-      function finalize(){
-        post({type:'pdf-page-texts',pageTexts:pageTexts});
+      // Extract SEQUENTIALLY (page 1, 2, 3 …) and post each page as soon as
+      // it is ready. This lets Read Aloud start speaking page 1 while the rest
+      // of the document is still being parsed — instead of blocking on the
+      // whole file. It also means large PDFs no longer hit the extraction
+      // timeout, because content arrives progressively.
+      function extractPage(p){
+        return pdf.getPage(p)
+          .then(function(page){ return page.getTextContent(); })
+          .then(function(content){ return buildPageText(content); })
+          .catch(function(){ return ''; })
+          .then(function(text){
+            pageTexts[p-1]=text;
+            // Incremental, in-order progress for streaming consumers.
+            post({type:'pdf-page-progress',index:p-1,total:total,text:text});
+          });
       }
 
+      // Chain pages so they resolve strictly in order (stable global offsets).
+      var chain=Promise.resolve();
       for(var p=1;p<=total;p++){
         (function(pageNum){
-          pdf.getPage(pageNum).then(function(page){
-            return page.getTextContent();
-          }).then(function(content){
-            pageTexts[pageNum-1]=buildPageText(content);
-          }).catch(function(){
-            pageTexts[pageNum-1]='';
-          }).then(function(){
-            done++;
-            if(done===total) finalize();
-          });
+          chain=chain.then(function(){ return extractPage(pageNum); });
         })(p);
       }
+      chain.then(function(){
+        // Final aggregate message — preserves the original contract used by
+        // search and any non-streaming consumer.
+        post({type:'pdf-page-texts',pageTexts:pageTexts});
+      });
     }).catch(function(err){
       post({type:'pdf-text-error',message:(err && err.message)||'PDF load failed'});
     });

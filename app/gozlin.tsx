@@ -13,6 +13,7 @@ import GenerateDocumentModal from "@/components/ai/GenerateDocumentModal";
 import { QuizPanel } from "@/components/ai/QuizPanel";
 import { LibraryFilePicker } from "@/components/LibraryFilePicker";
 import { PINGate } from "@/components/PINGate";
+import { PremiumGate } from "@/components/PremiumGate";
 import { aiFeatures } from "@/constants/ai-features";
 import { spacing } from "@/constants/theme";
 import type {
@@ -1617,6 +1618,10 @@ export default function AIScreen() {
 
   // ── Render ────────────────────────────────────────────────────────────────
   return (
+    <PremiumGate
+      feature="Gozlin AI"
+      description="A smarter and better world with Gozlin."
+    >
     <PINGate screen="gozlin">
       <SafeAreaView
         style={[styles.safe, { backgroundColor: t.background }]}
@@ -2301,6 +2306,7 @@ export default function AIScreen() {
         )}
       </SafeAreaView>
     </PINGate>
+    </PremiumGate>
   );
 }
 

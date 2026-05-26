@@ -170,7 +170,7 @@ export default function FindReplaceScreen() {
       if (!data.downloadUrl) throw new Error("No download URL returned from server");
 
       // Save to documents directory so it persists, then register in the library
-      const outputDir = `${FileSystem.documentDirectory}inscribed-outputs/`;
+      const outputDir = `${FileSystem.documentDirectory}wordsinscribed-outputs/`;
       await FileSystem.makeDirectoryAsync(outputDir, { intermediates: true });
       const outputName = `replaced_${selectedFile.name}`;
       const outputUri = `${outputDir}${outputName}`;

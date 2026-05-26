@@ -137,6 +137,8 @@ export interface Underline {
   fileUri: string;
   startOffset: number;
   endOffset: number;
+  /** 0-based page index — set for the in-place page (text-layer) view. */
+  pageNumber?: number;
   text: string;
   createdAt: number;
 }
@@ -149,6 +151,8 @@ export interface Strikethrough {
   fileUri: string;
   startOffset: number;
   endOffset: number;
+  /** 0-based page index — set for the in-place page (text-layer) view. */
+  pageNumber?: number;
   text: string;
   createdAt: number;
 }

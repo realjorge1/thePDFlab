@@ -12,7 +12,13 @@ export type SlideLayout =
   | 'imageRight'
   | 'statHighlight'
   | 'timeline'
-  | 'closing';
+  | 'closing'
+  // Smart blocks
+  | 'quote'
+  | 'sectionDivider'
+  | 'agenda'
+  | 'comparison'
+  | 'processSteps';
 
 export type ThemeId =
   | 'midnightExecutive'
@@ -26,7 +32,16 @@ export type ThemeId =
   | 'sunriseGlow'
   | 'slateTech'
   | 'blossomSoft'
-  | 'goldLuxury';
+  | 'goldLuxury'
+  // Light, airy palettes
+  | 'arcticFrost'
+  | 'sageMinimal'
+  | 'lavenderMist'
+  | 'peachSorbet'
+  | 'skyBreeze'
+  | 'mintFresh'
+  | 'roseQuartz'
+  | 'graphitePro';
 
 export interface PPTTheme {
   id: ThemeId;
@@ -90,6 +105,11 @@ export interface SlideContent {
   rightContent?: string;
   timelineItems?: Array<{ year: string; event: string }>;
   footnote?: string;
+  // Smart-block fields
+  leftTitle?: string;   // comparison: left panel heading
+  rightTitle?: string;  // comparison: right panel heading
+  sectionNumber?: string; // sectionDivider: e.g. "01"
+  steps?: string[];     // processSteps / agenda items
 }
 
 export interface Slide {

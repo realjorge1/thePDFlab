@@ -3,17 +3,17 @@ import Constants from "expo-constants";
 // API URL resolution order:
 //   1. EXPO_PUBLIC_API_URL — set per-profile in eas.json or .env (recommended
 //      for production builds; e.g. "https://your-app.onrender.com/api").
-//   2. app.json → expo.extra.apiUrl — LAN address for on-device dev.
-//   3. http://localhost:5000/api — Hermes/web fallback for local emulators.
+//   2. app.json → expo.extra.apiUrl — used in local dev / Expo Go.
+//   3. https://inscribed-backend.onrender.com/api — production fallback.
 //
 // IMPORTANT: cleartext (HTTP) traffic is only permitted to the hosts listed
 // in android/app/src/main/res/xml/network_security_config.xml. If you point
-// the LAN URL at a new IP, add it there or release builds will silently fail
-// with "Network request failed".
+// the URL at a new local IP, add it there or release builds will silently
+// fail with "Network request failed".
 export const API_BASE_URL =
   process.env.EXPO_PUBLIC_API_URL ||
   Constants.expoConfig?.extra?.apiUrl ||
-  "http://localhost:5000/api";
+  "https://inscribed-backend.onrender.com/api";
 
 export const API_ENDPOINTS = {
   // PDF Operations

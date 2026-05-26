@@ -37,7 +37,9 @@ export const SlideCard: React.FC<SlideCardProps> = ({
   const isOnDark =
     layout === 'title' ||
     layout === 'closing' ||
-    layout === 'statHighlight';
+    layout === 'statHighlight' ||
+    layout === 'quote' ||
+    layout === 'sectionDivider';
 
   const bg = isOnDark ? colors.backgroundDark : colors.background;
   const titleColor = isOnDark ? colors.textOnDark : colors.primary;
@@ -220,6 +222,112 @@ function renderContent(
               <Text style={{ flex: 1, fontSize: smallSize, color: c.bodyColor }} numberOfLines={2}>{item.event}</Text>
             </View>
           ))}
+        </>
+      );
+
+    case 'quote':
+      return (
+        <View style={styles.center}>
+          <Text style={{ fontSize: titleSize * 2.4, color: c.secondary, fontWeight: 'bold', lineHeight: titleSize * 2 }}>“</Text>
+          {content.body ? (
+            <Text
+              style={{ fontSize: bodySize * 1.25, fontStyle: 'italic', color: c.titleColor, textAlign: 'center' }}
+              numberOfLines={4}
+            >
+              {content.body}
+            </Text>
+          ) : null}
+          {content.subtitle ? (
+            <Text style={{ fontSize: smallSize, color: c.secondary, textAlign: 'center', marginTop: 4 * scale }} numberOfLines={1}>
+              — {content.subtitle}
+            </Text>
+          ) : null}
+        </View>
+      );
+
+    case 'sectionDivider':
+      return (
+        <View style={{ flex: 1, justifyContent: 'center' }}>
+          <Text style={{ fontSize: titleSize * 2.6, fontWeight: 'bold', color: c.secondary, lineHeight: titleSize * 2.7 }}>
+            {content.sectionNumber || '01'}
+          </Text>
+          {content.title ? (
+            <Text style={{ fontSize: titleSize * 1.25, fontWeight: 'bold', color: c.titleColor }} numberOfLines={2}>
+              {content.title}
+            </Text>
+          ) : null}
+          {content.subtitle ? (
+            <Text style={{ fontSize: smallSize, color: c.secondary, marginTop: 3 * scale }} numberOfLines={1}>
+              {content.subtitle}
+            </Text>
+          ) : null}
+        </View>
+      );
+
+    case 'agenda':
+      return (
+        <>
+          {content.title ? (
+            <Text style={{ fontSize: titleSize, fontWeight: 'bold', color: c.titleColor, marginBottom: 6 * scale }} numberOfLines={1}>
+              {content.title}
+            </Text>
+          ) : null}
+          {(content.bullets ?? content.steps ?? []).slice(0, 6).map((item, i) => (
+            <View key={i} style={{ flexDirection: 'row', alignItems: 'center', gap: 5 * scale, marginBottom: 3 * scale }}>
+              <View style={{ width: 11 * scale, height: 11 * scale, borderRadius: 6 * scale, backgroundColor: c.accent === '#FFFFFF' ? c.secondary : c.accent, justifyContent: 'center', alignItems: 'center' }}>
+                <Text style={{ fontSize: 6 * scale, fontWeight: 'bold', color: '#FFFFFF' }}>{i + 1}</Text>
+              </View>
+              <Text style={{ flex: 1, fontSize: bodySize, color: c.bodyColor }} numberOfLines={1}>{item}</Text>
+            </View>
+          ))}
+        </>
+      );
+
+    case 'comparison':
+      return (
+        <>
+          {content.title ? (
+            <Text style={{ fontSize: titleSize, fontWeight: 'bold', color: c.titleColor, marginBottom: 5 * scale }} numberOfLines={1}>
+              {content.title}
+            </Text>
+          ) : null}
+          <View style={{ flexDirection: 'row', flex: 1, gap: 5 * scale }}>
+            {[
+              { t: content.leftTitle || 'Option A', b: content.leftContent },
+              { t: content.rightTitle || 'Option B', b: content.rightContent },
+            ].map((col, i) => (
+              <View key={i} style={{ flex: 1, borderRadius: 4 * scale, padding: 5 * scale, backgroundColor: c.secondary + '40' }}>
+                <Text style={{ fontSize: smallSize, fontWeight: 'bold', color: c.primary, textAlign: 'center', marginBottom: 3 * scale }} numberOfLines={1}>{col.t}</Text>
+                <Text style={{ fontSize: smallSize, color: c.bodyColor }} numberOfLines={5}>{col.b}</Text>
+              </View>
+            ))}
+          </View>
+        </>
+      );
+
+    case 'processSteps':
+      return (
+        <>
+          {content.title ? (
+            <Text style={{ fontSize: titleSize, fontWeight: 'bold', color: c.titleColor, marginBottom: 6 * scale }} numberOfLines={1}>
+              {content.title}
+            </Text>
+          ) : null}
+          <View style={{ flexDirection: 'row', flex: 1, alignItems: 'center' }}>
+            {(content.steps ?? content.bullets ?? []).slice(0, 4).map((step, i, arr) => (
+              <React.Fragment key={i}>
+                <View style={{ flex: 1, alignItems: 'center' }}>
+                  <View style={{ width: 16 * scale, height: 16 * scale, borderRadius: 8 * scale, backgroundColor: c.accent === '#FFFFFF' ? c.secondary : c.accent, justifyContent: 'center', alignItems: 'center', marginBottom: 3 * scale }}>
+                    <Text style={{ fontSize: 8 * scale, fontWeight: 'bold', color: '#FFFFFF' }}>{i + 1}</Text>
+                  </View>
+                  <Text style={{ fontSize: smallSize * 0.9, color: c.bodyColor, textAlign: 'center' }} numberOfLines={3}>{step}</Text>
+                </View>
+                {i < arr.length - 1 ? (
+                  <Text style={{ fontSize: bodySize, color: c.secondary, marginHorizontal: 1 * scale }}>›</Text>
+                ) : null}
+              </React.Fragment>
+            ))}
+          </View>
         </>
       );
 

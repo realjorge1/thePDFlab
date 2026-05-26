@@ -12,6 +12,7 @@
  * in pick order so the first image's text leads the document.
  */
 
+import { PremiumGate } from "@/components/PremiumGate";
 import { API_ENDPOINTS } from "@/config/api";
 import { markFileAsCreated } from "@/services/fileService";
 import {
@@ -283,6 +284,10 @@ export default function ScanToTextScreen() {
   // ── Render ─────────────────────────────────────────────────────────────────
 
   return (
+    <PremiumGate
+      feature="Scan to Text"
+      description="OCR scanning and AI text cleanup is a Premium feature."
+    >
     <SafeAreaView edges={["top"]} style={[styles.screen, { backgroundColor: t.background }]}>
       <KeyboardAvoidingView
         style={styles.flex1}
@@ -702,6 +707,7 @@ export default function ScanToTextScreen() {
         )}
       </KeyboardAvoidingView>
     </SafeAreaView>
+    </PremiumGate>
   );
 }
 

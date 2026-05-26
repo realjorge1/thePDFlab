@@ -43,6 +43,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { AppHeaderContainer } from "@/components/AppHeaderContainer";
 import { GradientView } from "@/components/GradientView";
 import { PINGate } from "@/components/PINGate";
+import { PremiumGate } from "@/components/PremiumGate";
 import { colors, shadows } from "@/constants/theme";
 import { useTheme } from "@/services/ThemeProvider";
 import { upsertFileRecord } from "@/services/fileIndexService";
@@ -872,6 +873,10 @@ export default function DownloadsScreen() {
   // RENDER
   // ============================================================================
   return (
+    <PremiumGate
+      feature="Downloads"
+      description="Search and download books & research papers with Premium."
+    >
     <PINGate screen="downloads">
       <SafeAreaView
         style={[styles.safeArea, { backgroundColor }]}
@@ -1167,6 +1172,7 @@ export default function DownloadsScreen() {
         )}
       </SafeAreaView>
     </PINGate>
+    </PremiumGate>
   );
 }
 

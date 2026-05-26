@@ -8,7 +8,7 @@
  */
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
-const STORAGE_KEY = "@inscribed_reading_progress";
+const STORAGE_KEY = "@wordsinscribed_reading_progress";
 
 export type ReadingProgressSource = "pdf" | "epub" | "scroll";
 

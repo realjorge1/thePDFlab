@@ -1,13 +1,7 @@
-/**
- * Premium Screen — Go Pro
- *
- * Fully integrated premium paywall screen from design system.
- * Displays pricing plans, features, and CTA button.
- * NO functional wiring: all buttons provide UI feedback only.
- */
 import { AppHeaderContainer } from "@/components/AppHeaderContainer";
 import { GradientView } from "@/components/GradientView";
 import { colors } from "@/constants/theme";
+import { useSubscription } from "@/context/SubscriptionContext";
 import { useTheme } from "@/services/ThemeProvider";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
@@ -23,9 +17,10 @@ import {
   Sparkles,
   Zap,
 } from "lucide-react-native";
-import React, { useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  Alert,
   Platform,
   ScrollView,
   StyleSheet,
@@ -33,8 +28,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-// TODO: configure RevenueCat API key before re-enabling
-// import Purchases from "react-native-purchases";
+import type { PurchasesPackage } from "react-native-purchases";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 // Pricing — single source of truth
@@ -92,16 +86,63 @@ const TOP_TOOL_FEATURES = [
 export default function PremiumScreen() {
   const router = useRouter();
   const { colors: themeColors, mode } = useTheme();
+  const { purchase, restore, getOfferings } = useSubscription();
   const [selectedPlan, setSelectedPlan] = useState<"yearly" | "monthly">(
     "yearly",
   );
   const [isLoading, setIsLoading] = useState(false);
+  const monthlyPkg = useRef<PurchasesPackage | null>(null);
+  const annualPkg = useRef<PurchasesPackage | null>(null);
 
   const isDark = mode === "dark";
 
+  useEffect(() => {
+    getOfferings().then((offerings) => {
+      if (!offerings?.current) return;
+      monthlyPkg.current = offerings.current.monthly ?? null;
+      annualPkg.current = offerings.current.annual ?? null;
+    });
+  }, [getOfferings]);
+
   const handleUpgradePress = async () => {
+    const pkg = selectedPlan === "yearly" ? annualPkg.current : monthlyPkg.current;
+    if (!pkg) {
+      Alert.alert("Not available", "This plan is not available right now. Please try again later.");
+      return;
+    }
     setIsLoading(true);
-    setTimeout(() => setIsLoading(false), 800);
+    try {
+      const success = await purchase(pkg);
+      if (success) {
+        Alert.alert("Welcome to Premium!", "Your subscription is now active.", [
+          { text: "Continue", onPress: () => router.back() },
+        ]);
+      }
+    } catch (error: any) {
+      if (!error.userCancelled) {
+        Alert.alert("Purchase failed", error.message ?? "Please try again.");
+      }
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleRestorePress = async () => {
+    setIsLoading(true);
+    try {
+      const success = await restore();
+      if (success) {
+        Alert.alert("Restored!", "Your premium access has been restored.", [
+          { text: "Continue", onPress: () => router.back() },
+        ]);
+      } else {
+        Alert.alert("Nothing to restore", "No active subscription was found for this account.");
+      }
+    } catch (error: any) {
+      Alert.alert("Restore failed", error.message ?? "Please try again.");
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   return (
@@ -136,7 +177,8 @@ export default function PremiumScreen() {
               <TouchableOpacity
                 style={styles.navRestore}
                 activeOpacity={0.7}
-                onPress={() => {}}
+                onPress={handleRestorePress}
+                disabled={isLoading}
               >
                 <Text style={styles.navRestoreText}>Restore</Text>
               </TouchableOpacity>

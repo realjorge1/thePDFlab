@@ -45,7 +45,7 @@ interface SystemVoice {
 // Persistence key
 // ---------------------------------------------------------------------------
 
-const VOICE_STORAGE_KEY = "@inscribed_selected_voice";
+const VOICE_STORAGE_KEY = "@wordsinscribed_selected_voice";
 
 // ---------------------------------------------------------------------------
 // Singleton state

@@ -261,7 +261,11 @@ export function useFileIndex(options?: { autoLoad?: boolean }) {
   // Refresh files (single round-trip — refreshFileIndex already returns sorted data)
   const refresh = useCallback(async () => {
     if (!isMountedRef.current) return;
-    setState((prev) => ({ ...prev, isLoading: true, error: null }));
+    setState((prev) =>
+      prev.isLoading && prev.error === null
+        ? prev
+        : { ...prev, isLoading: true, error: null },
+    );
     try {
       const files = await refreshFileIndex();
       if (isMountedRef.current) {

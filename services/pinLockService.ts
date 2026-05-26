@@ -18,7 +18,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 // ─── Brute-force constants ────────────────────────────────────────────────────
 const MAX_ATTEMPTS = 5;
 const LOCKOUT_MS = 30_000; // 30 seconds
-const ATTEMPT_KEY = "@inscribed_pin_attempts";
+const ATTEMPT_KEY = "@wordsinscribed_pin_attempts";
 
 interface AttemptData {
   count: number;

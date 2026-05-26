@@ -56,6 +56,7 @@ interface RunState {
   italic: boolean;
   underline: boolean;
   strike: boolean;
+  vertAlign?: "subscript" | "superscript";
   color?: string;
   highlight?: string;
   font: string;
@@ -81,6 +82,7 @@ function buildRunXml(text: string, s: RunState): string {
   if (s.italic) rPr += "<w:i/>";
   if (s.underline) rPr += '<w:u w:val="single"/>';
   if (s.strike) rPr += "<w:strike/>";
+  if (s.vertAlign) rPr += `<w:vertAlign w:val="${s.vertAlign}"/>`;
   if (s.color) {
     const c = s.color.replace("#", "");
     rPr += `<w:color w:val="${escapeXml(c)}"/>`;
@@ -142,6 +144,18 @@ function parseInlineHTML(html: string): string[] {
       } else if (/<\/u>/.test(tag)) {
         flush();
         state.underline = false;
+      } else if (/<sub[\s>]/.test(tag)) {
+        flush();
+        state.vertAlign = "subscript";
+      } else if (/<\/sub>/.test(tag)) {
+        flush();
+        state.vertAlign = undefined;
+      } else if (/<sup[\s>]/.test(tag)) {
+        flush();
+        state.vertAlign = "superscript";
+      } else if (/<\/sup>/.test(tag)) {
+        flush();
+        state.vertAlign = undefined;
       } else if (/<s[\s>]|<strike[\s>]/.test(tag)) {
         flush();
         state.strike = true;
@@ -174,15 +188,20 @@ function parseInlineHTML(html: string): string[] {
           );
           const s = style.match(/font-size:\s*([0-9.]+)pt/i);
           const f = style.match(/font-family:\s*([^;"']+)/i);
+          const v = style.match(/vertical-align:\s*(sub|super)/i);
           if (c) state.color = c[1];
           if (h) state.highlight = h[1];
           if (s) state.size = Math.round(parseFloat(s[1]) * 2);
           if (f) state.font = f[1].split(",")[0].trim();
+          if (v)
+            state.vertAlign =
+              v[1].toLowerCase() === "sub" ? "subscript" : "superscript";
         }
       } else if (/<\/span>/.test(tag)) {
         flush();
         state.color = undefined;
         state.highlight = undefined;
+        state.vertAlign = undefined;
       }
       // Skip other tags (img, svg, div, etc.) — they become block-level
     } else {
@@ -310,12 +329,17 @@ function parseHtmlTableToOoxml(tableInner: string): string {
 interface ParseResult {
   paragraphs: string[];
   images: ImageRef[];
+  /** True if any bullet/numbered list paragraph was emitted (needs numbering.xml). */
+  usesNumbering: boolean;
 }
 
 export function parseHTMLToOoxml(html: string): ParseResult {
   const paragraphs: string[] = [];
   const images: ImageRef[] = [];
   let imgCounter = 0;
+  // List context stack: each entry is the list kind at that nesting depth.
+  const listStack: ("bullet" | "number")[] = [];
+  let usesNumbering = false;
 
   // ── Strip editor-only UI artifacts (belt-and-suspenders) ────────────
   // Remove table toolbar divs (buttons like +Row/+Col would leak as text)
@@ -404,10 +428,19 @@ export function parseHTMLToOoxml(html: string): ParseResult {
     },
   );
 
-  // Clean block tags to newlines (table tags already removed above)
+  // ── Convert list structure to markers BEFORE the generic block flatten,
+  //    so bullets/numbers can be reconstructed as real OOXML list paragraphs.
+  processed = processed
+    .replace(/<ul[^>]*>/gi, "\n__UL_START__\n")
+    .replace(/<ol[^>]*>/gi, "\n__OL_START__\n")
+    .replace(/<\/(?:ul|ol)>/gi, "\n__LIST_END__\n")
+    .replace(/<li[^>]*>/gi, "\n__LI__")
+    .replace(/<\/li>/gi, "\n");
+
+  // Clean block tags to newlines (table + list tags already handled above)
   processed = processed
     .replace(/<br\s*\/?>/gi, "\n")
-    .replace(/<\/?(div|p|h[1-6]|li|ul|ol|blockquote)[^>]*>/gi, "\n")
+    .replace(/<\/?(div|p|h[1-6]|blockquote)[^>]*>/gi, "\n")
     .replace(
       /<\/?(?:table|tr|td|th|thead|tbody|caption|colgroup|col)[^>]*>/gi,
       "\n",
@@ -421,6 +454,37 @@ export function parseHTMLToOoxml(html: string): ParseResult {
     // Page break
     if (trimmed === "__PAGE_BREAK__") {
       paragraphs.push(`<w:p><w:r><w:br w:type="page"/></w:r></w:p>`);
+      continue;
+    }
+
+    // ── List structure markers ───────────────────────────────────────────
+    if (trimmed === "__UL_START__") {
+      listStack.push("bullet");
+      continue;
+    }
+    if (trimmed === "__OL_START__") {
+      listStack.push("number");
+      continue;
+    }
+    if (trimmed === "__LIST_END__") {
+      listStack.pop();
+      continue;
+    }
+    if (trimmed.startsWith("__LI__")) {
+      const content = trimmed.slice("__LI__".length).trim();
+      const level = Math.min(8, Math.max(0, listStack.length - 1));
+      const kind = listStack.length
+        ? listStack[listStack.length - 1]
+        : "bullet";
+      const numId = kind === "number" ? 2 : 1;
+      usesNumbering = true;
+      const runs = parseInlineHTML(content);
+      const numPr = `<w:numPr><w:ilvl w:val="${level}"/><w:numId w:val="${numId}"/></w:numPr>`;
+      const pPr = `<w:pPr>${numPr}<w:spacing w:line="276" w:lineRule="auto"/></w:pPr>`;
+      const body = runs.length
+        ? runs.join("")
+        : '<w:r><w:t xml:space="preserve"></w:t></w:r>';
+      paragraphs.push(`<w:p>${pPr}${body}</w:p>`);
       continue;
     }
 
@@ -481,7 +545,7 @@ export function parseHTMLToOoxml(html: string): ParseResult {
     paragraphs.push('<w:p><w:r><w:t xml:space="preserve"></w:t></w:r></w:p>');
   }
 
-  return { paragraphs, images };
+  return { paragraphs, images, usesNumbering };
 }
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -505,9 +569,27 @@ export async function generateDocxFromHtml({
   fontFamily = "Inter",
   fontSize = 11,
 }: GenerateOptions): Promise<string> {
-  const { paragraphs, images } = parseHTMLToOoxml(html);
+  const { paragraphs, images, usesNumbering } = parseHTMLToOoxml(html);
   const docFont = escapeXml(fontFamily);
   const docSzHalfPt = fontSize * 2;
+
+  // ── word/numbering.xml — only emitted when the document contains lists ──
+  // numId 1 = bullet, numId 2 = decimal/letter/roman (by nesting level).
+  const numberingXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:abstractNum w:abstractNumId="0">
+    <w:lvl w:ilvl="0"><w:numFmt w:val="bullet"/><w:lvlText w:val="•"/><w:lvlJc w:val="left"/><w:pPr><w:ind w:left="720" w:hanging="360"/></w:pPr></w:lvl>
+    <w:lvl w:ilvl="1"><w:numFmt w:val="bullet"/><w:lvlText w:val="◦"/><w:lvlJc w:val="left"/><w:pPr><w:ind w:left="1440" w:hanging="360"/></w:pPr></w:lvl>
+    <w:lvl w:ilvl="2"><w:numFmt w:val="bullet"/><w:lvlText w:val="▪"/><w:lvlJc w:val="left"/><w:pPr><w:ind w:left="2160" w:hanging="360"/></w:pPr></w:lvl>
+  </w:abstractNum>
+  <w:abstractNum w:abstractNumId="1">
+    <w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="decimal"/><w:lvlText w:val="%1."/><w:lvlJc w:val="left"/><w:pPr><w:ind w:left="720" w:hanging="360"/></w:pPr></w:lvl>
+    <w:lvl w:ilvl="1"><w:start w:val="1"/><w:numFmt w:val="lowerLetter"/><w:lvlText w:val="%2."/><w:lvlJc w:val="left"/><w:pPr><w:ind w:left="1440" w:hanging="360"/></w:pPr></w:lvl>
+    <w:lvl w:ilvl="2"><w:start w:val="1"/><w:numFmt w:val="lowerRoman"/><w:lvlText w:val="%3."/><w:lvlJc w:val="right"/><w:pPr><w:ind w:left="2160" w:hanging="360"/></w:pPr></w:lvl>
+  </w:abstractNum>
+  <w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num>
+  <w:num w:numId="2"><w:abstractNumId w:val="1"/></w:num>
+</w:numbering>`;
 
   // Build title paragraph
   const titleParagraph = `<w:p>
@@ -595,7 +677,11 @@ export async function generateDocxFromHtml({
   <Override PartName="/word/document.xml"
             ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
   <Override PartName="/word/styles.xml"
-            ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>
+            ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>${
+    usesNumbering
+      ? `\n  <Override PartName="/word/numbering.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/>`
+      : ""
+  }
 </Types>`;
 
   // ── _rels/.rels ─────────────────────────────────────────────────────
@@ -614,7 +700,11 @@ export async function generateDocxFromHtml({
 
   const documentRelsXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-  <Relationship Id="rIdStyles" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>${imgRelationships}
+  <Relationship Id="rIdStyles" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>${
+    usesNumbering
+      ? `\n  <Relationship Id="rIdNumbering" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering" Target="numbering.xml"/>`
+      : ""
+  }${imgRelationships}
 </Relationships>`;
 
   // ── Assemble ZIP ────────────────────────────────────────────────────
@@ -624,6 +714,9 @@ export async function generateDocxFromHtml({
   zip.file("word/_rels/document.xml.rels", documentRelsXml);
   zip.file("word/document.xml", documentXml);
   zip.file("word/styles.xml", stylesXml);
+  if (usesNumbering) {
+    zip.file("word/numbering.xml", numberingXml);
+  }
 
   // Add images
   for (const img of images) {

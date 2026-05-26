@@ -5,6 +5,7 @@
 
 import { AIChatBubble } from "@/components/ai";
 import { LibraryFilePicker } from "@/components/LibraryFilePicker";
+import { PremiumGate } from "@/components/PremiumGate";
 import { spacing } from "@/constants/theme";
 import type { AIChatMessage, AIDocumentRef } from "@/services/ai";
 import {
@@ -604,6 +605,10 @@ export default function ChatWithDocumentScreen() {
 
   // ── Main Render ───────────────────────────────────────────────────────────
   return (
+    <PremiumGate
+      feature="Chat with Documents"
+      description="Ask questions about your documents with Premium."
+    >
     <SafeAreaView
       style={[styles.safe, { backgroundColor: t.background }]}
       edges={["top"]}
@@ -744,6 +749,7 @@ export default function ChatWithDocumentScreen() {
         title="Select Document to Chat With"
       />
     </SafeAreaView>
+    </PremiumGate>
   );
 }
 

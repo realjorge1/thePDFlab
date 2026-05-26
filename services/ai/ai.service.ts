@@ -16,6 +16,7 @@ import type {
     AISession,
 } from "./ai.types";
 import { generateId } from "./ai.types";
+import { assertAIPremium } from "./premiumGuard";
 import { BackendAIProvider } from "./providers/backend.provider";
 import { MockAIProvider } from "./providers/mock.provider";
 
@@ -30,7 +31,7 @@ interface AIDocumentRefInternal extends AIDocumentRef {
 }
 
 // ─── Storage keys ─────────────────────────────────────────────────────────────
-const SESSIONS_KEY = "@inscribed/ai_sessions";
+const SESSIONS_KEY = "@wordsinscribed/ai_sessions";
 const MAX_SESSIONS = 50;
 const TEXT_INPUT_LIMIT = 15_000; // characters
 
@@ -218,6 +219,7 @@ export async function sendChat(
   documentText?: string,
   documentName?: string,
 ): Promise<AIResponse> {
+  assertAIPremium();
   return _provider.chat({
     message,
     history,
@@ -230,6 +232,7 @@ export async function summarize(
   text: string,
   documentName?: string,
 ): Promise<AIResponse> {
+  assertAIPremium();
   return _provider.summarize({ text: prepareText(text), documentName });
 }
 
@@ -238,6 +241,7 @@ export async function translate(
   targetLanguage: string,
   documentName?: string,
 ): Promise<AIResponse> {
+  assertAIPremium();
   return _provider.translate({
     text: prepareText(text),
     targetLanguage,
@@ -250,6 +254,7 @@ export async function analyze(
   analysisType?: string,
   documentName?: string,
 ): Promise<AIResponse> {
+  assertAIPremium();
   return _provider.analyze({
     text: prepareText(text),
     analysisType,
@@ -261,6 +266,7 @@ export async function extractTasks(
   text: string,
   documentName?: string,
 ): Promise<AIResponse> {
+  assertAIPremium();
   return _provider.extractTasks({ text: prepareText(text), documentName });
 }
 
@@ -272,6 +278,7 @@ export async function generateDocument(
   wordCount?: number,
   audience?: string,
 ): Promise<AIResponse> {
+  assertAIPremium();
   return _provider.generateDocument({
     prompt: prepareText(prompt),
     fileType,
@@ -286,6 +293,7 @@ export async function classifyDocument(
   text: string,
   filename?: string,
 ): Promise<AIResponse> {
+  assertAIPremium();
   return _provider.classify({ text: prepareText(text), filename });
 }
 
@@ -293,6 +301,7 @@ export async function highlightKeyPoints(
   text: string,
   documentName?: string,
 ): Promise<AIResponse> {
+  assertAIPremium();
   return _provider.highlight({ text: prepareText(text), documentName });
 }
 
@@ -305,6 +314,7 @@ export async function summarizeHighlights(
   highlights: import("./ai.types").HighlightItem[],
   documentName?: string,
 ): Promise<{ summary: string[]; keyThemes: string[] }> {
+  assertAIPremium();
   try {
     const { API_ENDPOINTS } = require("@/config/api");
     const res = await fetch(API_ENDPOINTS.AI.HIGHLIGHT_SUMMARY, {
@@ -349,6 +359,7 @@ export async function convertHighlightToTask(
   context?: string,
   documentName?: string,
 ): Promise<Record<string, unknown> | null> {
+  assertAIPremium();
   try {
     const { API_ENDPOINTS } = require("@/config/api");
     const res = await fetch(API_ENDPOINTS.AI.CONVERT_TO_TASK, {
@@ -393,6 +404,7 @@ export async function explainText(
     | "bullet",
   depth?: "short" | "medium" | "deep",
 ): Promise<AIResponse> {
+  assertAIPremium();
   return _provider.explain({ text: prepareText(text), mode, depth });
 }
 
@@ -406,6 +418,7 @@ export async function generateQuiz(
   /** Document reference to look up the backend extraction docId for true RAG grounding. */
   docRef?: AIDocumentRef,
 ): Promise<AIResponse> {
+  assertAIPremium();
   // Re-probe the backend every time (no-op if already switched).
   // This handles the common case where the backend wasn't ready at app startup
   // but became available by the time the user actually runs a quiz.
@@ -616,6 +629,7 @@ export async function askPdfQuestion(
   doc: AIDocumentRef | AIDocumentRefInternal,
   question: string,
 ): Promise<AskPdfResult> {
+  assertAIPremium();
   const docId = (doc as AIDocumentRefInternal)._extractionDocId;
   if (!docId) {
     return {

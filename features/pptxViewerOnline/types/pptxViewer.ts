@@ -16,6 +16,13 @@ export type RenderStage =
       sizeBytes: number;
     }
   | {
+      // On-device rendered fallback (no backend). `html` is a fully
+      // self-contained page produced by the offline PPTX parser.
+      phase: "ready_offline";
+      html: string;
+      totalSlides: number;
+    }
+  | {
       phase: "error";
       message: string;
       retryable: boolean;

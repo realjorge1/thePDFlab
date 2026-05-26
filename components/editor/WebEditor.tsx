@@ -57,6 +57,14 @@ body{background:#fff;padding:0;min-height:100%;margin:0;direction:ltr;}
 }
 div[contenteditable]{outline:none;}
 
+/* Lists — restore bullets/numbers stripped by the global reset above */
+#editor ul,#editor ol{padding-left:1.6em;margin:4px 0;}
+#editor ul{list-style:disc outside;}
+#editor ol{list-style:decimal outside;}
+#editor ul ul{list-style:circle outside;}
+#editor ul ul ul{list-style:square outside;}
+#editor li{margin:2px 0;}
+
 .doc-image,.inserted-image{max-width:100%;height:auto;display:block;margin:8px auto;cursor:pointer;position:relative;}
 .doc-image.selected,.inserted-image.selected{outline:2px solid #1976D2;}
 .img-resize-wrap{position:relative;display:inline-block;max-width:100%;margin:8px auto;}
@@ -316,6 +324,47 @@ window.applyBold=function(){cmd('bold');};
 window.applyItalic=function(){cmd('italic');};
 window.applyUnderline=function(){cmd('underline');};
 window.applyStrikethrough=function(){cmd('strikeThrough');};
+window.applySubscript=function(){cmd('subscript');};
+window.applySuperscript=function(){cmd('superscript');};
+
+// ── TEXT COLOR ────────────────────────────────────────────────────────────
+window.applyForeColor=function(color){
+  restoreSelection();
+  document.execCommand('styleWithCSS',false,true);
+  cmd('foreColor',color);
+  document.execCommand('styleWithCSS',false,false);
+};
+
+// ── CLEAR FORMATTING ──────────────────────────────────────────────────────
+window.clearFormatting=function(){
+  restoreSelection();
+  document.execCommand('removeFormat',false,null);
+  pushHistory();
+  notifySelectionState();
+};
+
+// ── INDENT / OUTDENT ──────────────────────────────────────────────────────
+window.applyIndent=function(){cmd('indent');};
+window.applyOutdent=function(){cmd('outdent');};
+
+// ── BULLET / NUMBERED LISTS ────────────────────────────────────────────────
+window.applyBulletList=function(){cmd('insertUnorderedList');};
+window.applyNumberList=function(){cmd('insertOrderedList');};
+
+// ── CHANGE CASE ─────────────────────────────────────────────────────────────
+window.changeCase=function(mode){
+  restoreSelection();
+  var sel=window.getSelection();
+  if(!sel||!sel.rangeCount)return;
+  var text=sel.toString();
+  if(!text)return;
+  var out=text;
+  if(mode==='upper')out=text.toUpperCase();
+  else if(mode==='lower')out=text.toLowerCase();
+  else if(mode==='title')out=text.replace(/\\w\\S*/g,function(w){return w.charAt(0).toUpperCase()+w.substr(1).toLowerCase();});
+  document.execCommand('insertText',false,out);
+  pushHistory();
+};
 
 // ── FONT FAMILY (span-based for real rendering) ────────────────────────────
 window.applyFontFamily=function(fontName){
@@ -752,13 +801,15 @@ function notifySelectionState(){
     var italic=document.queryCommandState('italic');
     var underline=document.queryCommandState('underline');
     var strike=document.queryCommandState('strikeThrough');
+    var subscript=document.queryCommandState('subscript');
+    var superscript=document.queryCommandState('superscript');
     var align='left';
     if(document.queryCommandState('justifyCenter'))align='center';
     else if(document.queryCommandState('justifyRight'))align='right';
     else if(document.queryCommandState('justifyFull'))align='justify';
     var block=getBlock();
     if(block&&block.style.textAlign)align=block.style.textAlign;
-    rn({type:'SELECTION_STATE',bold:bold,italic:italic,underline:underline,strikethrough:strike,align:align});
+    rn({type:'SELECTION_STATE',bold:bold,italic:italic,underline:underline,strikethrough:strike,subscript:subscript,superscript:superscript,align:align});
   }catch(e){}
 }
 function notifyContent(){
@@ -909,6 +960,8 @@ export default React.memo(function WebEditor() {
               italic: data.italic,
               underline: data.underline,
               strikethrough: data.strikethrough,
+              subscript: data.subscript,
+              superscript: data.superscript,
               textAlign: data.align,
             };
             if (!selectionStateTimer.current) {

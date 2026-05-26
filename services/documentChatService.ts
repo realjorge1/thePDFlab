@@ -5,6 +5,7 @@
  */
 
 import { API_ENDPOINTS, wakeUpBackend } from "@/config/api";
+import { assertAIPremium } from "@/services/ai/premiumGuard";
 import type { AIChatMessage, AIDocumentRef } from "@/services/ai/ai.types";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -78,6 +79,7 @@ function cacheSession(doc: AIDocumentRef, session: DocumentChatSession): void {
 export async function extractDocumentForChat(
   doc: AIDocumentRef,
 ): Promise<DocumentChatSession> {
+  assertAIPremium();
   // Check cache first
   const cached = getCachedSession(doc);
   if (cached) {
@@ -145,6 +147,7 @@ export async function askDocumentQuestion(
   question: string,
   history?: AIChatMessage[],
 ): Promise<DocumentChatResponse> {
+  assertAIPremium();
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 60_000);
 

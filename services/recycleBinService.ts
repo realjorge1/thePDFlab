@@ -24,7 +24,7 @@ export interface RecycledFile {
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const RECYCLE_KEY = "@inscribed_recycle_bin";
+const RECYCLE_KEY = "@wordsinscribed_recycle_bin";
 const RETENTION_DAYS = 15;
 const MS_PER_DAY = 86_400_000;
 

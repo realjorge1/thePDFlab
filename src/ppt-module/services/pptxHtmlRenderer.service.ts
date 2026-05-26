@@ -534,12 +534,10 @@ export async function parsePPTXForViewer(
     : fileUri;
 
   // ── Read & unzip ─────────────────────────────
+  // Load straight from base64 — JSZip decodes it internally, so we avoid any
+  // dependency on a global atob() (not guaranteed across RN runtimes).
   const base64 = await RNFS.readFile(filePath, 'base64');
-  const binary = atob(base64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-
-  const zip = await JSZip.loadAsync(bytes.buffer as ArrayBuffer);
+  const zip = await JSZip.loadAsync(base64, { base64: true });
 
   // ── Theme colours ────────────────────────────
   const theme = await parseThemeColors(zip);
@@ -628,8 +626,30 @@ function show(i){
   fit();
   try{window.ReactNativeWebView.postMessage(JSON.stringify({type:'slide',index:i,total:SLIDES.length}));}catch(e){}
 }
+function next(){show(Math.min(cur+1,SLIDES.length-1));}
+function prev(){show(Math.max(cur-1,0));}
 window.goToSlide=function(i){show(i);};
 window.addEventListener('resize',fit);
+
+// ── Swipe + tap navigation ───────────────────────────────
+var tsX=0,tsY=0,tsT=0;
+window.addEventListener('touchstart',function(e){
+  var t=e.changedTouches[0];tsX=t.clientX;tsY=t.clientY;tsT=Date.now();
+},{passive:true});
+window.addEventListener('touchend',function(e){
+  var t=e.changedTouches[0];
+  var dx=t.clientX-tsX,dy=t.clientY-tsY,dt=Date.now()-tsT;
+  if(Math.abs(dx)>50&&Math.abs(dx)>Math.abs(dy)){dx<0?next():prev();return;}
+  // Quick tap: left third = prev, right two-thirds = next
+  if(dt<300&&Math.abs(dx)<12&&Math.abs(dy)<12){
+    t.clientX<window.innerWidth*0.33?prev():next();
+  }
+},{passive:true});
+window.addEventListener('keydown',function(e){
+  if(e.key==='ArrowRight'||e.key==='ArrowDown'||e.key===' ')next();
+  else if(e.key==='ArrowLeft'||e.key==='ArrowUp')prev();
+});
+
 show(0);
 </script>
 </body>

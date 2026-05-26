@@ -1,19 +1,12 @@
 {
-  "name": "inscribed",
+  "name": "wordsinscribed",
   "version": "1.0.0",
   "private": true,
   "packageManager": "npm@11.7.0",
   "main": "expo-router/entry",
-  "workspaces": [
-    "backend"
-  ],
   "scripts": {
-    "dev": "turbo run dev dev:app",
-    "dev:app": "expo start",
-    "dev:backend": "turbo run dev --filter=inscribed-backend",
+    "dev": "expo start",
     "start": "expo start",
-    "start:backend": "turbo run start --filter=inscribed-backend",
-    "build": "turbo run build",
     "android": "expo run:android",
     "ios": "expo run:ios",
     "web": "expo start --web",
@@ -38,6 +31,7 @@
     "epubjs": "^0.4.2",
     "expo": "^54.0.0",
     "expo-asset": "~12.0.13",
+    "expo-blur": "~15.0.8",
     "expo-clipboard": "~8.0.5",
     "expo-constants": "~18.0.13",
     "expo-dev-client": "~6.0.21",
@@ -90,7 +84,6 @@
     "@types/uuid": "^10.0.0",
     "eslint": "^9.25.0",
     "eslint-config-expo": "~10.0.0",
-    "turbo": "^2.8.3",
     "typescript": "~5.9.2"
   }
 }

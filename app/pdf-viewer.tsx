@@ -33,6 +33,11 @@ import {
   MobileRenderer,
   type MobileRendererHandle,
 } from "@/components/DocumentViewer/MobileRenderer";
+import {
+  PdfTextLayerView,
+  type PdfTextLayerHandle,
+  type PdfTextLayerSelection,
+} from "@/components/DocumentViewer/PdfTextLayerView";
 import { PDFTextExtractor } from "@/components/DocumentViewer/PDFTextExtractor";
 import { SelectionToolbar } from "@/components/DocumentViewer/SelectionToolbar";
 import { ThreeDotsMenu } from "@/components/DocumentViewer/ThreeDotsMenu";
@@ -62,6 +67,7 @@ import {
 } from "@/services/readingProgressService";
 
 import { API_BASE_URL } from "@/config/api";
+import * as Clipboard from "expo-clipboard";
 import * as FileSystem from "expo-file-system/legacy";
 import {
   DarkTheme,
@@ -143,6 +149,13 @@ interface ViewerState {
   selectionText: string;
   selectionRect: { x: number; y: number; width: number; height: number } | null;
   selectionOffsets: { startOffset: number; endOffset: number } | null;
+  /** Page index (0-based) the current selection lives on — page (text-layer) view only. */
+  selectionPageIndex: number | null;
+  // ── In-place selectable page view (pdf.js canvas + text layer) ──
+  /** True once the text-layer WebView reports a fatal error — falls back to native render. */
+  pageViewFailed: boolean;
+  /** Byte size of the PDF (when known) — gates the in-WebView renderer for huge files. */
+  fileSize: number | null;
   // ── Inline editor (in-place edit mode) ──
   editMode: boolean;
   editorHtml: string | null;
@@ -243,6 +256,9 @@ export default function PdfViewerScreen() {
     selectionText: "",
     selectionRect: null,
     selectionOffsets: null,
+    selectionPageIndex: null,
+    pageViewFailed: false,
+    fileSize: null,
     editMode: false,
     editorHtml: null,
     editLoading: false,
@@ -257,6 +273,7 @@ export default function PdfViewerScreen() {
   const [headerHeight, setHeaderHeight] = useState(0);
   const isMountedRef = useRef(true);
   const mobileRendererRef = useRef<MobileRendererHandle>(null);
+  const pageViewRef = useRef<PdfTextLayerHandle>(null);
   const editorWebViewRef = useRef<WebViewType>(null);
   const editAbortRef = useRef<AbortController | null>(null);
   /** Holds a search query that arrived before text extraction completed. */
@@ -318,6 +335,14 @@ export default function PdfViewerScreen() {
         error: null,
         errorDetails: undefined,
         showRecovery: false,
+        // Reset the in-place selectable renderer for the new file.
+        pageViewFailed: false,
+        fileSize: null,
+        selectionVisible: false,
+        selectionText: "",
+        selectionRect: null,
+        selectionOffsets: null,
+        selectionPageIndex: null,
       }));
 
       if (__DEV__) console.log("[PdfViewer] normalizeUri start:", uri);
@@ -365,10 +390,23 @@ export default function PdfViewerScreen() {
         return;
       }
 
+      // Capture byte size so the in-WebView renderer can be skipped for very
+      // large files (it inlines the bytes as base64). Best-effort only.
+      let size: number | null = null;
+      try {
+        const finfo = await FileSystem.getInfoAsync(normalized, { size: true } as any);
+        if (finfo.exists && typeof (finfo as any).size === "number") {
+          size = (finfo as any).size;
+        }
+      } catch {
+        // ignore — size guard simply won't apply
+      }
+
       setState((prev) => ({
         ...prev,
         normalizedUri: normalized,
         loading: false,
+        fileSize: size,
       }));
     } catch (error) {
       if (__DEV__) console.warn("[PdfViewer] normalizeUri error:", error);
@@ -1057,11 +1095,37 @@ export default function PdfViewerScreen() {
   }, [uri]);
 
   // ── Selection toolbar actions ────────────────────────────────────
+  // Annotations made in the in-place page (text-layer) view are stored under a
+  // separate key so their page-relative offsets never collide with the reflow
+  // view's whole-document offsets.
+  const pageAnnotKey = uri ? `pageview::${uri}` : uri;
+
   const handleSelectionHighlight = useCallback(
     (colorHex: string) => {
-      const { selectionOffsets, selectionText } = state;
+      const { selectionOffsets, selectionText, selectionPageIndex } = state;
       if (!selectionOffsets || !uri) return;
       const id = `hl_${Date.now()}`;
+      if (selectionPageIndex !== null) {
+        // In-place page view
+        pageViewRef.current?.highlight(
+          id,
+          selectionPageIndex,
+          selectionOffsets.startOffset,
+          selectionOffsets.endOffset,
+          colorHex,
+        );
+        saveHighlight({
+          id,
+          fileUri: pageAnnotKey!,
+          pageNumber: selectionPageIndex,
+          startOffset: selectionOffsets.startOffset,
+          endOffset: selectionOffsets.endOffset,
+          text: selectionText,
+          color: colorHex,
+          createdAt: Date.now(),
+        });
+        return;
+      }
       mobileRendererRef.current?.bridgeHighlight(
         id,
         selectionOffsets.startOffset,
@@ -1078,13 +1142,31 @@ export default function PdfViewerScreen() {
         createdAt: Date.now(),
       });
     },
-    [state.selectionOffsets, state.selectionText, uri],
+    [state.selectionOffsets, state.selectionText, state.selectionPageIndex, uri, pageAnnotKey],
   );
 
   const handleSelectionUnderline = useCallback(() => {
-    const { selectionOffsets, selectionText } = state;
+    const { selectionOffsets, selectionText, selectionPageIndex } = state;
     if (!selectionOffsets || !uri) return;
     const id = `ul_${Date.now()}`;
+    if (selectionPageIndex !== null) {
+      pageViewRef.current?.underline(
+        id,
+        selectionPageIndex,
+        selectionOffsets.startOffset,
+        selectionOffsets.endOffset,
+      );
+      saveUnderline({
+        id,
+        fileUri: pageAnnotKey!,
+        pageNumber: selectionPageIndex,
+        startOffset: selectionOffsets.startOffset,
+        endOffset: selectionOffsets.endOffset,
+        text: selectionText,
+        createdAt: Date.now(),
+      });
+      return;
+    }
     mobileRendererRef.current?.bridgeUnderline(
       id,
       selectionOffsets.startOffset,
@@ -1098,12 +1180,30 @@ export default function PdfViewerScreen() {
       text: selectionText,
       createdAt: Date.now(),
     });
-  }, [state.selectionOffsets, state.selectionText, uri]);
+  }, [state.selectionOffsets, state.selectionText, state.selectionPageIndex, uri, pageAnnotKey]);
 
   const handleSelectionStrikethrough = useCallback(() => {
-    const { selectionOffsets, selectionText } = state;
+    const { selectionOffsets, selectionText, selectionPageIndex } = state;
     if (!selectionOffsets || !uri) return;
     const id = `st_${Date.now()}`;
+    if (selectionPageIndex !== null) {
+      pageViewRef.current?.strikethrough(
+        id,
+        selectionPageIndex,
+        selectionOffsets.startOffset,
+        selectionOffsets.endOffset,
+      );
+      saveStrikethrough({
+        id,
+        fileUri: pageAnnotKey!,
+        pageNumber: selectionPageIndex,
+        startOffset: selectionOffsets.startOffset,
+        endOffset: selectionOffsets.endOffset,
+        text: selectionText,
+        createdAt: Date.now(),
+      });
+      return;
+    }
     mobileRendererRef.current?.bridgeStrikethrough(
       id,
       selectionOffsets.startOffset,
@@ -1117,11 +1217,17 @@ export default function PdfViewerScreen() {
       text: selectionText,
       createdAt: Date.now(),
     });
-  }, [state.selectionOffsets, state.selectionText, uri]);
+  }, [state.selectionOffsets, state.selectionText, state.selectionPageIndex, uri, pageAnnotKey]);
 
   const handleSelectionCopy = useCallback(() => {
+    if (state.selectionPageIndex !== null) {
+      // Page (text-layer) view: copy via RN clipboard for reliability.
+      if (state.selectionText) Clipboard.setStringAsync(state.selectionText).catch(() => {});
+      pageViewRef.current?.clearSelection();
+      return;
+    }
     mobileRendererRef.current?.bridgeCopySelection();
-  }, []);
+  }, [state.selectionPageIndex, state.selectionText]);
 
   const handleSelectionAskAthemi = useCallback(() => {
     if (!state.selectionText) return;
@@ -1131,14 +1237,107 @@ export default function PdfViewerScreen() {
 
   const handleSelectionDismiss = useCallback(() => {
     mobileRendererRef.current?.bridgeClearSelection();
+    pageViewRef.current?.clearSelection();
     setState((prev) => ({
       ...prev,
       selectionVisible: false,
       selectionText: "",
       selectionRect: null,
       selectionOffsets: null,
+      selectionPageIndex: null,
     }));
   }, []);
+
+  // ── In-place page (text-layer) view callbacks ───────────────────
+  const handlePageSelection = useCallback((sel: PdfTextLayerSelection) => {
+    setState((prev) => ({
+      ...prev,
+      selectionVisible: true,
+      selectionText: sel.text,
+      selectionRect: sel.rect,
+      selectionOffsets: {
+        startOffset: sel.startOffset,
+        endOffset: sel.endOffset,
+      },
+      selectionPageIndex: sel.pageIndex,
+    }));
+  }, []);
+
+  const handlePageSelectionClear = useCallback(() => {
+    setState((prev) => ({
+      ...prev,
+      selectionVisible: false,
+      selectionText: "",
+      selectionRect: null,
+      selectionOffsets: null,
+      selectionPageIndex: null,
+    }));
+  }, []);
+
+  const handlePageViewError = useCallback((msg: string) => {
+    if (__DEV__) console.warn("[PdfViewer] text-layer view error → native fallback:", msg);
+    // Gracefully fall back to the native renderer; nothing else changes.
+    if (isMountedRef.current) {
+      setState((prev) => ({ ...prev, pageViewFailed: true }));
+    }
+  }, []);
+
+  const handlePageViewAnnotationFailed = useCallback(
+    (id: string, kind: "highlight" | "underline" | "strikethrough") => {
+      if (!pageAnnotKey) return;
+      if (kind === "highlight") removeHighlight(pageAnnotKey, id);
+      else if (kind === "underline") removeUnderline(pageAnnotKey, id);
+      else if (kind === "strikethrough") removeStrikethrough(pageAnnotKey, id);
+    },
+    [pageAnnotKey],
+  );
+
+  // Reapply saved page-view annotations once the document is laid out.
+  const reapplyPageAnnotations = useCallback(async () => {
+    if (!pageAnnotKey) return;
+    try {
+      const [highlights, underlines, strikethroughs] = await Promise.all([
+        getHighlights(pageAnnotKey),
+        getUnderlines(pageAnnotKey),
+        getStrikethroughs(pageAnnotKey),
+      ]);
+      const annotations = [
+        ...highlights.map((h) => ({
+          id: h.id,
+          pageIndex: h.pageNumber ?? 0,
+          startOffset: h.startOffset ?? 0,
+          endOffset: h.endOffset ?? 0,
+          kind: "highlight" as const,
+          color: h.color,
+        })),
+        ...underlines.map((u) => ({
+          id: u.id,
+          pageIndex: u.pageNumber ?? 0,
+          startOffset: u.startOffset,
+          endOffset: u.endOffset,
+          kind: "underline" as const,
+        })),
+        ...strikethroughs.map((s) => ({
+          id: s.id,
+          pageIndex: s.pageNumber ?? 0,
+          startOffset: s.startOffset,
+          endOffset: s.endOffset,
+          kind: "strikethrough" as const,
+        })),
+      ];
+      if (annotations.length) pageViewRef.current?.reapply(annotations);
+    } catch {
+      // non-critical
+    }
+  }, [pageAnnotKey]);
+
+  const handlePageViewLoadComplete = useCallback(
+    (numberOfPages: number) => {
+      handlePdfLoadComplete(numberOfPages);
+      reapplyPageAnnotations();
+    },
+    [handlePdfLoadComplete, reapplyPageAnnotations],
+  );
 
   // ── Recovery actions ─────────────────────────────────────────────
   const handleRecoveryAction = useCallback(
@@ -1444,6 +1643,24 @@ export default function PdfViewerScreen() {
   const readingConfig = getReadingModeConfig(state.readingMode);
   const isMobileView = state.viewMode === "mobile";
 
+  // ── In-place selectable renderer (pdf.js canvas + text layer) ──
+  // DISABLED by default. Mounting it on every PDF open inlined the whole file
+  // (+ pdf.js + worker) into one giant WebView HTML string, which froze/crashed
+  // the WebView on open. The native renderer is the safe default. The feature
+  // stays in the codebase to be re-enabled once it loads the PDF from a cache
+  // file instead of a multi-MB inline string.
+  const ENABLE_INPLACE_PDF_SELECTION = false;
+  const MAX_TEXTLAYER_BYTES = 25 * 1024 * 1024; // 25 MB ceiling when enabled
+  const canReadBytes =
+    !!state.normalizedUri && !state.normalizedUri.startsWith("content://");
+  const usePageView =
+    ENABLE_INPLACE_PDF_SELECTION &&
+    !isMobileView &&
+    state.readingMode === "continuous" &&
+    !state.pageViewFailed &&
+    canReadBytes &&
+    (state.fileSize == null || state.fileSize <= MAX_TEXTLAYER_BYTES);
+
   return (
     <SafeAreaView
       style={[styles.container, { backgroundColor: theme.background.primary }]}
@@ -1705,6 +1922,37 @@ export default function PdfViewerScreen() {
               onMessage={handleMobileMessage}
               onReady={handleMobileReady}
             />
+          ) : usePageView ? (
+            <>
+              {/* In-place selectable renderer — looks identical to the PDF,
+                  long-press selects real text on the page (WPS-style). */}
+              <PdfTextLayerView
+                ref={pageViewRef}
+                uri={state.normalizedUri}
+                colorScheme={colorScheme}
+                page={targetPage}
+                onLoadComplete={handlePageViewLoadComplete}
+                onPageChanged={handlePageChanged}
+                onError={handlePageViewError}
+                onSelection={handlePageSelection}
+                onSelectionClear={handlePageSelectionClear}
+                onAnnotationFailed={handlePageViewAnnotationFailed}
+              />
+              {state.fullscreen && (
+                <Pressable
+                  style={styles.fullscreenTapArea}
+                  onPress={handleShowFullscreenIndicator}
+                />
+              )}
+              {state.mobileLoading && (
+                <View style={styles.mobileLoadingOverlay}>
+                  <ActivityIndicator size="large" color={Palette.white} />
+                  <Text style={styles.mobileLoadingText}>
+                    Generating Mobile View…
+                  </Text>
+                </View>
+              )}
+            </>
           ) : (
             <>
               <PdfViewer
@@ -1777,7 +2025,7 @@ export default function PdfViewerScreen() {
            relative to the SafeAreaView, but the rect is relative to the WebView
            container (which starts below the header). */}
       <SelectionToolbar
-        visible={state.selectionVisible && isMobileView}
+        visible={state.selectionVisible && (isMobileView || usePageView) && !state.editMode}
         selectedText={state.selectionText}
         rect={
           state.selectionRect
@@ -1852,6 +2100,13 @@ export default function PdfViewerScreen() {
       <PDFTextExtractor
         uri={state.normalizedUri ?? null}
         active={state.readAloudActive || state.searchExtracting}
+        onProgress={(pageTexts) => {
+          // Stream pages into Read Aloud as they extract so playback can start
+          // on page 1 without waiting for the whole document. Search still
+          // waits for the final onPageTexts aggregate below.
+          if (!state.readAloudActive) return;
+          setState((prev) => ({ ...prev, readAloudPageTexts: pageTexts }));
+        }}
         onPageTexts={(pageTexts) => {
           // Resolve any pending search that triggered this extraction
           const pending = pendingSearchQueryRef.current;

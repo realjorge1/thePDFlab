@@ -54,12 +54,53 @@ function createDefaultPresentation(title = '', themeId: ThemeId = DEFAULT_THEME_
   };
 }
 
+// ─── Sensible starter content per layout ────
+function defaultContentForLayout(layout: SlideLayout): SlideContent {
+  switch (layout) {
+    case 'title':
+      return { title: 'New Slide', subtitle: 'Your subtitle here' };
+    case 'closing':
+      return { title: 'Thank You', subtitle: 'Questions?' };
+    case 'titleContent':
+      return { title: 'New Slide', bullets: ['Key point one', 'Key point two'] };
+    case 'twoColumn':
+      return { title: 'Two Columns', leftContent: '', rightContent: '' };
+    case 'agenda':
+      return { title: 'Agenda', bullets: ['First topic', 'Second topic', 'Third topic'] };
+    case 'comparison':
+      return {
+        title: 'Comparison',
+        leftTitle: 'Option A',
+        rightTitle: 'Option B',
+        leftContent: '',
+        rightContent: '',
+      };
+    case 'processSteps':
+      return { title: 'Process', steps: ['Step one', 'Step two', 'Step three'] };
+    case 'quote':
+      return { body: 'A memorable quote that makes your point.', subtitle: 'Author' };
+    case 'sectionDivider':
+      return { sectionNumber: '01', title: 'Section Title', subtitle: '' };
+    case 'statHighlight':
+      return { title: 'Key Metric', stat: { value: '94%', label: 'Stat label' } };
+    case 'timeline':
+      return { title: 'Timeline', timelineItems: [{ year: '2024', event: 'Milestone' }] };
+    case 'imageLeft':
+    case 'imageRight':
+      return { title: 'Title', body: 'Description…' };
+    case 'blank':
+    default:
+      return { title: 'New Slide' };
+  }
+}
+
 // ─── Reducer ─────────────────────────────────
 type EditorAction =
   | { type: 'SET_PRESENTATION'; payload: PPTPresentation }
   | { type: 'UPDATE_TITLE'; payload: string }
   | { type: 'UPDATE_THEME'; payload: ThemeId }
   | { type: 'ADD_SLIDE'; payload: { layout: SlideLayout; after?: number } }
+  | { type: 'DUPLICATE_SLIDE'; payload: number }
   | { type: 'DELETE_SLIDE'; payload: number }
   | { type: 'UPDATE_SLIDE_CONTENT'; payload: { index: number; content: Partial<SlideContent> } }
   | { type: 'UPDATE_SLIDE_LAYOUT'; payload: { index: number; layout: SlideLayout } }
@@ -95,7 +136,7 @@ function applyAction(
       const newSlide: Slide = {
         id: uuid(),
         layout: action.payload.layout,
-        content: { title: 'New Slide' },
+        content: defaultContentForLayout(action.payload.layout),
       };
       const slides = [...presentation.slides];
       const insertAt =
@@ -103,6 +144,28 @@ function applyAction(
           ? action.payload.after + 1
           : slides.length;
       slides.splice(insertAt, 0, newSlide);
+      return { ...presentation, slides, updatedAt: now };
+    }
+
+    case 'DUPLICATE_SLIDE': {
+      const orig = presentation.slides[action.payload];
+      if (!orig) return presentation;
+      // Deep-ish clone so the copy is fully independent of the original.
+      const clone: Slide = {
+        ...orig,
+        id: uuid(),
+        content: {
+          ...orig.content,
+          bullets: orig.content.bullets ? [...orig.content.bullets] : undefined,
+          steps: orig.content.steps ? [...orig.content.steps] : undefined,
+          timelineItems: orig.content.timelineItems
+            ? orig.content.timelineItems.map(t => ({ ...t }))
+            : undefined,
+          stat: orig.content.stat ? { ...orig.content.stat } : undefined,
+        },
+      };
+      const slides = [...presentation.slides];
+      slides.splice(action.payload + 1, 0, clone);
       return { ...presentation, slides, updatedAt: now };
     }
 
@@ -250,6 +313,10 @@ export function usePPTEditor(initial?: PPTPresentation, initialThemeId?: ThemeId
       dispatch({ type: 'ADD_SLIDE', payload: { layout, after } }),
     [],
   );
+  const duplicateSlide = useCallback(
+    (index: number) => dispatch({ type: 'DUPLICATE_SLIDE', payload: index }),
+    [],
+  );
   const deleteSlide = useCallback(
     (index: number) => dispatch({ type: 'DELETE_SLIDE', payload: index }),
     [],
@@ -292,6 +359,7 @@ export function usePPTEditor(initial?: PPTPresentation, initialThemeId?: ThemeId
     updateTitle,
     updateTheme,
     addSlide,
+    duplicateSlide,
     deleteSlide,
     updateSlideContent,
     updateSlideLayout,

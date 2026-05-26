@@ -5,6 +5,7 @@
 // ============================================
 
 import { PINGate } from "@/components/PINGate";
+import { PremiumGate } from "@/components/PremiumGate";
 import { spacing } from "@/constants/theme";
 import { colors as appColors } from "@/constants/theme";
 import { sendChat, summarize, extractTasks } from "@/services/ai/ai.service";
@@ -57,8 +58,8 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 
 // ─── Storage ─────────────────────────────────────────────────────────────────
-const WORKSPACE_KEY = "@inscribed/ai_workspace_state_v1";
-const PINNED_NOTE_KEY = "@inscribed/pinned_note_v1";
+const WORKSPACE_KEY = "@wordsinscribed/ai_workspace_state_v1";
+const PINNED_NOTE_KEY = "@wordsinscribed/pinned_note_v1";
 const ACCENT = "#9333EA";
 
 // ─── Sticky Note Color Palette ───────────────────────────────────────────────
@@ -766,6 +767,10 @@ export default function GozlinWorkspaceScreen() {
   }, [hydrated]);
 
   return (
+    <PremiumGate
+      feature="Gozlin WorkSpace"
+      description="The AI-powered notebook is a Premium feature."
+    >
     <PINGate screen="gozlin">
     <SafeAreaView style={[styles.safe, { backgroundColor: t.background }]}>
       {/* ── Gradient header matching app-wide design ── */}
@@ -974,6 +979,7 @@ export default function GozlinWorkspaceScreen() {
       </Modal>
     </SafeAreaView>
     </PINGate>
+    </PremiumGate>
   );
 }
 

@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: inscribed-backend
+    name: wordsinscribed-backend
     runtime: docker
     plan: free
     region: oregon

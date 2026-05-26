@@ -5,7 +5,7 @@
 //  Undo/Redo always visible.
 // ─────────────────────────────────────────────
 
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useRef, useEffect } from 'react';
 import {
   View,
   Text,
@@ -20,6 +20,7 @@ import {
   Pressable,
   Dimensions,
   ActivityIndicator,
+  Animated,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTheme } from '@/services/ThemeProvider';
@@ -32,6 +33,7 @@ import { getTheme } from '../../themes/pptThemes';
 import { InteractiveSlideCanvas } from '../../components/PPT/InteractiveSlideCanvas';
 import { SlideThumbnailStrip } from '../../components/PPT/SlideThumbnailStrip';
 import { ThemePicker } from '../../components/PPT/ThemePicker';
+import { PPTViewerScreen } from './PPTViewerScreen';
 import { SlideLayout, ThemeId } from '../../types/ppt.types';
 import { saveFileToDevice, MIME_TYPES, UTI_TYPES } from '@/utils/file-save-utils';
 import { markFileAsCreated } from '@/services/fileService';
@@ -41,6 +43,11 @@ import {
   RotateCw,
   Download,
   Palette,
+  Play,
+  Copy,
+  ChevronLeft,
+  ChevronRight,
+  Trash2,
 } from 'lucide-react-native';
 
 const { width: SCREEN_W } = Dimensions.get('window');
@@ -50,6 +57,11 @@ const LAYOUTS: { id: SlideLayout; label: string; icon: string }[] = [
   { id: 'title',         label: 'Title',     icon: '▣' },
   { id: 'titleContent',  label: 'Content',   icon: '▤' },
   { id: 'twoColumn',    label: '2 Col',     icon: '▥' },
+  { id: 'agenda',       label: 'Agenda',    icon: '☰' },
+  { id: 'comparison',   label: 'Compare',   icon: '⊞' },
+  { id: 'processSteps', label: 'Steps',     icon: '➜' },
+  { id: 'quote',        label: 'Quote',     icon: '❝' },
+  { id: 'sectionDivider', label: 'Section', icon: '§' },
   { id: 'imageLeft',    label: 'Img Left',  icon: '▧' },
   { id: 'imageRight',   label: 'Img Right', icon: '▨' },
   { id: 'statHighlight', label: 'Stat',     icon: '◉' },
@@ -69,11 +81,25 @@ export const PPTCreatorScreen: React.FC<PPTCreatorScreenProps> = ({ onGoBack, in
   const exporter = useExportPPT();
   const [isCreating, setIsCreating] = useState(false);
   const [themeModalVisible, setThemeModalVisible] = useState(false);
+  const [presentVisible, setPresentVisible] = useState(false);
 
   const pptTheme = getTheme(editor.presentation.themeId);
   // Theme chip uses PPT theme color — gives a "pro" feel showing current theme
   const uiAccent = mode === 'dark' ? pptTheme.colors.secondary : pptTheme.colors.primary;
   const selectedSlide = editor.presentation.slides[editor.selectedSlideIndex];
+  const slideCount = editor.presentation.slides.length;
+  const selIdx = editor.selectedSlideIndex;
+
+  // Subtle fade when switching slides — gives the canvas a "live" feel.
+  const canvasOpacity = useRef(new Animated.Value(1)).current;
+  useEffect(() => {
+    canvasOpacity.setValue(0.45);
+    Animated.timing(canvasOpacity, {
+      toValue: 1,
+      duration: 180,
+      useNativeDriver: true,
+    }).start();
+  }, [selIdx, selectedSlide?.layout, canvasOpacity]);
 
   // ─── Create (generate → save to app library → success alert) ──
   const handleCreate = useCallback(async () => {
@@ -123,8 +149,12 @@ export const PPTCreatorScreen: React.FC<PPTCreatorScreenProps> = ({ onGoBack, in
   // ─── Slide management ──
   const handleAddSlide = useCallback(() => {
     Alert.alert('Add Slide', 'Choose a layout:', [
-      { text: 'Title Slide',   onPress: () => editor.addSlide('title',         editor.selectedSlideIndex) },
       { text: 'Content',       onPress: () => editor.addSlide('titleContent',  editor.selectedSlideIndex) },
+      { text: 'Agenda',        onPress: () => editor.addSlide('agenda',        editor.selectedSlideIndex) },
+      { text: 'Comparison',    onPress: () => editor.addSlide('comparison',    editor.selectedSlideIndex) },
+      { text: 'Process Steps', onPress: () => editor.addSlide('processSteps',  editor.selectedSlideIndex) },
+      { text: 'Quote',         onPress: () => editor.addSlide('quote',         editor.selectedSlideIndex) },
+      { text: 'Section Divider', onPress: () => editor.addSlide('sectionDivider', editor.selectedSlideIndex) },
       { text: 'Two Columns',   onPress: () => editor.addSlide('twoColumn',     editor.selectedSlideIndex) },
       { text: 'Big Stat',      onPress: () => editor.addSlide('statHighlight', editor.selectedSlideIndex) },
       { text: 'Timeline',      onPress: () => editor.addSlide('timeline',      editor.selectedSlideIndex) },
@@ -141,9 +171,36 @@ export const PPTCreatorScreen: React.FC<PPTCreatorScreenProps> = ({ onGoBack, in
         return;
       }
       Alert.alert('Delete Slide', 'This cannot be undone.', [
-        { text: 'Delete', style: 'destructive', onPress: () => editor.deleteSlide(index) },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: () => {
+            editor.deleteSlide(index);
+            // Keep a valid selection after removing the last slide.
+            if (index >= editor.presentation.slides.length - 1) {
+              editor.selectSlide(Math.max(0, index - 1));
+            }
+          },
+        },
         { text: 'Cancel', style: 'cancel' },
       ]);
+    },
+    [editor],
+  );
+
+  const handleDuplicate = useCallback(
+    (index: number) => {
+      editor.duplicateSlide(index);
+      editor.selectSlide(index + 1);
+    },
+    [editor],
+  );
+
+  const handleMove = useCallback(
+    (from: number, to: number) => {
+      if (to < 0 || to >= editor.presentation.slides.length) return;
+      editor.reorderSlide(from, to);
+      editor.selectSlide(to);
     },
     [editor],
   );
@@ -166,7 +223,7 @@ export const PPTCreatorScreen: React.FC<PPTCreatorScreenProps> = ({ onGoBack, in
             end={{ x: 1, y: 1 }}
             style={styles.gradientHeader}
           >
-            {/* Row 1: Back · Title · Undo/Redo · Save */}
+            {/* Row 1: Back · Presentation title (roomy) · Create */}
             <View style={styles.headerRow}>
               <TouchableOpacity
                 onPress={onGoBack}
@@ -176,6 +233,7 @@ export const PPTCreatorScreen: React.FC<PPTCreatorScreenProps> = ({ onGoBack, in
                 <ArrowLeft size={18} color="#FFFFFF" strokeWidth={2.2} />
               </TouchableOpacity>
 
+              {/* This title is the presentation name AND the exported file name */}
               <TextInput
                 style={styles.titleInput}
                 value={editor.presentation.title}
@@ -185,35 +243,23 @@ export const PPTCreatorScreen: React.FC<PPTCreatorScreenProps> = ({ onGoBack, in
                 returnKeyType="done"
               />
 
-              <View style={styles.headerActions}>
-                {/* "Save to Device" secondary icon */}
-                <TouchableOpacity
-                  style={styles.gradientIconBtn}
-                  onPress={handleSaveToDevice}
-                  hitSlop={6}
-                  activeOpacity={0.85}
-                >
-                  <Download size={15} color="#FFFFFF" strokeWidth={2.2} />
-                </TouchableOpacity>
-
-                {/* Primary "Create" button — saves to app library */}
-                <TouchableOpacity
-                  style={[styles.createBtn, isCreating && styles.createBtnDisabled]}
-                  onPress={handleCreate}
-                  disabled={isCreating}
-                  activeOpacity={0.85}
-                >
-                  {isCreating ? (
-                    <ActivityIndicator size={14} color="#FFFFFF" />
-                  ) : null}
-                  <Text style={styles.createBtnText}>
-                    {isCreating ? 'Creating…' : 'Create'}
-                  </Text>
-                </TouchableOpacity>
-              </View>
+              {/* Primary "Create" button — saves to app library */}
+              <TouchableOpacity
+                style={[styles.createBtn, isCreating && styles.createBtnDisabled]}
+                onPress={handleCreate}
+                disabled={isCreating}
+                activeOpacity={0.85}
+              >
+                {isCreating ? (
+                  <ActivityIndicator size={14} color="#FFFFFF" />
+                ) : null}
+                <Text style={styles.createBtnText}>
+                  {isCreating ? 'Creating…' : 'Create'}
+                </Text>
+              </TouchableOpacity>
             </View>
 
-            {/* Row 2: Theme button (PPT theme color) · Slide info — inside gradient */}
+            {/* Row 2: Theme button · Present · Save to device */}
             <View style={styles.headerRow2}>
               {/* Theme button — solid PPT theme color pill, clearly shows active theme */}
               <TouchableOpacity
@@ -226,39 +272,58 @@ export const PPTCreatorScreen: React.FC<PPTCreatorScreenProps> = ({ onGoBack, in
                 <Text style={styles.themeBtnText}>{pptTheme.name}</Text>
               </TouchableOpacity>
 
-              <TouchableOpacity
-                onPress={editor.undo}
-                disabled={!editor.canUndo}
-                style={styles.gradientIconBtnSm}
-                hitSlop={6}
-              >
-                <RotateCcw
-                  size={14}
-                  color={editor.canUndo ? '#FFFFFF' : 'rgba(255,255,255,0.3)'}
-                  strokeWidth={2.2}
-                />
-              </TouchableOpacity>
+              <View style={styles.headerRow2Right}>
+                {/* "Present" — full-screen preview of the deck */}
+                <TouchableOpacity
+                  style={styles.gradientIconBtnSm}
+                  onPress={() => setPresentVisible(true)}
+                  hitSlop={6}
+                  activeOpacity={0.85}
+                >
+                  <Play size={14} color="#FFFFFF" strokeWidth={2.2} fill="#FFFFFF" />
+                </TouchableOpacity>
 
-              <TouchableOpacity
-                onPress={editor.redo}
-                disabled={!editor.canRedo}
-                style={styles.gradientIconBtnSm}
-                hitSlop={6}
-              >
-                <RotateCw
-                  size={14}
-                  color={editor.canRedo ? '#FFFFFF' : 'rgba(255,255,255,0.3)'}
-                  strokeWidth={2.2}
-                />
-              </TouchableOpacity>
-
-              <Text style={styles.slideInfo}>
-                Slide {editor.selectedSlideIndex + 1} / {editor.presentation.slides.length}
-                {editor.isDirty ? ' · Unsaved' : ''}
-              </Text>
+                {/* "Save to Device" */}
+                <TouchableOpacity
+                  style={styles.gradientIconBtnSm}
+                  onPress={handleSaveToDevice}
+                  hitSlop={6}
+                  activeOpacity={0.85}
+                >
+                  <Download size={14} color="#FFFFFF" strokeWidth={2.2} />
+                </TouchableOpacity>
+              </View>
             </View>
           </GradientView>
         </AppHeaderContainer>
+
+        {/* ─── Sub-bar (below header): Undo/Redo · Slide count ───────── */}
+        <View style={[styles.subBar, { backgroundColor: t.background, borderBottomColor: t.border }]}>
+          <TouchableOpacity
+            onPress={editor.undo}
+            disabled={!editor.canUndo}
+            style={[styles.subBarBtn, { backgroundColor: t.backgroundSecondary, borderColor: t.border }]}
+            hitSlop={6}
+            activeOpacity={0.7}
+          >
+            <RotateCcw size={14} color={editor.canUndo ? uiAccent : t.textTertiary} strokeWidth={2.2} />
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            onPress={editor.redo}
+            disabled={!editor.canRedo}
+            style={[styles.subBarBtn, { backgroundColor: t.backgroundSecondary, borderColor: t.border }]}
+            hitSlop={6}
+            activeOpacity={0.7}
+          >
+            <RotateCw size={14} color={editor.canRedo ? uiAccent : t.textTertiary} strokeWidth={2.2} />
+          </TouchableOpacity>
+
+          <Text style={[styles.subBarInfo, { color: t.textSecondary }]}>
+            Slide {selIdx + 1} / {slideCount}
+            {editor.isDirty ? ' · Unsaved' : ''}
+          </Text>
+        </View>
 
         {/* ─── Main Editing Area ────────────────────── */}
         <ScrollView
@@ -269,18 +334,84 @@ export const PPTCreatorScreen: React.FC<PPTCreatorScreenProps> = ({ onGoBack, in
         >
           {/* Interactive Slide Canvas */}
           {selectedSlide ? (
-            <InteractiveSlideCanvas
-              slide={selectedSlide}
-              theme={pptTheme}
-              onChange={content =>
-                editor.updateSlideContent(editor.selectedSlideIndex, content)
-              }
-            />
+            <Animated.View style={{ opacity: canvasOpacity, width: '100%', alignItems: 'center' }}>
+              <InteractiveSlideCanvas
+                slide={selectedSlide}
+                theme={pptTheme}
+                onChange={content =>
+                  editor.updateSlideContent(editor.selectedSlideIndex, content)
+                }
+              />
+            </Animated.View>
           ) : (
             <View style={styles.emptySlate}>
               <Text style={[styles.emptyMsg, { color: t.textTertiary }]}>No slide selected</Text>
             </View>
           )}
+
+          {/* ─── Slide Action Bar ─── */}
+          {selectedSlide ? (
+            <View style={styles.actionBar}>
+              {[
+                {
+                  key: 'dup',
+                  label: 'Duplicate',
+                  Icon: Copy,
+                  disabled: false,
+                  onPress: () => handleDuplicate(selIdx),
+                },
+                {
+                  key: 'left',
+                  label: 'Move left',
+                  Icon: ChevronLeft,
+                  disabled: selIdx === 0,
+                  onPress: () => handleMove(selIdx, selIdx - 1),
+                },
+                {
+                  key: 'right',
+                  label: 'Move right',
+                  Icon: ChevronRight,
+                  disabled: selIdx >= slideCount - 1,
+                  onPress: () => handleMove(selIdx, selIdx + 1),
+                },
+                {
+                  key: 'del',
+                  label: 'Delete',
+                  Icon: Trash2,
+                  disabled: slideCount <= 1,
+                  danger: true,
+                  onPress: () => handleDeleteSlide(selIdx),
+                },
+              ].map(a => (
+                <TouchableOpacity
+                  key={a.key}
+                  onPress={a.onPress}
+                  disabled={a.disabled}
+                  activeOpacity={0.7}
+                  style={[
+                    styles.actionBtn,
+                    { backgroundColor: t.backgroundSecondary, borderColor: t.border },
+                    a.disabled && styles.actionBtnDisabled,
+                  ]}
+                >
+                  <a.Icon
+                    size={14}
+                    color={a.danger ? '#EF4444' : uiAccent}
+                    strokeWidth={2.1}
+                  />
+                  <Text
+                    numberOfLines={1}
+                    style={[
+                      styles.actionBtnLabel,
+                      { color: a.danger ? '#EF4444' : t.textSecondary },
+                    ]}
+                  >
+                    {a.label}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          ) : null}
 
           {/* ─── Layout Picker ─── */}
           <View style={styles.layoutSection}>
@@ -308,7 +439,7 @@ export const PPTCreatorScreen: React.FC<PPTCreatorScreenProps> = ({ onGoBack, in
                       },
                     ]}
                   >
-                    <Text style={styles.layoutIcon}>{l.icon}</Text>
+                    <Text style={[styles.layoutIcon, { color: active ? uiAccent : t.textSecondary }]}>{l.icon}</Text>
                     <Text
                       style={[
                         styles.layoutChipLabel,
@@ -348,10 +479,25 @@ export const PPTCreatorScreen: React.FC<PPTCreatorScreenProps> = ({ onGoBack, in
           theme={pptTheme}
           onSelect={editor.selectSlide}
           onDelete={handleDeleteSlide}
+          onDuplicate={handleDuplicate}
+          onMove={handleMove}
           onAddAfter={index => editor.addSlide('titleContent', index)}
           onAdd={handleAddSlide}
         />
       </KeyboardAvoidingView>
+
+      {/* ─── Present (full-screen preview) ────────── */}
+      <Modal
+        visible={presentVisible}
+        animationType="slide"
+        onRequestClose={() => setPresentVisible(false)}
+        presentationStyle="fullScreen"
+      >
+        <PPTViewerScreen
+          presentation={editor.presentation}
+          onClose={() => setPresentVisible(false)}
+        />
+      </Modal>
 
       {/* ─── Theme Selection Modal ────────────────── */}
       <Modal
@@ -494,6 +640,35 @@ const styles = StyleSheet.create({
     color: 'rgba(255,255,255,0.7)',
     marginLeft: 'auto',
   },
+  headerRow2Right: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginLeft: 'auto',
+  },
+
+  // ── Sub-bar (undo/redo + slide count, below gradient header) ──
+  subBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  subBarBtn: {
+    width: 30,
+    height: 30,
+    borderRadius: 8,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  subBarInfo: {
+    fontSize: 12,
+    fontWeight: '600',
+    marginLeft: 'auto',
+  },
 
   // ── Canvas area ──
   canvasArea: {
@@ -510,6 +685,31 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   emptyMsg: { fontSize: 14 },
+
+  // ── Slide action bar ──
+  actionBar: {
+    width: '100%',
+    flexDirection: 'row',
+    gap: 8,
+  },
+  actionBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 3,
+    paddingVertical: 9,
+    paddingHorizontal: 2,
+    borderRadius: 10,
+    borderWidth: 1,
+  },
+  actionBtnDisabled: {
+    opacity: 0.4,
+  },
+  actionBtnLabel: {
+    fontSize: 9.5,
+    fontWeight: '600',
+  },
 
   // ── Layout picker ──
   layoutSection: {

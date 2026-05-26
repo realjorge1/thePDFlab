@@ -13,6 +13,7 @@ import {
   EDITOR_FONTS,
   EDITOR_FONT_SIZES,
   EDITOR_HIGHLIGHT_COLORS,
+  EDITOR_TEXT_COLORS,
   LINE_SPACINGS,
 } from "@/src/types/editor.types";
 import React, { useCallback, useState } from "react";
@@ -91,18 +92,39 @@ export default function EditorToolbarHome() {
   const [showSizePicker, setShowSizePicker] = useState(false);
   const [showHighlightPicker, setShowHighlightPicker] = useState(false);
   const [showSpacingPicker, setShowSpacingPicker] = useState(false);
+  const [showCasePicker, setShowCasePicker] = useState(false);
 
   // ── Format toggles ────────────────────────────────────────────────────
 
   const toggleFormat = useCallback(
-    (type: "bold" | "italic" | "underline" | "strikethrough") => {
+    (
+      type:
+        | "bold"
+        | "italic"
+        | "underline"
+        | "strikethrough"
+        | "subscript"
+        | "superscript",
+    ) => {
       const commands: Record<string, string> = {
         bold: "applyBold",
         italic: "applyItalic",
         underline: "applyUnderline",
         strikethrough: "applyStrikethrough",
+        subscript: "applySubscript",
+        superscript: "applySuperscript",
       };
       sendScript(`${commands[type]}();`);
+      // Subscript and superscript are mutually exclusive — clear the other.
+      if (type === "subscript" && !state.subscript && state.superscript) {
+        dispatch({ type: "SET_FORMAT", key: "superscript", value: false });
+      } else if (
+        type === "superscript" &&
+        !state.superscript &&
+        state.subscript
+      ) {
+        dispatch({ type: "SET_FORMAT", key: "subscript", value: false });
+      }
       dispatch({
         type: "SET_FORMAT",
         key: type,
@@ -110,6 +132,42 @@ export default function EditorToolbarHome() {
       });
     },
     [state, dispatch, sendScript],
+  );
+
+  const applyTextColor = useCallback(
+    (color: string) => {
+      sendScript(`applyForeColor('${color}');`);
+      dispatch({ type: "SET_FORMAT", key: "textColor", value: color });
+    },
+    [dispatch, sendScript],
+  );
+
+  const clearFormatting = useCallback(() => {
+    sendScript(`clearFormatting();`);
+  }, [sendScript]);
+
+  const applyCase = useCallback(
+    (mode: "upper" | "lower" | "title") => {
+      sendScript(`changeCase('${mode}');`);
+      setShowCasePicker(false);
+    },
+    [sendScript],
+  );
+
+  const applyIndent = useCallback(
+    (dir: "in" | "out") => {
+      sendScript(dir === "in" ? `applyIndent();` : `applyOutdent();`);
+    },
+    [sendScript],
+  );
+
+  const applyList = useCallback(
+    (kind: "bullet" | "number") => {
+      sendScript(
+        kind === "bullet" ? `applyBulletList();` : `applyNumberList();`,
+      );
+    },
+    [sendScript],
   );
 
   const applyFont = useCallback(
@@ -238,6 +296,45 @@ export default function EditorToolbarHome() {
         ))}
       </View>
 
+      {/* ── ROW 2b: Subscript / Superscript / Clear / Change case ────── */}
+      <View style={styles.row}>
+        <Text style={styles.rowLabel}>More </Text>
+        <TouchableOpacity
+          style={[styles.fmtBtn, state.subscript && styles.fmtBtnOn]}
+          onPress={() => toggleFormat("subscript")}
+          activeOpacity={0.7}
+        >
+          <Text style={[styles.fmtBtnTxt, state.subscript && styles.fmtBtnTxtOn]}>
+            X₂
+          </Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.fmtBtn, state.superscript && styles.fmtBtnOn]}
+          onPress={() => toggleFormat("superscript")}
+          activeOpacity={0.7}
+        >
+          <Text
+            style={[styles.fmtBtnTxt, state.superscript && styles.fmtBtnTxtOn]}
+          >
+            X²
+          </Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={styles.fmtBtn}
+          onPress={() => setShowCasePicker(true)}
+          activeOpacity={0.7}
+        >
+          <Text style={styles.fmtBtnTxt}>Aa</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={styles.fmtBtn}
+          onPress={clearFormatting}
+          activeOpacity={0.7}
+        >
+          <Text style={[styles.fmtBtnTxt, { fontSize: 13 }]}>T✕</Text>
+        </TouchableOpacity>
+      </View>
+
       {/* ── ROW 3: Alignment — 4 visually distinct icons ─────────────── */}
       <View style={styles.row}>
         <Text style={styles.rowLabel}>Align </Text>
@@ -256,6 +353,39 @@ export default function EditorToolbarHome() {
         ))}
       </View>
 
+      {/* ── ROW 3b: Lists & Indentation ──────────────────────────────── */}
+      <View style={styles.row}>
+        <Text style={styles.rowLabel}>List </Text>
+        <TouchableOpacity
+          style={styles.alignBtn}
+          onPress={() => applyList("bullet")}
+          activeOpacity={0.7}
+        >
+          <Text style={styles.listGlyph}>• ≡</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={styles.alignBtn}
+          onPress={() => applyList("number")}
+          activeOpacity={0.7}
+        >
+          <Text style={styles.listGlyph}>1. ≡</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={styles.alignBtn}
+          onPress={() => applyIndent("out")}
+          activeOpacity={0.7}
+        >
+          <Text style={styles.indentGlyph}>⇤</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={styles.alignBtn}
+          onPress={() => applyIndent("in")}
+          activeOpacity={0.7}
+        >
+          <Text style={styles.indentGlyph}>⇥</Text>
+        </TouchableOpacity>
+      </View>
+
       {/* ── ROW 4: Line Spacing ───────────────────────────────────────── */}
       <View style={styles.row}>
         <Text style={styles.rowLabel}>Spacing</Text>
@@ -269,7 +399,35 @@ export default function EditorToolbarHome() {
         </TouchableOpacity>
       </View>
 
-      {/* ── ROW 5: Highlight ──────────────────────────────────────────── */}
+      {/* ── ROW 5a: Text Color ────────────────────────────────────────── */}
+      <View style={styles.section}>
+        <View style={styles.sectionHeader}>
+          <Text style={styles.sectionTitle}>Text Color</Text>
+        </View>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          style={styles.colorScroll}
+        >
+          {EDITOR_TEXT_COLORS.map(({ color, label }) => (
+            <TouchableOpacity
+              key={color}
+              onPress={() => applyTextColor(color)}
+              style={[
+                styles.colorDot,
+                { backgroundColor: color },
+                state.textColor === color && styles.colorDotSelected,
+              ]}
+              activeOpacity={0.8}
+              accessibilityLabel={label}
+            >
+              <Text style={styles.hlLabel}>A</Text>
+            </TouchableOpacity>
+          ))}
+        </ScrollView>
+      </View>
+
+      {/* ── ROW 5b: Highlight ─────────────────────────────────────────── */}
       <View style={styles.section}>
         <View style={styles.sectionHeader}>
           <Text style={styles.sectionTitle}>Highlight</Text>
@@ -437,6 +595,39 @@ export default function EditorToolbarHome() {
           ))}
         </View>
       </Modal>
+
+      {/* Change Case Picker */}
+      <Modal
+        visible={showCasePicker}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowCasePicker(false)}
+      >
+        <Pressable
+          style={styles.overlay}
+          onPress={() => setShowCasePicker(false)}
+        />
+        <View style={styles.sheet}>
+          <View style={styles.sheetHandle} />
+          <Text style={styles.sheetTitle}>Change Case</Text>
+          {(
+            [
+              { mode: "upper", label: "UPPERCASE" },
+              { mode: "lower", label: "lowercase" },
+              { mode: "title", label: "Title Case" },
+            ] as const
+          ).map(({ mode, label }) => (
+            <TouchableOpacity
+              key={mode}
+              style={styles.pickerItem}
+              onPress={() => applyCase(mode)}
+              activeOpacity={0.7}
+            >
+              <Text style={styles.pickerPreview}>{label}</Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+      </Modal>
     </ScrollView>
   );
 }
@@ -525,6 +716,8 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   alignBtnOn: { backgroundColor: "#E3F2FD", borderColor: "#1976D2" },
+  listGlyph: { fontSize: 13, color: "#424242", fontWeight: "700" },
+  indentGlyph: { fontSize: 20, color: "#424242", fontWeight: "700" },
 
   // Spacing
   spacingBtn: {

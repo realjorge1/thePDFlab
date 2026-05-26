@@ -85,7 +85,7 @@ import { ProgressRing } from "@/components/ProgressRing";
 import { useReadingProgressFor } from "@/hooks/useReadingProgress";
 
 const { width: SCREEN_WIDTH } = Dimensions.get("window");
-const FOLDER_VIEW_MODE_KEY = "@inscribed_folder_view_mode";
+const FOLDER_VIEW_MODE_KEY = "@wordsinscribed_folder_view_mode";
 
 // ============================================================================
 // FILE ACTION SHEET (library-style: bottom panel, ProgressRing, slide-dismiss)

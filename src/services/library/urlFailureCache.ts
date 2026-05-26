@@ -15,7 +15,7 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
 // ── Config ───────────────────────────────────────────────────────────
-const STORAGE_KEY = "@inscribed/url_failure_cache";
+const STORAGE_KEY = "@wordsinscribed/url_failure_cache";
 const TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 const MAX_ENTRIES = 500; // cap to prevent unbounded growth
 

@@ -1,0 +1,31 @@
+// ============================================
+// AI Premium Guard
+// AI is a Premium-only capability. SubscriptionContext keeps this flag in sync
+// via setAIPremiumAccess(). Every user-facing AI operation calls assertAIPremium()
+// before doing any work, so no AI request can fire for a free user — even from a
+// code path that bypasses the screen-level <PremiumGate> (e.g. scheduled tasks).
+// ============================================
+
+let _hasPremiumAccess = false;
+
+export function setAIPremiumAccess(hasAccess: boolean): void {
+  _hasPremiumAccess = hasAccess;
+}
+
+export function hasAIPremiumAccess(): boolean {
+  return _hasPremiumAccess;
+}
+
+export class PremiumRequiredError extends Error {
+  constructor(
+    message = "A Premium subscription is required to use AI features.",
+  ) {
+    super(message);
+    this.name = "PremiumRequiredError";
+  }
+}
+
+/** Throws PremiumRequiredError when the user does not have an active subscription. */
+export function assertAIPremium(): void {
+  if (!_hasPremiumAccess) throw new PremiumRequiredError();
+}

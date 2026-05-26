@@ -891,9 +891,9 @@ export default function SettingsScreen() {
           />
           <SettingRow
             title="Contact support"
-            subtitle="facebook.com/the-inscribedsoftware"
+            subtitle="facebook.com/the-inscribed software"
             onPress={() =>
-              Linking.openURL("https://www.facebook.com/the-inscribedsoftware").catch(() =>
+              Linking.openURL("https://www.facebook.com/the-inscribed-software").catch(() =>
                 Alert.alert("Cannot open link"),
               )
             }

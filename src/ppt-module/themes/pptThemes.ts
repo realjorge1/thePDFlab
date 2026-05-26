@@ -221,6 +221,154 @@ export const PPT_THEMES: Record<ThemeId, PPTTheme> = {
     },
     fonts: { heading: 'Palatino', body: 'Garamond' },
   },
+
+  // ─────────────────────────────────────────────
+  //  Light, airy palettes
+  // ─────────────────────────────────────────────
+
+  arcticFrost: {
+    id: 'arcticFrost',
+    name: 'Arctic Frost',
+    description: 'Crisp royal blue on icy white. Clean, corporate, calm.',
+    thumbnail: '#2563EB',
+    colors: {
+      primary: '#2563EB',
+      secondary: '#93C5FD',
+      accent: '#0EA5E9',
+      background: '#F8FAFC',
+      backgroundDark: '#1E3A5F',
+      text: '#0F2540',
+      textMuted: '#64748B',
+      textOnDark: '#E0F2FE',
+    },
+    fonts: { heading: 'Segoe UI', body: 'Segoe UI' },
+  },
+
+  sageMinimal: {
+    id: 'sageMinimal',
+    name: 'Sage Minimal',
+    description: 'Soft sage green on warm white. Natural and understated.',
+    thumbnail: '#5F7355',
+    colors: {
+      primary: '#5F7355',
+      secondary: '#A3B18A',
+      accent: '#8A9A5B',
+      background: '#FAFBF7',
+      backgroundDark: '#3A4A33',
+      text: '#2B3326',
+      textMuted: '#7D8471',
+      textOnDark: '#EDF2E4',
+    },
+    fonts: { heading: 'Cambria', body: 'Calibri' },
+  },
+
+  lavenderMist: {
+    id: 'lavenderMist',
+    name: 'Lavender Mist',
+    description: 'Gentle lavender on bright white. Soft, modern, friendly.',
+    thumbnail: '#7C6BB5',
+    colors: {
+      primary: '#7C6BB5',
+      secondary: '#C4B5E0',
+      accent: '#A78BFA',
+      background: '#FBFAFF',
+      backgroundDark: '#3E3566',
+      text: '#2A2342',
+      textMuted: '#8B82A8',
+      textOnDark: '#EDE9FE',
+    },
+    fonts: { heading: 'Georgia', body: 'Calibri' },
+  },
+
+  peachSorbet: {
+    id: 'peachSorbet',
+    name: 'Peach Sorbet',
+    description: 'Warm coral and peach on cream. Inviting and fresh.',
+    thumbnail: '#E2725B',
+    colors: {
+      primary: '#E2725B',
+      secondary: '#F6C5A8',
+      accent: '#F4A261',
+      background: '#FFF8F4',
+      backgroundDark: '#7A3B2E',
+      text: '#3D211A',
+      textMuted: '#A97A6B',
+      textOnDark: '#FFE8DC',
+    },
+    fonts: { heading: 'Palatino', body: 'Calibri' },
+  },
+
+  skyBreeze: {
+    id: 'skyBreeze',
+    name: 'Sky Breeze',
+    description: 'Bright sky blue on clean white. Open and optimistic.',
+    thumbnail: '#0284C7',
+    colors: {
+      primary: '#0284C7',
+      secondary: '#BAE6FD',
+      accent: '#38BDF8',
+      background: '#F5FBFF',
+      backgroundDark: '#0C4A6E',
+      text: '#0A2A3D',
+      textMuted: '#5E7A8A',
+      textOnDark: '#E0F2FE',
+    },
+    fonts: { heading: 'Trebuchet MS', body: 'Calibri' },
+  },
+
+  mintFresh: {
+    id: 'mintFresh',
+    name: 'Mint Fresh',
+    description: 'Cool teal and mint on white. Crisp and energizing.',
+    thumbnail: '#0D9488',
+    colors: {
+      primary: '#0D9488',
+      secondary: '#99F6E4',
+      accent: '#2DD4BF',
+      background: '#F2FCFA',
+      backgroundDark: '#134E4A',
+      text: '#0C302C',
+      textMuted: '#5B8A84',
+      textOnDark: '#CCFBF1',
+    },
+    fonts: { heading: 'Verdana', body: 'Verdana' },
+  },
+
+  roseQuartz: {
+    id: 'roseQuartz',
+    name: 'Rose Quartz',
+    description: 'Blush rose on soft white. Elegant and warm.',
+    thumbnail: '#BE5A78',
+    colors: {
+      primary: '#BE5A78',
+      secondary: '#F5C6D2',
+      accent: '#F472B6',
+      background: '#FFF6F8',
+      backgroundDark: '#6E2A40',
+      text: '#3B1A26',
+      textMuted: '#A57080',
+      textOnDark: '#FCE7EF',
+    },
+    fonts: { heading: 'Georgia', body: 'Calibri' },
+  },
+
+  graphitePro: {
+    id: 'graphitePro',
+    name: 'Graphite Pro',
+    description: 'Neutral graphite with a blue spark. Sharp and professional.',
+    thumbnail: '#334155',
+    colors: {
+      primary: '#334155',
+      secondary: '#CBD5E1',
+      accent: '#3B82F6',
+      background: '#F8FAFC',
+      backgroundDark: '#1E293B',
+      text: '#1E293B',
+      textMuted: '#64748B',
+      textOnDark: '#F1F5F9',
+    },
+    fonts: { heading: 'Tahoma', body: 'Segoe UI' },
+  },
 };
 
 export const DEFAULT_THEME_ID: ThemeId = 'midnightExecutive';

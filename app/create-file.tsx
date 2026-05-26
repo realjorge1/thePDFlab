@@ -16,6 +16,7 @@ import {
   Layers,
   MonitorPlay,
   ScanLine,
+  Sheet,
 } from "lucide-react-native";
 import React, { useCallback, useMemo, useRef, useState } from "react";
 import {
@@ -43,6 +44,7 @@ interface CreationOption {
   accentColor: string;
   fileType: FileType | null;
   method: "blank" | "image" | "scan" | "merge";
+  comingSoon?: boolean;
 }
 
 // ─── Creation Options Data ──────────────────────────────────────────────────
@@ -123,6 +125,18 @@ const CREATION_OPTIONS: CreationOption[] = [
     accentColor: "#D24726",
     fileType: null,
     method: "blank",
+  },
+  {
+    id: "blank-xlsx",
+    title: "Spreadsheet",
+    subtitle: "Create a .xlsx workbook",
+    icon: Sheet,
+    iconColor: "#107C41",
+    bgColor: "#E6F4EA",
+    accentColor: "#107C41",
+    fileType: null,
+    method: "blank",
+    comingSoon: true,
   },
   {
     id: "merge-files",
@@ -284,6 +298,12 @@ export default function CreateFileScreen() {
 
   const handleCreation = useCallback(
     async (option: CreationOption) => {
+      // Not yet implemented → inform the user
+      if (option.comingSoon) {
+        Alert.alert("Coming soon", `${option.title} creation isn't available yet.`);
+        return;
+      }
+
       // Blank documents → navigate to editor immediately
       if (option.id === "blank-ppt") {
         router.push("/ppt-studio" as any);

@@ -4,7 +4,7 @@
 //  Tapping selects; long-press opens context menu.
 // ─────────────────────────────────────────────
 
-import React, { useRef } from 'react';
+import React, { useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -26,6 +26,8 @@ interface SlideThumbnailStripProps {
   onDelete: (index: number) => void;
   onDuplicate?: (index: number) => void;
   onAddAfter?: (index: number) => void;
+  /** Move a slide one position left / right. */
+  onMove?: (from: number, to: number) => void;
   /** Renders a "+" card at the end of the strip for seamless slide addition */
   onAdd?: () => void;
 }
@@ -44,28 +46,31 @@ export const SlideThumbnailStrip: React.FC<SlideThumbnailStripProps> = ({
   onDelete,
   onDuplicate,
   onAddAfter,
+  onMove,
   onAdd,
 }) => {
   const scrollRef = useRef<ScrollView>(null);
   const { colors: t } = useTheme();
 
-  const handleLongPress = (index: number) => {
-    const opts = ['Delete'];
-    if (onDuplicate) opts.unshift('Duplicate');
-    if (onAddAfter) opts.unshift('Add Slide After');
+  // Keep the selected thumbnail comfortably in view.
+  useEffect(() => {
+    const STEP = THUMB_W + 8; // thumb width + gap
+    scrollRef.current?.scrollTo({
+      x: Math.max(0, selectedIndex * STEP - STEP),
+      animated: true,
+    });
+  }, [selectedIndex]);
 
-    Alert.alert(`Slide ${index + 1}`, 'Actions', [
-      ...opts.map(o => ({
-        text: o,
-        style: o === 'Delete' ? ('destructive' as const) : ('default' as const),
-        onPress: () => {
-          if (o === 'Delete') onDelete(index);
-          else if (o === 'Duplicate' && onDuplicate) onDuplicate(index);
-          else if (o === 'Add Slide After' && onAddAfter) onAddAfter(index);
-        },
-      })),
-      { text: 'Cancel', style: 'cancel' },
-    ]);
+  const handleLongPress = (index: number) => {
+    const buttons: Array<{ text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }> = [];
+    if (onAddAfter) buttons.push({ text: 'Add Slide After', onPress: () => onAddAfter(index) });
+    if (onDuplicate) buttons.push({ text: 'Duplicate', onPress: () => onDuplicate(index) });
+    if (onMove && index > 0) buttons.push({ text: 'Move Left', onPress: () => onMove(index, index - 1) });
+    if (onMove && index < slides.length - 1) buttons.push({ text: 'Move Right', onPress: () => onMove(index, index + 1) });
+    buttons.push({ text: 'Delete', style: 'destructive', onPress: () => onDelete(index) });
+    buttons.push({ text: 'Cancel', style: 'cancel' });
+
+    Alert.alert(`Slide ${index + 1}`, 'Actions', buttons);
   };
 
   return (

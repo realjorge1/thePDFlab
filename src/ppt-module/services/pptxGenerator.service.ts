@@ -56,7 +56,10 @@ function buildSlide(
   const pSlide = pptx.addSlide();
   const { colors, fonts } = theme;
   const isTitle =
-    slide.layout === 'title' || slide.layout === 'closing';
+    slide.layout === 'title' ||
+    slide.layout === 'closing' ||
+    slide.layout === 'sectionDivider' ||
+    slide.layout === 'quote';
   const bgColor = isTitle
     ? hex(colors.backgroundDark)
     : hex(colors.background);
@@ -741,6 +744,303 @@ function buildSlide(
       break;
     }
 
+    // ─── Quote ───────────────────────────────
+    case 'quote': {
+      // Dark background already set.
+      // Oversized decorative quotation mark
+      pSlide.addText('“', {
+        x: 0.5,
+        y: 0.1,
+        w: 3.5,
+        h: 3.0,
+        fontSize: 200,
+        bold: true,
+        fontFace: fonts.heading,
+        color: hex(colors.secondary),
+        align: 'left',
+        valign: 'top',
+      });
+
+      pSlide.addText(content.body ?? 'Your quote goes here.', {
+        x: 1.4,
+        y: 2.1,
+        w: W - 2.8,
+        h: 2.9,
+        fontSize: 30,
+        italic: true,
+        fontFace: fonts.heading,
+        color: hex(colors.textOnDark),
+        align: 'center',
+        valign: 'middle',
+        wrap: true,
+        lineSpacingMultiple: 1.2,
+      });
+
+      // Accent divider
+      pSlide.addShape(pptx.ShapeType.rect, {
+        x: W / 2 - 0.8,
+        y: 5.3,
+        w: 1.6,
+        h: 0.04,
+        fill: { color: hex(colors.secondary) },
+        line: { color: hex(colors.secondary) },
+      });
+
+      if (content.subtitle) {
+        pSlide.addText(`— ${content.subtitle}`, {
+          x: 1.5,
+          y: 5.5,
+          w: W - 3.0,
+          h: 0.7,
+          fontSize: 16,
+          fontFace: fonts.body,
+          color: hex(colors.secondary),
+          align: 'center',
+        });
+      }
+      break;
+    }
+
+    // ─── Section Divider ─────────────────────
+    case 'sectionDivider': {
+      // Dark background already set.
+      // Left accent bar
+      pSlide.addShape(pptx.ShapeType.rect, {
+        x: 0,
+        y: 0,
+        w: 0.25,
+        h: H,
+        fill: { color: hex(colors.secondary) },
+        line: { color: hex(colors.secondary) },
+      });
+      // Decorative circle
+      pSlide.addShape(pptx.ShapeType.ellipse, {
+        x: W - 3.0,
+        y: -1.5,
+        w: 5.0,
+        h: 5.0,
+        fill: { color: hex(colors.primary), transparency: 70 },
+        line: { color: hex(colors.primary), transparency: 70 },
+      });
+
+      pSlide.addText(content.sectionNumber ?? '01', {
+        x: 0.9,
+        y: 1.2,
+        w: 5.0,
+        h: 2.0,
+        fontSize: 110,
+        bold: true,
+        fontFace: fonts.heading,
+        color: hex(colors.secondary),
+        align: 'left',
+      });
+
+      pSlide.addText(content.title ?? 'Section Title', {
+        x: 0.95,
+        y: 3.5,
+        w: W - 2.0,
+        h: 1.6,
+        fontSize: 44,
+        bold: true,
+        fontFace: fonts.heading,
+        color: hex(colors.textOnDark),
+        align: 'left',
+        wrap: true,
+      });
+
+      if (content.subtitle) {
+        pSlide.addText(content.subtitle, {
+          x: 0.95,
+          y: 5.2,
+          w: W - 2.0,
+          h: 1.0,
+          fontSize: 18,
+          fontFace: fonts.body,
+          color: hex(colors.secondary),
+          align: 'left',
+          wrap: true,
+        });
+      }
+      break;
+    }
+
+    // ─── Agenda ──────────────────────────────
+    case 'agenda': {
+      // Header band
+      pSlide.addShape(pptx.ShapeType.rect, {
+        x: 0, y: 0, w: W, h: 1.4,
+        fill: { color: hex(colors.primary) },
+        line: { color: hex(colors.primary) },
+      });
+      pSlide.addShape(pptx.ShapeType.rect, {
+        x: 0, y: 1.4, w: W, h: 0.05,
+        fill: { color: hex(colors.secondary) },
+        line: { color: hex(colors.secondary) },
+      });
+      pSlide.addText(content.title ?? 'Agenda', {
+        x: 0.55, y: 0.15, w: W - 1.1, h: 1.1,
+        fontSize: 30, bold: true, fontFace: fonts.heading,
+        color: hex(colors.textOnDark), valign: 'middle',
+      });
+
+      const agendaItems = (content.bullets ?? content.steps ?? []).filter(Boolean);
+      const numColor = colors.accent === '#FFFFFF' ? colors.secondary : colors.accent;
+      const rowH = Math.min(1.0, (H - 2.2) / Math.max(agendaItems.length, 1));
+      agendaItems.forEach((item, i) => {
+        const yy = 1.9 + i * rowH;
+        // Number badge
+        pSlide.addShape(pptx.ShapeType.ellipse, {
+          x: 0.7, y: yy, w: 0.55, h: 0.55,
+          fill: { color: hex(numColor) },
+          line: { color: hex(numColor) },
+        });
+        pSlide.addText(String(i + 1), {
+          x: 0.7, y: yy, w: 0.55, h: 0.55,
+          fontSize: 18, bold: true, fontFace: fonts.heading,
+          color: hex(colors.background), align: 'center', valign: 'middle',
+        });
+        pSlide.addText(item, {
+          x: 1.5, y: yy, w: W - 2.2, h: 0.55,
+          fontSize: 17, fontFace: fonts.body,
+          color: textColor, valign: 'middle', wrap: true,
+        });
+      });
+
+      addFooter(pptx, pSlide, theme, index);
+      break;
+    }
+
+    // ─── Comparison ──────────────────────────
+    case 'comparison': {
+      // Header band
+      pSlide.addShape(pptx.ShapeType.rect, {
+        x: 0, y: 0, w: W, h: 1.3,
+        fill: { color: hex(colors.primary) },
+        line: { color: hex(colors.primary) },
+      });
+      pSlide.addText(content.title ?? 'Comparison', {
+        x: 0.55, y: 0.15, w: W - 1.1, h: 1.0,
+        fontSize: 28, bold: true, fontFace: fonts.heading,
+        color: hex(colors.textOnDark), valign: 'middle',
+      });
+
+      const cardY = 1.75;
+      const cardH = H - 2.4;
+      const cardW = W / 2 - 0.85;
+
+      // Left card
+      pSlide.addShape(pptx.ShapeType.roundRect, {
+        x: 0.5, y: cardY, w: cardW, h: cardH,
+        fill: { color: hex(colors.secondary), transparency: 55 },
+        line: { color: hex(colors.primary), transparency: 40 },
+      });
+      pSlide.addText(content.leftTitle ?? 'Option A', {
+        x: 0.7, y: cardY + 0.2, w: cardW - 0.4, h: 0.7,
+        fontSize: 18, bold: true, fontFace: fonts.heading,
+        color: hex(colors.primary), align: 'center',
+      });
+      pSlide.addText(content.leftContent ?? '', {
+        x: 0.8, y: cardY + 1.0, w: cardW - 0.6, h: cardH - 1.2,
+        fontSize: 14, fontFace: fonts.body, color: textColor,
+        valign: 'top', wrap: true, lineSpacingMultiple: 1.3,
+      });
+
+      // Right card
+      const rightX = W / 2 + 0.35;
+      pSlide.addShape(pptx.ShapeType.roundRect, {
+        x: rightX, y: cardY, w: cardW, h: cardH,
+        fill: { color: hex(colors.primary), transparency: 88 },
+        line: { color: hex(colors.primary), transparency: 40 },
+      });
+      pSlide.addText(content.rightTitle ?? 'Option B', {
+        x: rightX + 0.2, y: cardY + 0.2, w: cardW - 0.4, h: 0.7,
+        fontSize: 18, bold: true, fontFace: fonts.heading,
+        color: hex(colors.primary), align: 'center',
+      });
+      pSlide.addText(content.rightContent ?? '', {
+        x: rightX + 0.1, y: cardY + 1.0, w: cardW - 0.6, h: cardH - 1.2,
+        fontSize: 14, fontFace: fonts.body, color: textColor,
+        valign: 'top', wrap: true, lineSpacingMultiple: 1.3,
+      });
+
+      // Center VS badge
+      const vsColor = colors.accent === '#FFFFFF' ? colors.primary : colors.accent;
+      pSlide.addShape(pptx.ShapeType.ellipse, {
+        x: W / 2 - 0.45, y: cardY + cardH / 2 - 0.45, w: 0.9, h: 0.9,
+        fill: { color: hex(vsColor) },
+        line: { color: hex(colors.background), pt: 3 },
+      });
+      pSlide.addText('VS', {
+        x: W / 2 - 0.45, y: cardY + cardH / 2 - 0.45, w: 0.9, h: 0.9,
+        fontSize: 18, bold: true, fontFace: fonts.heading,
+        color: hex(colors.background), align: 'center', valign: 'middle',
+      });
+
+      addFooter(pptx, pSlide, theme, index);
+      break;
+    }
+
+    // ─── Process Steps ───────────────────────
+    case 'processSteps': {
+      // Header band
+      pSlide.addShape(pptx.ShapeType.rect, {
+        x: 0, y: 0, w: W, h: 1.3,
+        fill: { color: hex(colors.primary) },
+        line: { color: hex(colors.primary) },
+      });
+      pSlide.addText(content.title ?? 'Process', {
+        x: 0.55, y: 0.15, w: W - 1.1, h: 1.0,
+        fontSize: 28, bold: true, fontFace: fonts.heading,
+        color: hex(colors.textOnDark), valign: 'middle',
+      });
+
+      const steps = (content.steps ?? content.bullets ?? []).filter(Boolean).slice(0, 5);
+      const stepColor = colors.accent === '#FFFFFF' ? colors.secondary : colors.accent;
+      const n = Math.max(steps.length, 1);
+      const colW = (W - 1.0) / n;
+      const circleD = Math.min(1.3, colW * 0.55);
+      const circleY = 2.9;
+
+      steps.forEach((step, i) => {
+        const cx = 0.5 + i * colW + colW / 2;
+
+        // Connector arrow to next step
+        if (i < steps.length - 1) {
+          pSlide.addShape(pptx.ShapeType.rightArrow, {
+            x: cx + circleD / 2 + 0.1,
+            y: circleY + circleD / 2 - 0.12,
+            w: colW - circleD - 0.2,
+            h: 0.24,
+            fill: { color: hex(colors.secondary), transparency: 30 },
+            line: { color: hex(colors.secondary), transparency: 30 },
+          });
+        }
+
+        // Numbered circle
+        pSlide.addShape(pptx.ShapeType.ellipse, {
+          x: cx - circleD / 2, y: circleY, w: circleD, h: circleD,
+          fill: { color: hex(stepColor) },
+          line: { color: hex(colors.primary), pt: 2 },
+        });
+        pSlide.addText(String(i + 1), {
+          x: cx - circleD / 2, y: circleY, w: circleD, h: circleD,
+          fontSize: 30, bold: true, fontFace: fonts.heading,
+          color: hex(colors.background), align: 'center', valign: 'middle',
+        });
+
+        // Step label
+        pSlide.addText(step, {
+          x: cx - colW / 2 + 0.15, y: circleY + circleD + 0.25,
+          w: colW - 0.3, h: 1.6,
+          fontSize: 13, fontFace: fonts.body, color: textColor,
+          align: 'center', valign: 'top', wrap: true, lineSpacingMultiple: 1.15,
+        });
+      });
+
+      addFooter(pptx, pSlide, theme, index);
+      break;
+    }
+
     // ─── Blank ───────────────────────────────
     case 'blank':
     default:
@@ -761,7 +1061,7 @@ export async function generatePPTX(
 
     pptx.layout = 'LAYOUT_WIDE'; // 13.33 x 7.5 in
     pptx.title = presentation.title;
-    pptx.author = 'PDFLab';
+    pptx.author = 'wordsInscribed';
 
     presentation.slides.forEach((slide, idx) => {
       buildSlide(pptx, slide, theme, idx);

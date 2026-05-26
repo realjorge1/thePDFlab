@@ -72,8 +72,8 @@ import { recycleFile } from "@/services/recycleBinService";
 import { cleanFileName, syncSafFoldersToAppFolders } from "@/services/safFolderSync";
 import { useTheme } from "@/services/ThemeProvider";
 
-const VIEW_MODE_KEY = "@inscribed_library_view_mode";
-const SORT_BY_KEY = "@inscribed_library_sort_by";
+const VIEW_MODE_KEY = "@wordsinscribed_library_view_mode";
+const SORT_BY_KEY = "@wordsinscribed_library_sort_by";
 
 type SortBy = "size" | "dateAdded" | "dateModified" | "name" | "recentlyOpened";
 

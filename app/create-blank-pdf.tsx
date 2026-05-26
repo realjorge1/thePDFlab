@@ -244,6 +244,15 @@ function PdfEditorScreen() {
     }
     img { max-width: 100%; height: auto; }
     a { color: #007AFF; text-decoration: underline; }
+    /* Lists — restore markers/indent stripped by the * reset above */
+    ul, ol { padding-left: 28px; margin: 8px 0; }
+    ul { list-style: disc outside; }
+    ol { list-style: decimal outside; }
+    ul ul { list-style: circle outside; }
+    ul ul ul { list-style: square outside; }
+    li { margin: 2px 0; }
+    sub { vertical-align: sub; font-size: smaller; }
+    sup { vertical-align: super; font-size: smaller; }
     .page-break { page-break-after: always; }
     .comment-marker {
       background: #fff3cd; border-left: 3px solid #ffc107;

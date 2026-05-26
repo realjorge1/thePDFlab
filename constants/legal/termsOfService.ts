@@ -1,5 +1,5 @@
 /**
- * Terms of Service content for Inscribed
+ * Terms of Service content for wordsInscribed
  * Structured data extracted from the original legal document.
  */
 
@@ -16,18 +16,19 @@ export const TERMS_OF_SERVICE_SECTIONS: LegalSection[] = [
   {
     heading: "1. Acceptance of Terms",
     paragraphs: [
-      "By accessing or using Inscribed, you agree to these Terms.",
+      "By accessing or using wordsInscribed, you agree to these Terms.",
       "If you do not agree, do not use the app.",
     ],
   },
   {
     heading: "2. Description of Service",
-    paragraphs: ["Inscribed provides:"],
+    paragraphs: ["wordsInscribed provides:"],
     bullets: [
       "Document viewing and editing",
       "Conversion tools",
       "File encryption and annotation",
       "AI-powered assistance",
+      "Camera-based document creation (capture images and convert to PDF or other formats)",
       "Legal open-source content access",
       "Premium subscription features",
     ],
@@ -52,7 +53,26 @@ export const TERMS_OF_SERVICE_SECTIONS: LegalSection[] = [
     ],
   },
   {
-    heading: "4. User Responsibilities",
+    heading: "4. Device Permissions",
+    paragraphs: [
+      "To deliver certain features, wordsInscribed may request access to the following device capabilities:",
+    ],
+    bullets: [
+      "Camera — you may grant camera access to capture photos and create documents (e.g., PDFs) from those images. The app accesses the camera only when you initiate a capture action. Images are processed on-device or via our secure backend solely to generate the requested file.",
+      "Microphone — used for voice-to-text transcription features.",
+      "Storage — required to open, save, and manage documents on your device.",
+    ],
+    subsections: [
+      {
+        heading: "",
+        paragraphs: [
+          "You may revoke any permission at any time through your device settings. Revoking a permission will disable the features that depend on it.",
+        ],
+      },
+    ],
+  },
+  {
+    heading: "5. User Responsibilities",
     paragraphs: ["You agree not to:"],
     bullets: [
       "Upload illegal content",
@@ -69,7 +89,7 @@ export const TERMS_OF_SERVICE_SECTIONS: LegalSection[] = [
     ],
   },
   {
-    heading: "5. AI Disclaimer",
+    heading: "6. AI Disclaimer",
     paragraphs: ["AI responses:"],
     bullets: [
       "May contain inaccuracies",
@@ -86,7 +106,7 @@ export const TERMS_OF_SERVICE_SECTIONS: LegalSection[] = [
     ],
   },
   {
-    heading: "6. Intellectual Property",
+    heading: "7. Intellectual Property",
     subsections: [
       {
         heading: "Your Content",
@@ -98,13 +118,13 @@ export const TERMS_OF_SERVICE_SECTIONS: LegalSection[] = [
       {
         heading: "Our Content",
         paragraphs: [
-          "All software, branding, and intellectual property belong to Inscribed.",
+          "All software, branding, and intellectual property belong to wordsInscribed.",
         ],
       },
     ],
   },
   {
-    heading: "7. File Encryption and Passwords",
+    heading: "8. File Encryption and Passwords",
     paragraphs: ["If you encrypt files:"],
     bullets: [
       "You are responsible for password management.",
@@ -112,7 +132,7 @@ export const TERMS_OF_SERVICE_SECTIONS: LegalSection[] = [
     ],
   },
   {
-    heading: "8. Limitation of Liability",
+    heading: "9. Limitation of Liability",
     paragraphs: [
       "To the maximum extent permitted by law, we are not liable for:",
     ],
@@ -130,7 +150,7 @@ export const TERMS_OF_SERVICE_SECTIONS: LegalSection[] = [
     ],
   },
   {
-    heading: "9. Termination",
+    heading: "10. Termination",
     paragraphs: ["We may suspend or terminate access if:"],
     bullets: [
       "You violate these Terms",
@@ -139,21 +159,21 @@ export const TERMS_OF_SERVICE_SECTIONS: LegalSection[] = [
     ],
   },
   {
-    heading: "10. Governing Law",
+    heading: "11. Governing Law",
     paragraphs: [
       "These Terms are governed by applicable law in the jurisdiction where the service operates.",
       "Disputes shall be resolved in that jurisdiction.",
     ],
   },
   {
-    heading: "11. Changes to Terms",
+    heading: "12. Changes to Terms",
     paragraphs: [
       "We may update these Terms at any time.",
       "Continued use after updates constitutes acceptance.",
     ],
   },
   {
-    heading: "12. Contact",
-    paragraphs: ["Inscribed\nFacebook: facebook.com/the-inscribedsoftware"],
+    heading: "13. Contact",
+    paragraphs: ["wordsInscribed\nFacebook: facebook.com/the-inscribedsoftware"],
   },
 ];

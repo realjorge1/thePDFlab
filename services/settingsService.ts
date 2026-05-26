@@ -137,7 +137,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
 
 // ─── Storage key ──────────────────────────────────────────────────────────────
 
-const SETTINGS_KEY = "@inscribed_settings";
+const SETTINGS_KEY = "@wordsinscribed_settings";
 
 // ─── Read / Write ─────────────────────────────────────────────────────────────
 

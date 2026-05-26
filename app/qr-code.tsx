@@ -165,7 +165,7 @@ export default function QRCodeScreen() {
       const data = await response.json();
       if (!data.downloadUrl) throw new Error("No download URL returned from server");
 
-      const outputDir = `${FileSystem.documentDirectory}inscribed-outputs/`;
+      const outputDir = `${FileSystem.documentDirectory}wordsinscribed-outputs/`;
       await FileSystem.makeDirectoryAsync(outputDir, { intermediates: true });
       const outputName = `qr_${selectedFile.name}`;
       const outputUri = `${outputDir}${outputName}`;

@@ -270,8 +270,8 @@ export function ScheduleModal({
           <View style={[styles.infoBox, { backgroundColor: isDark ? '#1E293B' : '#F1F5F9' }]}>
             <Text style={[styles.infoText, { color: textSecondary }]}>
               {allowRecurring && recurring
-                ? `inScribed will generate "${taskTitle}" ${RECURRING_OPTIONS.find(r => r.value === recurring)?.sublabel?.toLowerCase() ?? ''}, starting on ${formatDate(scheduledFor)}.`
-                : `inScribed will run this task on ${formatDate(scheduledFor)} and let you know when it's done.`}
+                ? `wordsInscribed will generate "${taskTitle}" ${RECURRING_OPTIONS.find(r => r.value === recurring)?.sublabel?.toLowerCase() ?? ''}, starting on ${formatDate(scheduledFor)}.`
+                : `wordsInscribed will run this task on ${formatDate(scheduledFor)} and let you know when it's done.`}
             </Text>
           </View>
         </ScrollView>

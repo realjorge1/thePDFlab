@@ -1,11 +1,11 @@
 {
   "expo": {
-    "name": "inScribed",
-    "slug": "inScribed",
+    "name": "wordsInscribed",
+    "slug": "words-inscribed",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "scheme": "inscribed",
+    "scheme": "wordsinscribed",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "jsEngine": "hermes",
@@ -26,9 +26,8 @@
       },
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
-      "package": "com.chunaemelum.PDFiQ",
+      "package": "com.wordsinscribed.app",
       "permissions": [
-        "RECORD_AUDIO",
         "RECORD_AUDIO"
       ]
     },
@@ -50,25 +49,22 @@
           }
         }
       ],
-      "expo-asset",
-      "expo-sqlite"
+      "expo-asset"
     ],
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
     },
     "extra": {
-      "apiUrl": "http://192.168.43.21:5000/api",
+      "apiUrl": "https://inscribed-backend.onrender.com/api",
       "router": {},
       "eas": {
-        "projectId": "65ea61ca-3fdc-4256-af33-b1f4bbd36a86"
+        "projectId": "ed5afc2d-d178-4016-83b7-3ae389e4379e"
       }
     },
     "runtimeVersion": {
       "policy": "appVersion"
     },
-    "updates": {
-      "url": "https://u.expo.dev/65ea61ca-3fdc-4256-af33-b1f4bbd36a86"
-    }
+    "owner": "chunaemelum"
   }
 }

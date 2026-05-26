@@ -1,5 +1,5 @@
 /**
- * Privacy Policy content for Inscribed
+ * Privacy Policy content for wordsInscribed
  * Structured data extracted from the original legal document.
  */
 
@@ -27,8 +27,8 @@ export const PRIVACY_POLICY_SECTIONS: LegalSection[] = [
   {
     heading: "1. Introduction",
     paragraphs: [
-      'Welcome to Inscribed ("we," "our," or "us").',
-      "Inscribed is a document management and productivity application that allows users to:",
+      'Welcome to wordsInscribed ("we," "our," or "us").',
+      "wordsInscribed is a document management and productivity application that allows users to:",
     ],
     bullets: [
       "View, create, edit, and convert documents",
@@ -87,7 +87,18 @@ export const PRIVACY_POLICY_SECTIONS: LegalSection[] = [
         ],
       },
       {
-        heading: "2.3 Document and File Data",
+        heading: "2.3 Device Permissions",
+        paragraphs: [
+          "wordsInscribed may request the following device permissions to enable certain features:",
+        ],
+        bullets: [
+          "Camera (android.permission.CAMERA) — the app accesses your device camera to allow you to capture images and create documents (e.g., PDF files) directly from camera photos. Images are used solely to generate the document you request and are not uploaded, stored on our servers, or shared without your explicit action.",
+          "Microphone — used for voice transcription features. Audio is processed locally or via a secure third-party service and is not stored beyond the session.",
+          "Storage — used to read and save files on your device.",
+        ],
+      },
+      {
+        heading: "2.4 Document and File Data",
         paragraphs: ["You may upload, create, edit, or process:"],
         bullets: [
           "PDF files",
@@ -109,7 +120,7 @@ export const PRIVACY_POLICY_SECTIONS: LegalSection[] = [
         ],
       },
       {
-        heading: "2.4 AI Processing",
+        heading: "2.5 AI Processing",
         paragraphs: ["When you use AI features:"],
         bullets: [
           "Submitted content may be securely transmitted to third-party AI providers.",
@@ -214,6 +225,6 @@ export const PRIVACY_POLICY_SECTIONS: LegalSection[] = [
   },
   {
     heading: "11. Contact",
-    paragraphs: ["Inscribed\nFacebook: facebook.com/the-inscribedsoftware"],
+    paragraphs: ["wordsInscribed\nFacebook: facebook.com/the-inscribedsoftware"],
   },
 ];

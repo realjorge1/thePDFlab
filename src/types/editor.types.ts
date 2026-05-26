@@ -13,9 +13,12 @@ export interface FormattingState {
   italic: boolean;
   underline: boolean;
   strikethrough: boolean;
+  subscript: boolean;
+  superscript: boolean;
   fontSize: number;
   fontFamily: string;
   highlightColor: string | null;
+  textColor: string | null;
   textAlign: TextAlign;
   lineSpacing: number;
 }
@@ -101,6 +104,8 @@ export type EditorWebViewMessage =
       italic: boolean;
       underline: boolean;
       strikethrough: boolean;
+      subscript: boolean;
+      superscript: boolean;
       align: TextAlign;
     }
   | { type: "UNDO_REDO"; canUndo: boolean; canRedo: boolean }
@@ -139,6 +144,16 @@ export const EDITOR_HIGHLIGHT_COLORS = [
   { color: "#FF69B4", label: "Pink" },
   { color: "#FFA500", label: "Orange" },
   { color: "#FF0000", label: "Red" },
+] as const;
+
+export const EDITOR_TEXT_COLORS = [
+  { color: "#000000", label: "Black" },
+  { color: "#5F6368", label: "Gray" },
+  { color: "#D32F2F", label: "Red" },
+  { color: "#E65100", label: "Orange" },
+  { color: "#1976D2", label: "Blue" },
+  { color: "#2E7D32", label: "Green" },
+  { color: "#6A1B9A", label: "Purple" },
 ] as const;
 
 export const LINE_SPACINGS = [

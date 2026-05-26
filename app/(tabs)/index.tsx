@@ -22,6 +22,7 @@ import { useSettings } from "@/services/settingsService";
 import { useTheme } from "@/services/ThemeProvider";
 import { perfMark } from "@/utils/perfLogger";
 import { Ionicons } from "@expo/vector-icons";
+import { BlurView } from "expo-blur";
 import { useFocusEffect, useRouter } from "expo-router";
 import {
   ChevronRight,
@@ -97,6 +98,83 @@ interface DisplayFile {
   source?: string;
 }
 
+const AICyclingText = React.memo(function AICyclingText() {
+  const aiFeatureIdx = useRef(0);
+  const aiActiveSlot = useRef<0 | 1>(0);
+  const [aiTextA, setAiTextA] = useState(aiFeatures[0].name);
+  const [aiTextB, setAiTextB] = useState("");
+  const aiOpacityA = useRef(new RNAnimated.Value(1)).current;
+  const aiTranslateXA = useRef(new RNAnimated.Value(0)).current;
+  const aiOpacityB = useRef(new RNAnimated.Value(0)).current;
+  const aiTranslateXB = useRef(new RNAnimated.Value(30)).current;
+
+  useEffect(() => {
+    let cancelled = false;
+    let holdTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const cycle = () => {
+      if (cancelled) return;
+
+      aiFeatureIdx.current = (aiFeatureIdx.current + 1) % aiFeatures.length;
+      const nextText = aiFeatures[aiFeatureIdx.current].name;
+
+      if (aiActiveSlot.current === 0) {
+        setAiTextB(nextText);
+        RNAnimated.sequence([
+          RNAnimated.timing(aiTranslateXB, { toValue: 30, duration: 0, useNativeDriver: true }),
+          RNAnimated.parallel([
+            RNAnimated.timing(aiOpacityA, { toValue: 0, duration: 300, useNativeDriver: true }),
+            RNAnimated.timing(aiOpacityB, { toValue: 1, duration: 400, easing: Easing.out(Easing.quad), useNativeDriver: true }),
+            RNAnimated.timing(aiTranslateXB, { toValue: 0, duration: 500, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
+          ]),
+        ]).start(({ finished }) => {
+          if (!finished || cancelled) return;
+          aiActiveSlot.current = 1;
+          holdTimer = setTimeout(cycle, 1500);
+        });
+      } else {
+        setAiTextA(nextText);
+        RNAnimated.sequence([
+          RNAnimated.timing(aiTranslateXA, { toValue: 30, duration: 0, useNativeDriver: true }),
+          RNAnimated.parallel([
+            RNAnimated.timing(aiOpacityB, { toValue: 0, duration: 300, useNativeDriver: true }),
+            RNAnimated.timing(aiOpacityA, { toValue: 1, duration: 400, easing: Easing.out(Easing.quad), useNativeDriver: true }),
+            RNAnimated.timing(aiTranslateXA, { toValue: 0, duration: 500, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
+          ]),
+        ]).start(({ finished }) => {
+          if (!finished || cancelled) return;
+          aiActiveSlot.current = 0;
+          holdTimer = setTimeout(cycle, 1500);
+        });
+      }
+    };
+
+    holdTimer = setTimeout(cycle, 2500);
+
+    return () => {
+      cancelled = true;
+      if (holdTimer) clearTimeout(holdTimer);
+    };
+  }, []);
+
+  return (
+    <View style={styles.aiFeatureTextArea}>
+      <RNAnimated.Text
+        style={[styles.aiFeatureLabel, { position: "absolute", opacity: aiOpacityA, transform: [{ translateX: aiTranslateXA }] }]}
+        numberOfLines={1}
+      >
+        {aiTextA}
+      </RNAnimated.Text>
+      <RNAnimated.Text
+        style={[styles.aiFeatureLabel, { position: "absolute", opacity: aiOpacityB, transform: [{ translateX: aiTranslateXB }] }]}
+        numberOfLines={1}
+      >
+        {aiTextB}
+      </RNAnimated.Text>
+    </View>
+  );
+});
+
 export default function HomeScreen() {
   const router = useRouter();
   const { colors: t, mode } = useTheme();
@@ -133,114 +211,17 @@ export default function HomeScreen() {
   const [fileTypeOptionsFile, setFileTypeOptionsFile] =
     useState<DisplayFile | null>(null);
 
-  // Bento box shrink/dim + search results slide-up animation
+  // Bento box shrink + frosted blur + search results slide-up animation
   const bentoScale = useRef(new RNAnimated.Value(1)).current;
+  // Gentle content dim (kept subtle — the blur does the heavy lifting)
   const bentoOpacity = useRef(new RNAnimated.Value(1)).current;
+  // Fades the frosted blur overlay in over the bento when searching
+  const bentoBlur = useRef(new RNAnimated.Value(0)).current;
   // Slides the results panel upward to half-cover the bento when searching
   const searchSlideY = useRef(new RNAnimated.Value(0)).current;
   const isSearching = searchQuery.trim().length > 0;
 
-  // AI feature text animation — crossfade between two text slots (A/B)
-  // Text is always set on the *invisible* slot, eliminating flash/glitch.
-  const aiFeatureIdx = useRef(0);
-  const aiActiveSlot = useRef<0 | 1>(0);
-  const [aiTextA, setAiTextA] = useState(aiFeatures[0].name);
-  const [aiTextB, setAiTextB] = useState("");
-  const aiOpacityA = useRef(new RNAnimated.Value(1)).current;
-  const aiTranslateXA = useRef(new RNAnimated.Value(0)).current;
-  const aiOpacityB = useRef(new RNAnimated.Value(0)).current;
-  const aiTranslateXB = useRef(new RNAnimated.Value(30)).current;
-
-  useEffect(() => {
-    let cancelled = false;
-    let holdTimer: ReturnType<typeof setTimeout> | null = null;
-
-    const cycle = () => {
-      if (cancelled) return;
-
-      aiFeatureIdx.current = (aiFeatureIdx.current + 1) % aiFeatures.length;
-      const nextText = aiFeatures[aiFeatureIdx.current].name;
-
-      if (aiActiveSlot.current === 0) {
-        // A is visible → set text on B (invisible), crossfade A→B
-        // sequence: atomically reset B's position to 30, then crossfade
-        setAiTextB(nextText);
-        RNAnimated.sequence([
-          RNAnimated.timing(aiTranslateXB, {
-            toValue: 30,
-            duration: 0,
-            useNativeDriver: true,
-          }),
-          RNAnimated.parallel([
-            RNAnimated.timing(aiOpacityA, {
-              toValue: 0,
-              duration: 300,
-              useNativeDriver: true,
-            }),
-            RNAnimated.timing(aiOpacityB, {
-              toValue: 1,
-              duration: 400,
-              easing: Easing.out(Easing.quad),
-              useNativeDriver: true,
-            }),
-            RNAnimated.timing(aiTranslateXB, {
-              toValue: 0,
-              duration: 500,
-              easing: Easing.out(Easing.cubic),
-              useNativeDriver: true,
-            }),
-          ]),
-        ]).start(({ finished }) => {
-          if (!finished || cancelled) return;
-          aiActiveSlot.current = 1;
-          holdTimer = setTimeout(cycle, 1500);
-        });
-      } else {
-        // B is visible → set text on A (invisible), crossfade B→A
-        setAiTextA(nextText);
-        RNAnimated.sequence([
-          RNAnimated.timing(aiTranslateXA, {
-            toValue: 30,
-            duration: 0,
-            useNativeDriver: true,
-          }),
-          RNAnimated.parallel([
-            RNAnimated.timing(aiOpacityB, {
-              toValue: 0,
-              duration: 300,
-              useNativeDriver: true,
-            }),
-            RNAnimated.timing(aiOpacityA, {
-              toValue: 1,
-              duration: 400,
-              easing: Easing.out(Easing.quad),
-              useNativeDriver: true,
-            }),
-            RNAnimated.timing(aiTranslateXA, {
-              toValue: 0,
-              duration: 500,
-              easing: Easing.out(Easing.cubic),
-              useNativeDriver: true,
-            }),
-          ]),
-        ]).start(({ finished }) => {
-          if (!finished || cancelled) return;
-          aiActiveSlot.current = 0;
-          holdTimer = setTimeout(cycle, 1500);
-        });
-      }
-    };
-
-    // Initial hold before first transition
-    holdTimer = setTimeout(cycle, 2500);
-
-    return () => {
-      cancelled = true;
-      if (holdTimer) clearTimeout(holdTimer);
-    };
-  }, []);
-
-  // Bento shrink/dim + results panel slide-up — all driven together
+  // Bento shrink + frosted blur + results panel slide-up — all driven together
   useEffect(() => {
     RNAnimated.parallel([
       RNAnimated.timing(bentoScale, {
@@ -250,7 +231,13 @@ export default function HomeScreen() {
         useNativeDriver: true,
       }),
       RNAnimated.timing(bentoOpacity, {
-        toValue: isSearching ? 0.32 : 1,
+        toValue: isSearching ? 0.75 : 1,
+        duration: 380,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+      }),
+      RNAnimated.timing(bentoBlur, {
+        toValue: isSearching ? 1 : 0,
         duration: 380,
         easing: Easing.out(Easing.cubic),
         useNativeDriver: true,
@@ -359,12 +346,14 @@ export default function HomeScreen() {
     }, [refreshIndex, loadRecentFiles]),
   );
 
-  // Also update when allFiles changes (e.g., after refresh completes)
+  const loadRecentFilesRef = useRef(loadRecentFiles);
+  useEffect(() => { loadRecentFilesRef.current = loadRecentFiles; }, [loadRecentFiles]);
+
   useEffect(() => {
     if (allFiles.length > 0) {
-      loadRecentFiles();
+      loadRecentFilesRef.current();
     }
-  }, [allFiles, loadRecentFiles]);
+  }, [allFiles, doclibDocs]);
 
   // Derive filtered files via useMemo — avoids an extra render cycle vs useEffect+setState
   const filteredFiles = useMemo(() => {
@@ -537,7 +526,7 @@ export default function HomeScreen() {
                 GLOBAL_CONTAINER_HEADERS && styles.greetingSectionEnhanced,
               ]}
             >
-              <Text style={styles.greetingName}>inScribed</Text>
+              <Text style={styles.greetingName}>words Inscribed</Text>
             </View>
             <TouchableOpacity
               onPress={() => router.push("/settings" as any)}
@@ -694,34 +683,7 @@ export default function HomeScreen() {
                               gozlin
                             </Text>
                           </View>
-                          <View style={styles.aiFeatureTextArea}>
-                            <RNAnimated.Text
-                              style={[
-                                styles.aiFeatureLabel,
-                                {
-                                  position: "absolute",
-                                  opacity: aiOpacityA,
-                                  transform: [{ translateX: aiTranslateXA }],
-                                },
-                              ]}
-                              numberOfLines={1}
-                            >
-                              {aiTextA}
-                            </RNAnimated.Text>
-                            <RNAnimated.Text
-                              style={[
-                                styles.aiFeatureLabel,
-                                {
-                                  position: "absolute",
-                                  opacity: aiOpacityB,
-                                  transform: [{ translateX: aiTranslateXB }],
-                                },
-                              ]}
-                              numberOfLines={1}
-                            >
-                              {aiTextB}
-                            </RNAnimated.Text>
-                          </View>
+                          <AICyclingText />
                           <View style={styles.bentoMediumDecor} />
                         </GradientView>
                       </TouchableOpacity>
@@ -832,6 +794,18 @@ export default function HomeScreen() {
               </View>
             </View>
             {/* end bentoSectionContainer */}
+
+            {/* Frosted blur overlay — fades in over the bento while searching */}
+            <RNAnimated.View
+              pointerEvents="none"
+              style={[StyleSheet.absoluteFill, { opacity: bentoBlur }]}
+            >
+              <BlurView
+                intensity={mode === "dark" ? 55 : 45}
+                tint={mode === "dark" ? "dark" : "light"}
+                style={StyleSheet.absoluteFill}
+              />
+            </RNAnimated.View>
           </RNAnimated.View>
 
           {/* Sliding section — results + file manager ascend to half-cover bento */}

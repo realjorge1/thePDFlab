@@ -22,6 +22,25 @@ import {
 import { uploadConvertAndDownload } from "../services/pptxRenderClient";
 import { isLikelyOffline, withRetry } from "../services/pptxRetry";
 import type { RenderStage } from "../types/pptxViewer";
+import {
+  buildPresentationHtml,
+  parsePPTXForViewer,
+} from "@/src/ppt-module/services/pptxHtmlRenderer.service";
+
+// Render the deck entirely on-device (no backend). Used as an automatic
+// fallback whenever the server conversion path fails — so PPTX viewing keeps
+// working even when the renderer service is down or the device is offline.
+async function renderOffline(fileUri: string): Promise<RenderStage> {
+  const data = await parsePPTXForViewer(fileUri);
+  if (!data.slides.length) {
+    throw new Error("No slides found in this presentation.");
+  }
+  return {
+    phase: "ready_offline",
+    html: buildPresentationHtml(data),
+    totalSlides: data.slides.length,
+  };
+}
 
 export interface UsePptxRenderResult {
   stage: RenderStage;
@@ -124,6 +143,15 @@ export function usePptxRender(
         {
           maxAttempts: 3,
           baseDelayMs: 1200,
+          // Don't burn retries (each re-uploads the file) when the renderer is
+          // simply unavailable — fall straight through to the offline path.
+          shouldRetry: (e) => {
+            const m = e.message || "";
+            if (/libreoffice|unavailable|\(503\)/i.test(m)) return false;
+            return /network|timed out|timeout|fetch failed|aborted|\(5\d\d\)/i.test(
+              m,
+            );
+          },
           onAttempt: (attempt) => {
             if (cancelled()) return;
             setStageIfMounted({
@@ -179,12 +207,33 @@ export function usePptxRender(
     } catch (err) {
       if (cancelled()) return;
       const e = err instanceof Error ? err : new Error(String(err));
+
+      // ── Offline / server-down fallback ──────────────────────────
+      // The server path failed (renderer unavailable, network error, etc.).
+      // Render the deck on-device so viewing still works.
       setStageIfMounted({
-        phase: "error",
-        message: e.message || "Conversion failed.",
-        retryable: true,
-        offlineSuspected: isLikelyOffline(e),
+        phase: "rendering",
+        message: "Preparing preview on this device…",
       });
+      try {
+        const offline = await renderOffline(fileUri);
+        if (cancelled()) return;
+        setStageIfMounted(offline);
+        return;
+      } catch (offlineErr) {
+        if (cancelled()) return;
+        // Both paths failed — surface the most actionable error.
+        const oe =
+          offlineErr instanceof Error
+            ? offlineErr
+            : new Error(String(offlineErr));
+        setStageIfMounted({
+          phase: "error",
+          message: e.message || oe.message || "Could not open presentation.",
+          retryable: true,
+          offlineSuspected: isLikelyOffline(e),
+        });
+      }
     }
   }, [fileUri, fileName, setStageIfMounted]);
 

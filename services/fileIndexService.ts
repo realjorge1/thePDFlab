@@ -80,7 +80,7 @@ export interface UpsertFileParams {
 // CONSTANTS
 // ============================================================================
 
-const UNIFIED_INDEX_KEY = "@inscribed_unified_file_index";
+const UNIFIED_INDEX_KEY = "@wordsinscribed_unified_file_index";
 const MAX_FILES = 500;
 const CACHE_DIR = `${FileSystem.documentDirectory}library-cache/`;
 

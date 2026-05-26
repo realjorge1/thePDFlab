@@ -152,6 +152,10 @@ export function useReadAloud({
   const documentNameRef = useRef(documentName ?? "document");
   // Tracks whether we've fired the "playing" notification for the current session
   const hasNotifiedPlayingRef = useRef(false);
+  // Ensures persisted state is restored at most once — otherwise streamed text
+  // (chunks growing page-by-page) would re-run the restore and could yank
+  // playback back to an earlier chunk.
+  const hasRestoredRef = useRef(false);
 
   // Sync refs when props change
   useEffect(() => {
@@ -161,6 +165,8 @@ export function useReadAloud({
   useEffect(() => {
     documentIdRef.current = documentId;
     persistStateRef.current = persistState;
+    // A different document gets its own one-time restore.
+    hasRestoredRef.current = false;
   }, [documentId, persistState]);
 
   useEffect(() => {
@@ -171,9 +177,10 @@ export function useReadAloud({
   useEffect(() => {
     if (persistState && documentId) {
       readAloudPersistence.getState(documentId).then((savedState) => {
-        if (savedState && mountedRef.current) {
+        if (savedState && mountedRef.current && !hasRestoredRef.current) {
           // Only restore if we have the same document and chunks are loaded
           if (chunks.length > 0 && savedState.chunkIndex < chunks.length) {
+            hasRestoredRef.current = true;
             indexRef.current = savedState.chunkIndex;
             setCurrentChunkIndex(savedState.chunkIndex);
             statusRef.current = savedState.status;

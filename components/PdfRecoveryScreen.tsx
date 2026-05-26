@@ -94,7 +94,7 @@ export function PdfRecoveryScreen({
   };
 
   const handleReport = () => {
-    const subject = encodeURIComponent("Inscribed – PDF rendering issue");
+    const subject = encodeURIComponent("wordsInscribed – PDF rendering issue");
     const body = encodeURIComponent(
       `Hi,\n\nI encountered an issue opening a PDF.\n\n` +
         `Error: ${error}\n` +

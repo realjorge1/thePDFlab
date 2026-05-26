@@ -53,7 +53,9 @@ export const InteractiveSlideCanvas: React.FC<InteractiveSlideCanvasProps> = ({
   const isOnDark =
     layout === 'title' ||
     layout === 'closing' ||
-    layout === 'statHighlight';
+    layout === 'statHighlight' ||
+    layout === 'quote' ||
+    layout === 'sectionDivider';
 
   const bgColor = isOnDark ? c.backgroundDark : c.background;
   const phColor = isOnDark ? 'rgba(255,255,255,0.22)' : 'rgba(0,0,0,0.2)';
@@ -374,6 +376,175 @@ export const InteractiveSlideCanvas: React.FC<InteractiveSlideCanvasProps> = ({
     </View>
   );
 
+  const renderQuote = () => (
+    <View style={styles.centered}>
+      <Text style={{ fontSize: FS_STAT * 0.7, color: c.secondary, fontWeight: '700', lineHeight: FS_STAT * 0.6 }}>“</Text>
+      <TextInput
+        value={content.body ?? ''}
+        onChangeText={v => onChange({ body: v })}
+        style={[inp(c.textOnDark, FS_SUBTITLE, { center: true, italic: true })]}
+        placeholder="Type a memorable quote…"
+        placeholderTextColor={phColor}
+        multiline
+      />
+      <View style={[styles.heroDivider, { backgroundColor: c.secondary }]} />
+      <TextInput
+        value={content.subtitle ?? ''}
+        onChangeText={v => onChange({ subtitle: v })}
+        style={inp(c.secondary, FS_SMALL, { center: true })}
+        placeholder="Attribution / author"
+        placeholderTextColor={phColor}
+      />
+    </View>
+  );
+
+  const renderSectionDivider = () => (
+    <View style={styles.full}>
+      <View style={{ flex: 1, justifyContent: 'center' }}>
+        <TextInput
+          value={content.sectionNumber ?? ''}
+          onChangeText={v => onChange({ sectionNumber: v })}
+          style={inp(c.secondary, FS_STAT * 0.7, { bold: true })}
+          placeholder="01"
+          placeholderTextColor={phColor}
+          keyboardType="numbers-and-punctuation"
+        />
+        <TextInput
+          value={content.title ?? ''}
+          onChangeText={v => onChange({ title: v })}
+          style={[inp(c.textOnDark, FS_TITLE * 1.2, { bold: true }), { marginTop: 4 }]}
+          placeholder="Section Title"
+          placeholderTextColor={phColor}
+          multiline
+        />
+        <TextInput
+          value={content.subtitle ?? ''}
+          onChangeText={v => onChange({ subtitle: v })}
+          style={[inp(c.secondary, FS_SMALL), { marginTop: 4 }]}
+          placeholder="Optional description"
+          placeholderTextColor={phColor}
+        />
+      </View>
+    </View>
+  );
+
+  // Reusable inline list editor (used by agenda + processSteps)
+  const renderList = (
+    items: string[],
+    onItems: (next: string[]) => void,
+    label: string,
+    numbered: boolean,
+  ) => (
+    <ScrollView style={{ flex: 1 }} showsVerticalScrollIndicator={false} bounces={false}>
+      {items.map((item, i) => (
+        <View key={i} style={styles.bulletRow}>
+          {numbered ? (
+            <View style={[styles.numBadge, { backgroundColor: c.accent === '#FFFFFF' ? c.secondary : c.accent }]}>
+              <Text style={styles.numBadgeText}>{i + 1}</Text>
+            </View>
+          ) : (
+            <View style={[styles.bulletDot, { backgroundColor: c.primary }]} />
+          )}
+          <TextInput
+            value={item}
+            onChangeText={val => {
+              const next = [...items];
+              next[i] = val;
+              onItems(next);
+            }}
+            style={[inp(c.text, FS_BODY), { flex: 1 }]}
+            placeholder={`${label} ${i + 1}`}
+            placeholderTextColor={phColor}
+          />
+          <TouchableOpacity onPress={() => onItems(items.filter((_, j) => j !== i))} hitSlop={8}>
+            <Text style={styles.deleteX}>✕</Text>
+          </TouchableOpacity>
+        </View>
+      ))}
+      <TouchableOpacity onPress={() => onItems([...items, ''])} style={styles.addBtn}>
+        <Text style={[styles.addBtnText, { color: c.primary }]}>+ Add {label.toLowerCase()}</Text>
+      </TouchableOpacity>
+    </ScrollView>
+  );
+
+  const renderAgenda = () => (
+    <View style={styles.full}>
+      <TextInput
+        value={content.title ?? ''}
+        onChangeText={v => onChange({ title: v })}
+        style={[inp(c.primary, FS_TITLE, { bold: true }), { marginBottom: 5 }]}
+        placeholder="Agenda"
+        placeholderTextColor={phColor}
+      />
+      <Divider color={c.primary} opacity={0.2} />
+      {renderList(content.bullets ?? [], next => onChange({ bullets: next }), 'Item', true)}
+    </View>
+  );
+
+  const renderProcessSteps = () => (
+    <View style={styles.full}>
+      <TextInput
+        value={content.title ?? ''}
+        onChangeText={v => onChange({ title: v })}
+        style={[inp(c.primary, FS_TITLE, { bold: true }), { marginBottom: 5 }]}
+        placeholder="Process"
+        placeholderTextColor={phColor}
+      />
+      <Divider color={c.primary} opacity={0.2} />
+      {renderList(content.steps ?? [], next => onChange({ steps: next }), 'Step', true)}
+    </View>
+  );
+
+  const renderComparison = () => (
+    <View style={styles.full}>
+      <TextInput
+        value={content.title ?? ''}
+        onChangeText={v => onChange({ title: v })}
+        style={[inp(c.primary, FS_TITLE, { bold: true }), { marginBottom: 5 }]}
+        placeholder="Comparison Title"
+        placeholderTextColor={phColor}
+      />
+      <Divider color={c.primary} opacity={0.2} />
+      <View style={styles.columns}>
+        <View style={{ flex: 1, paddingRight: 5 }}>
+          <TextInput
+            value={content.leftTitle ?? ''}
+            onChangeText={v => onChange({ leftTitle: v })}
+            style={[inp(c.primary, FS_SMALL, { bold: true, center: true }), { marginBottom: 3 }]}
+            placeholder="Option A"
+            placeholderTextColor={phColor}
+          />
+          <TextInput
+            value={content.leftContent ?? ''}
+            onChangeText={v => onChange({ leftContent: v })}
+            style={inp(c.text, FS_SMALL, { flex: true })}
+            placeholder="Pros / details…"
+            placeholderTextColor={phColor}
+            multiline
+          />
+        </View>
+        <View style={{ width: StyleSheet.hairlineWidth, backgroundColor: c.secondary + '80' }} />
+        <View style={{ flex: 1, paddingLeft: 5 }}>
+          <TextInput
+            value={content.rightTitle ?? ''}
+            onChangeText={v => onChange({ rightTitle: v })}
+            style={[inp(c.primary, FS_SMALL, { bold: true, center: true }), { marginBottom: 3 }]}
+            placeholder="Option B"
+            placeholderTextColor={phColor}
+          />
+          <TextInput
+            value={content.rightContent ?? ''}
+            onChangeText={v => onChange({ rightContent: v })}
+            style={inp(c.text, FS_SMALL, { flex: true })}
+            placeholder="Pros / details…"
+            placeholderTextColor={phColor}
+            multiline
+          />
+        </View>
+      </View>
+    </View>
+  );
+
   const renderBlank = () => (
     <View style={styles.centered}>
       <Text style={[styles.blankMsg, { color: isOnDark ? c.textOnDark : c.textMuted }]}>
@@ -392,6 +563,11 @@ export const InteractiveSlideCanvas: React.FC<InteractiveSlideCanvasProps> = ({
       case 'imageRight':   return renderImageSide(false);
       case 'statHighlight':return renderStat();
       case 'timeline':     return renderTimeline();
+      case 'quote':        return renderQuote();
+      case 'sectionDivider': return renderSectionDivider();
+      case 'agenda':       return renderAgenda();
+      case 'comparison':   return renderComparison();
+      case 'processSteps': return renderProcessSteps();
       case 'blank':        return renderBlank();
       default:             return renderTitleContent();
     }
@@ -469,6 +645,18 @@ const styles = StyleSheet.create({
     width: 5,
     height: 5,
     borderRadius: 2.5,
+  },
+  numBadge: {
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  numBadgeText: {
+    color: '#FFFFFF',
+    fontSize: 9,
+    fontWeight: '700',
   },
   deleteX: {
     color: '#EF4444',

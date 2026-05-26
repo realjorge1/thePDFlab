@@ -1,83 +1,164 @@
-/**
- * OnboardingScreen — brand splash shown on every app launch.
- * Renders "inScribed" over the app's signature gradient for 3 s, then calls onFinish.
- */
-import { colors } from "@/constants/theme";
-import React, { useEffect, useRef } from "react";
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { colors } from '@/constants/theme';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  Animated,
-  Easing,
+  Dimensions,
+  Platform,
+  ScrollView,
   StatusBar,
   StyleSheet,
   Text,
+  TouchableOpacity,
   View,
-} from "react-native";
-import { GradientView } from "./GradientView";
+} from 'react-native';
+import { GradientView } from './GradientView';
+
+const SCREEN_H = Dimensions.get('window').height;
+const CARD_HEIGHT = Math.min(Math.round(SCREEN_H * 0.62), 540);
+const ONBOARDING_KEY = '@wi:onboarding_v1';
 
 interface Props {
   onFinish: () => void;
-  durationMs?: number;
 }
 
-export function OnboardingScreen({ onFinish, durationMs = 3000 }: Props) {
-  const wordOpacity = useRef(new Animated.Value(0)).current;
-  const wordScale = useRef(new Animated.Value(0.88)).current;
-  const screenOpacity = useRef(new Animated.Value(1)).current;
+type Phase = 'brand' | 'privacy' | 'welcome';
 
+function PrivacyItem({ heading, body }: { heading: string; body: string }) {
+  return (
+    <View style={pvStyles.item}>
+      <Text style={pvStyles.heading}>{heading}</Text>
+      <Text style={pvStyles.body}>{body}</Text>
+    </View>
+  );
+}
+
+export function OnboardingScreen({ onFinish }: Props) {
+  const [phase, setPhase] = useState<Phase>('brand');
+  const [accepted, setAccepted] = useState(false);
+
+  // Brand phase: hold for exactly 3 000 ms from mount
   useEffect(() => {
-    // Animate wordmark in
-    Animated.parallel([
-      Animated.timing(wordOpacity, {
-        toValue: 1,
-        duration: 700,
-        easing: Easing.out(Easing.cubic),
-        useNativeDriver: true,
-      }),
-      Animated.timing(wordScale, {
-        toValue: 1,
-        duration: 750,
-        easing: Easing.out(Easing.back(1.5)),
-        useNativeDriver: true,
-      }),
-    ]).start();
+    const mountTime = Date.now();
+    let cancelled = false;
+    let brandTimer: ReturnType<typeof setTimeout> | null = null;
 
-    // Fade the whole screen out before calling onFinish
-    const fadeOutAt = Math.max(durationMs - 400, 200);
-    const timer = setTimeout(() => {
-      Animated.timing(screenOpacity, {
-        toValue: 0,
-        duration: 400,
-        easing: Easing.in(Easing.quad),
-        useNativeDriver: true,
-      }).start(({ finished }) => {
-        if (finished) onFinish();
-      });
-    }, fadeOutAt);
+    (async () => {
+      let isFirst = false;
+      try {
+        const stored = await AsyncStorage.getItem(ONBOARDING_KEY);
+        isFirst = stored === null;
+      } catch {
+        isFirst = false;
+      }
 
-    return () => clearTimeout(timer);
+      if (cancelled) return;
+
+      const elapsed = Date.now() - mountTime;
+      const remaining = Math.max(0, 3000 - elapsed);
+
+      brandTimer = setTimeout(() => {
+        if (cancelled) return;
+        if (isFirst) {
+          setPhase('privacy');
+        } else {
+          onFinish();
+        }
+      }, remaining);
+    })();
+
+    return () => {
+      cancelled = true;
+      if (brandTimer) clearTimeout(brandTimer);
+    };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Welcome phase: hold for exactly 2 500 ms then open app
+  useEffect(() => {
+    if (phase !== 'welcome') return;
+    const t = setTimeout(() => onFinish(), 2500);
+    return () => clearTimeout(t);
+  }, [phase, onFinish]);
+
+  const handleAccept = useCallback(async () => {
+    if (accepted) return;
+    setAccepted(true);
+    try {
+      await AsyncStorage.setItem(ONBOARDING_KEY, 'done');
+    } catch {}
+    setPhase('welcome');
+  }, [accepted]);
+
   return (
-    <Animated.View style={[styles.root, { opacity: screenOpacity }]}>
+    <View style={styles.root}>
       <StatusBar barStyle="light-content" backgroundColor={colors.gradientStart} />
+
       <GradientView
         colors={[colors.gradientStart, colors.gradientMid, colors.gradientEnd]}
         start={{ x: 0, y: 0 }}
         end={{ x: 1, y: 1 }}
         style={styles.fill}
       >
-        <View style={styles.center}>
-          <Animated.View
-            style={{
-              opacity: wordOpacity,
-              transform: [{ scale: wordScale }],
-            }}
-          >
-            <Text style={styles.wordmark}>inScribed</Text>
-          </Animated.View>
-        </View>
+        {phase === 'brand' && (
+          <View style={styles.brandContainer}>
+            <Text style={styles.wordsText}>words</Text>
+            <Text style={styles.inscribedText}>Inscribed</Text>
+          </View>
+        )}
+
+        {phase === 'welcome' && (
+          <View style={styles.welcomeContainer}>
+            <Text style={styles.welcomeText}>welcome</Text>
+          </View>
+        )}
+
+        {phase === 'privacy' && (
+          <View style={styles.privacyCard}>
+            <View style={styles.handle} />
+
+            <Text style={styles.pvTitle}>Privacy Notice</Text>
+            <Text style={styles.pvIntro}>
+              By using words Inscribed, you acknowledge and agree to the following terms governing data access, device permissions, and the handling of your information.
+            </Text>
+
+            <ScrollView
+              style={styles.pvScroll}
+              showsVerticalScrollIndicator={false}
+              contentContainerStyle={styles.pvScrollContent}
+            >
+              <PrivacyItem
+                heading="CAMERA"
+                body="The application accesses your device camera exclusively to capture images for the purpose of document creation. Camera access is initiated solely upon your direct action and shall not be used for any other purpose."
+              />
+              <PrivacyItem
+                heading="FILE AND STORAGE ACCESS"
+                body="Access to device storage and file system directories is granted exclusively by you. Such access is used solely to open, manage, and save documents as directed. No file is accessed, read, or transmitted without your explicit instruction."
+              />
+              <PrivacyItem
+                heading="USER CONTROL AND PERMISSIONS"
+                body="All device permissions are granted at your discretion and may be revoked at any time through your device settings. The application shall not access any device resource for which permission has not been expressly granted."
+              />
+              <PrivacyItem
+                heading="DATA HANDLING AND SECURITY"
+                body="Your files and personal data are processed and stored securely. No document, file, or user data is transmitted to third parties or uploaded to remote servers without your knowledge and explicit action."
+              />
+            </ScrollView>
+
+            <TouchableOpacity
+              style={[styles.acceptBtn, accepted && styles.acceptBtnActive]}
+              onPress={handleAccept}
+              activeOpacity={0.8}
+            >
+              <View style={[styles.checkbox, accepted && styles.checkboxChecked]}>
+                {accepted && <Text style={styles.checkmark}>✓</Text>}
+              </View>
+              <Text style={[styles.acceptLabel, accepted && styles.acceptLabelActive]}>
+                {accepted ? 'Accepted — opening app…' : 'I have read and accept'}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        )}
       </GradientView>
-    </Animated.View>
+    </View>
   );
 }
 
@@ -89,17 +170,159 @@ const styles = StyleSheet.create({
   fill: {
     flex: 1,
   },
-  center: {
-    flex: 1,
-    alignItems: "center",
-    justifyContent: "center",
+
+  brandContainer: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  wordmark: {
-    fontSize: 52,
-    fontWeight: "800",
-    color: "#FFFFFF",
+  wordsText: {
+    fontFamily: Platform.select({ ios: 'Georgia', android: 'serif', default: 'serif' }),
+    fontSize: 42,
+    fontWeight: '400',
+    fontStyle: 'italic',
+    color: 'rgba(255,255,255,0.90)',
+    letterSpacing: 1,
+    includeFontPadding: false,
+    lineHeight: 48,
+  },
+  inscribedText: {
+    fontFamily: Platform.select({ ios: 'Georgia', android: 'serif', default: 'serif' }),
+    fontSize: 64,
+    fontWeight: '800',
+    fontStyle: 'italic',
+    color: '#FFFFFF',
     letterSpacing: -1,
     includeFontPadding: false,
+    lineHeight: 70,
+  },
+
+  welcomeContainer: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  welcomeText: {
+    fontFamily: Platform.select({ ios: 'Georgia', android: 'serif', default: 'serif' }),
+    fontSize: 50,
+    fontWeight: '400',
+    fontStyle: 'italic',
+    color: 'rgba(255,255,255,0.92)',
+    letterSpacing: 1,
+    includeFontPadding: false,
+  },
+
+  privacyCard: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    height: CARD_HEIGHT,
+    backgroundColor: '#FFFFFF',
+    borderTopLeftRadius: 26,
+    borderTopRightRadius: 26,
+    paddingHorizontal: 22,
+    paddingBottom: 30,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: -8 },
+    shadowOpacity: 0.16,
+    shadowRadius: 28,
+    elevation: 24,
+  },
+  handle: {
+    width: 38,
+    height: 4,
+    backgroundColor: '#D1D5DB',
+    borderRadius: 2,
+    alignSelf: 'center',
+    marginTop: 12,
+    marginBottom: 16,
+  },
+  pvTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#111827',
+    letterSpacing: 0.4,
+    marginBottom: 8,
+  },
+  pvIntro: {
+    fontSize: 12.5,
+    color: '#6B7280',
+    lineHeight: 19,
+    marginBottom: 14,
+  },
+  pvScroll: {
+    flex: 1,
+  },
+  pvScrollContent: {
+    paddingBottom: 6,
+  },
+
+  acceptBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    marginTop: 14,
+    paddingVertical: 15,
+    paddingHorizontal: 16,
+    borderRadius: 15,
+    backgroundColor: '#F3F4F6',
+    borderWidth: 2,
+    borderColor: 'transparent',
+  },
+  acceptBtnActive: {
+    backgroundColor: '#EEF2FF',
+    borderColor: colors.gradientStart,
+  },
+  checkbox: {
+    width: 26,
+    height: 26,
+    borderRadius: 8,
+    borderWidth: 2,
+    borderColor: '#9CA3AF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#FFFFFF',
+  },
+  checkboxChecked: {
+    backgroundColor: colors.gradientStart,
+    borderColor: colors.gradientStart,
+  },
+  checkmark: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '700',
+    lineHeight: 16,
+  },
+  acceptLabel: {
+    flex: 1,
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#374151',
+  },
+  acceptLabelActive: {
+    color: colors.gradientStart,
+  },
+});
+
+const pvStyles = StyleSheet.create({
+  item: {
+    paddingVertical: 12,
+    paddingHorizontal: 2,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#E5E7EB',
+  },
+  heading: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#374151',
+    letterSpacing: 0.8,
+    marginBottom: 4,
+  },
+  body: {
+    fontSize: 12,
+    color: '#6B7280',
+    lineHeight: 18,
   },
 });
 

@@ -5,7 +5,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { ScheduledTask, ScheduledTaskStatus } from './types';
 
-const STORAGE_KEY = '@inscribed/scheduled_tasks_v1';
+const STORAGE_KEY = '@wordsinscribed/scheduled_tasks_v1';
 const MAX_COMPLETED = 50; // keep last 50 completed tasks for history
 
 // ── Read / Write ──────────────────────────────────────────────────────────────

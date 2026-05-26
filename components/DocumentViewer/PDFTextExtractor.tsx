@@ -28,14 +28,22 @@ interface Props {
   active: boolean;
   /** Called with per-page text array when extraction succeeds. */
   onPageTexts: (pageTexts: string[]) => void;
+  /**
+   * Called incrementally as each page's text is extracted, in page order.
+   * Receives the growing per-page array and the total page count. Lets
+   * Read Aloud begin speaking page 1 before the whole document is parsed.
+   */
+  onProgress?: (pageTexts: string[], total: number) => void;
   /** Called when extraction fails. */
   onError?: (message: string) => void;
 }
 
-export function PDFTextExtractor({ uri, active, onPageTexts, onError }: Props) {
+export function PDFTextExtractor({ uri, active, onPageTexts, onProgress, onError }: Props) {
   const [html, setHtml] = useState<string | null>(null);
   const mountedRef = useRef(true);
   const extractingRef = useRef<string | null>(null); // tracks which URI is being extracted
+  // Accumulates streamed per-page text for the current extraction run.
+  const progressRef = useRef<string[]>([]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -51,6 +59,7 @@ export function PDFTextExtractor({ uri, active, onPageTexts, onError }: Props) {
     if (extractingRef.current === uri) return;
 
     extractingRef.current = uri;
+    progressRef.current = [];
     setHtml(null); // reset first
 
     generatePdfTextExtractionHtml(uri).then((result) => {
@@ -76,7 +85,19 @@ export function PDFTextExtractor({ uri, active, onPageTexts, onError }: Props) {
     (event: { nativeEvent: { data: string } }) => {
       try {
         const msg = JSON.parse(event.nativeEvent.data);
-        if (msg.type === "pdf-page-texts") {
+        if (msg.type === "pdf-page-progress") {
+          // Streamed single page — accumulate in order and notify.
+          if (typeof msg.index === "number") {
+            const arr = progressRef.current;
+            arr[msg.index] = typeof msg.text === "string" ? msg.text : "";
+            // Pass a dense copy (fill any gaps with empty strings) so consumers
+            // always receive a contiguous, index-stable array.
+            const total = typeof msg.total === "number" ? msg.total : arr.length;
+            const dense: string[] = [];
+            for (let i = 0; i < total; i++) dense[i] = arr[i] ?? "";
+            onProgress?.(dense, total);
+          }
+        } else if (msg.type === "pdf-page-texts") {
           const pages: string[] = Array.isArray(msg.pageTexts)
             ? msg.pageTexts
             : [];
@@ -99,7 +120,7 @@ export function PDFTextExtractor({ uri, active, onPageTexts, onError }: Props) {
         // Ignore non-JSON messages
       }
     },
-    [onPageTexts, onError],
+    [onPageTexts, onProgress, onError],
   );
 
   if (!html) return null;
