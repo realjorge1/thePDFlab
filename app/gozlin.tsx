@@ -12,6 +12,7 @@ import {
 import GenerateDocumentModal from "@/components/ai/GenerateDocumentModal";
 import { QuizPanel } from "@/components/ai/QuizPanel";
 import { LibraryFilePicker } from "@/components/LibraryFilePicker";
+import { VoiceInputButton } from "@/components/VoiceInputButton";
 import { PINGate } from "@/components/PINGate";
 import { PremiumGate } from "@/components/PremiumGate";
 import { aiFeatures } from "@/constants/ai-features";
@@ -199,8 +200,12 @@ function extractTextForPages(fullText: string, pageNums: number[], totalPages: n
 export default function AIScreen() {
   const { colors: t, mode } = useTheme();
   const router = useRouter();
-  // "Ask gozlin" deep-link: viewers pass selected text as a route param
-  const { initialText } = useLocalSearchParams<{ initialText?: string }>();
+  // "Ask gozlin" deep-link: viewers pass selected text (and optionally a target
+  // action, e.g. from Voice to Document) as route params.
+  const { initialText, initialAction } = useLocalSearchParams<{
+    initialText?: string;
+    initialAction?: string;
+  }>();
 
   // ── State ─────────────────────────────────────────────────────────────────
   const [activeAction, setActiveAction] = useState<AIAction>("chat");
@@ -334,9 +339,21 @@ export default function AIScreen() {
   // ── Pre-populate input from "Ask gozlin" deep-link ─────────────────────────
   useEffect(() => {
     if (initialText && typeof initialText === "string" && initialText.trim()) {
-      // Start a fresh chat session with the highlighted text as the input
-      setActiveAction("chat");
-      setSession(createSession("chat"));
+      // Honor an optional target action (chat is the safe default).
+      const allowed: AIAction[] = [
+        "chat",
+        "summarize",
+        "explain",
+        "highlight",
+        "tasks",
+        "analyze",
+        "quiz",
+      ];
+      const action = (allowed as string[]).includes(initialAction ?? "")
+        ? (initialAction as AIAction)
+        : "chat";
+      setActiveAction(action);
+      setSession(createSession(action));
       setInputText(initialText.trim());
       clearAIScreenState();
     }
@@ -2014,6 +2031,16 @@ export default function AIScreen() {
                         autoCapitalize="sentences"
                         maxLength={8000}
                       />
+                      <VoiceInputButton
+                        size={15}
+                        color={ACCENT}
+                        disabled={isTranslating}
+                        onTranscribed={(text) =>
+                          setTranslateFreeText((prev) => (prev ? `${prev} ${text}` : text))
+                        }
+                        onError={(msg) => setSmartFolderToast(msg)}
+                        style={[styles.translateFreeTextAttach, { backgroundColor: `${ACCENT}12` }]}
+                      />
                       <TouchableOpacity
                         style={[styles.translateFreeTextAttach, { backgroundColor: `${ACCENT}12` }]}
                         onPress={handleTranslateDocPick}
@@ -2109,6 +2136,14 @@ export default function AIScreen() {
                   color={attachedDoc ? ACCENT : t.textSecondary}
                 />
               </TouchableOpacity>
+              <VoiceInputButton
+                disabled={isLoading}
+                onTranscribed={(text) =>
+                  setInputText((prev) => (prev ? `${prev} ${text}` : text))
+                }
+                onError={(msg) => setSmartFolderToast(msg)}
+                style={styles.attachIconBtn}
+              />
               <TouchableOpacity
                 onPress={handleSend}
                 disabled={!canSend}

@@ -53,6 +53,9 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
+import { AppHeaderContainer } from "@/components/AppHeaderContainer";
+import { GradientView } from "@/components/GradientView";
+import { colors as brandColors } from "@/constants/theme";
 
 const MAX_IMAGES_FAST = 10;
 const MAX_IMAGES_ENHANCED = 4;
@@ -293,36 +296,46 @@ export default function ScanToTextScreen() {
         style={styles.flex1}
         behavior={Platform.OS === "ios" ? "padding" : undefined}
       >
-        {/* Header */}
-        <View style={[styles.header, { backgroundColor: t.card, borderBottomColor: t.border }]}>
-          <Pressable onPress={() => router.back()} hitSlop={12} style={styles.headerBtn}>
-            <ChevronLeft color={t.primary} size={26} strokeWidth={2.2} />
-          </Pressable>
-          <Text style={[styles.headerTitle, { color: t.text }]} numberOfLines={1}>
-            {step === "editing" ? "Edit Scanned Text" : "Scan to Text"}
-          </Text>
-          {step === "editing" ? (
-            <Pressable
-              onPress={handleCreate}
-              disabled={isCreating || !extractedText.trim()}
-              style={[
-                styles.createBtn,
-                { backgroundColor: t.primary },
-                (isCreating || !extractedText.trim()) && styles.createBtnDisabled,
-              ]}
-            >
-              {isCreating ? (
-                <ActivityIndicator color="#fff" size="small" />
-              ) : (
-                <Text style={styles.createBtnText}>
-                  Create {outputFormat.toUpperCase()}
-                </Text>
-              )}
+        {/* ─── Gradient Header ─── */}
+        <AppHeaderContainer>
+          <GradientView
+            colors={[
+              brandColors.gradientStart,
+              brandColors.gradientMid,
+              brandColors.gradientEnd,
+            ]}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={styles.header}
+          >
+            <Pressable onPress={() => router.back()} hitSlop={12} style={styles.headerBtn}>
+              <ChevronLeft color="#FFFFFF" size={26} strokeWidth={2.2} />
             </Pressable>
-          ) : (
-            <View style={styles.headerSpacer} />
-          )}
-        </View>
+            <Text style={styles.headerTitle} numberOfLines={1}>
+              {step === "editing" ? "Edit Scanned Text" : "Scan to Text"}
+            </Text>
+            {step === "editing" ? (
+              <Pressable
+                onPress={handleCreate}
+                disabled={isCreating || !extractedText.trim()}
+                style={[
+                  styles.createBtn,
+                  (isCreating || !extractedText.trim()) && styles.createBtnDisabled,
+                ]}
+              >
+                {isCreating ? (
+                  <ActivityIndicator color="#fff" size="small" />
+                ) : (
+                  <Text style={styles.createBtnText}>
+                    Create {outputFormat.toUpperCase()}
+                  </Text>
+                )}
+              </Pressable>
+            ) : (
+              <View style={styles.headerSpacer} />
+            )}
+          </GradientView>
+        </AppHeaderContainer>
 
         <ScrollView
           style={styles.flex1}
@@ -723,7 +736,6 @@ const styles = StyleSheet.create({
     alignItems: "center",
     paddingHorizontal: 12,
     paddingVertical: 10,
-    borderBottomWidth: StyleSheet.hairlineWidth,
     gap: 8,
   },
   headerBtn: {
@@ -732,12 +744,14 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     alignItems: "center",
     justifyContent: "center",
+    backgroundColor: "rgba(255,255,255,0.2)",
   },
   headerTitle: {
     flex: 1,
     fontSize: 17,
     fontWeight: "700",
     letterSpacing: -0.2,
+    color: "#FFFFFF",
   },
   headerSpacer: { width: 80 },
   createBtn: {
@@ -747,6 +761,7 @@ const styles = StyleSheet.create({
     minWidth: 80,
     alignItems: "center",
     justifyContent: "center",
+    backgroundColor: "rgba(255,255,255,0.25)",
   },
   createBtnDisabled: { opacity: 0.45 },
   createBtnText: { color: "#fff", fontSize: 14, fontWeight: "700" },

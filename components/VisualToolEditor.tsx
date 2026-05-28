@@ -507,7 +507,6 @@ export const VisualToolEditor: React.FC<Props> = ({
                             toolType === "redact" ? color : color + "20",
                           borderColor: color,
                           borderWidth: toolType === "redact" ? 0 : 2,
-                          borderStyle: "dashed",
                         },
                         overlayAnimatedStyle,
                       ]}

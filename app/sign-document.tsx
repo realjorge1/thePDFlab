@@ -40,6 +40,9 @@ import Animated, {
   withTiming,
 } from "react-native-reanimated";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { AppHeaderContainer } from "@/components/AppHeaderContainer";
+import { GradientView } from "@/components/GradientView";
+import { colors as brandColors } from "@/constants/theme";
 import SignatureScreen, {
   type SignatureViewRef,
 } from "react-native-signature-canvas";
@@ -807,36 +810,36 @@ export default function SignDocumentScreen() {
         </View>
       )}
 
-      {/* Header */}
-      <View
-        style={[
-          styles.header,
-          { backgroundColor: t.card, borderBottomColor: t.border },
-        ]}
-      >
-        <Pressable onPress={() => router.back()} style={styles.headerButton}>
-          <MaterialIcons name="arrow-back" size={24} color={t.text} />
-        </Pressable>
-        <View style={styles.headerCenter}>
-          <Text
-            style={[styles.headerTitle, { color: t.text }]}
-            numberOfLines={1}
-          >
-            Sign Document
-          </Text>
-          <Text
-            style={[styles.headerSubtitle, { color: t.textSecondary }]}
-            numberOfLines={1}
-          >
-            {file || "Select a file"}
-          </Text>
-        </View>
-        <View style={styles.headerRight}>
-          {step === "draw" && <StepBadge label="1/3" color="#2563eb" />}
-          {step === "place" && <StepBadge label="2/3" color="#2563eb" />}
-          {step === "review" && <StepBadge label="3/3" color="#16a34a" />}
-        </View>
-      </View>
+      {/* ─── Gradient Header ─── */}
+      <AppHeaderContainer>
+        <GradientView
+          colors={[
+            brandColors.gradientStart,
+            brandColors.gradientMid,
+            brandColors.gradientEnd,
+          ]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={styles.header}
+        >
+          <Pressable onPress={() => router.back()} style={styles.headerButton}>
+            <MaterialIcons name="arrow-back" size={24} color="#FFFFFF" />
+          </Pressable>
+          <View style={styles.headerCenter}>
+            <Text style={styles.headerTitle} numberOfLines={1}>
+              Sign Document
+            </Text>
+            <Text style={styles.headerSubtitle} numberOfLines={1}>
+              {file || "Select a file"}
+            </Text>
+          </View>
+          <View style={styles.headerRight}>
+            {step === "draw" && <StepBadge label="1/3" color="#2563eb" />}
+            {step === "place" && <StepBadge label="2/3" color="#2563eb" />}
+            {step === "review" && <StepBadge label="3/3" color="#16a34a" />}
+          </View>
+        </GradientView>
+      </AppHeaderContainer>
 
       {/* ─── Step 1: Draw/Type Signature + Details ─── */}
       {step === "draw" && (
@@ -1479,13 +1482,12 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderBottomWidth: 1,
+    paddingVertical: 10,
   },
   headerButton: { padding: 6 },
   headerCenter: { flex: 1, marginHorizontal: 12 },
-  headerTitle: { fontSize: 16, fontWeight: "600" },
-  headerSubtitle: { fontSize: 11, marginTop: 1 },
+  headerTitle: { fontSize: 16, fontWeight: "700", color: "#FFFFFF" },
+  headerSubtitle: { fontSize: 11, marginTop: 1, color: "rgba(255,255,255,0.8)" },
   headerRight: { paddingRight: 4 },
 
   // ── Draw step ──
@@ -1593,7 +1595,6 @@ const styles = StyleSheet.create({
   typePreview: {
     flex: 1,
     borderWidth: 1,
-    borderStyle: "dashed",
     borderRadius: 10,
     alignItems: "center",
     justifyContent: "center",
@@ -1811,7 +1812,6 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(37, 99, 235, 0.06)",
     borderWidth: 2,
     borderColor: "#2563eb",
-    borderStyle: "dashed",
     borderRadius: 4,
     alignItems: "center",
     justifyContent: "center",

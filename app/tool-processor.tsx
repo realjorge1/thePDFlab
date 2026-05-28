@@ -60,6 +60,8 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { AppHeaderContainer } from "@/components/AppHeaderContainer";
+import { GradientView } from "@/components/GradientView";
 import Pdf from "react-native-pdf";
 
 // ============================================================================
@@ -1207,50 +1209,49 @@ export default function ToolProcessorScreen() {
         </View>
       )}
 
-      {/* Header */}
-      <View
-        style={[
-          styles.header,
-          { backgroundColor: t.card, borderBottomColor: t.border },
-        ]}
-      >
-        <View style={styles.headerContent}>
-          <TouchableOpacity
-            onPress={() => {
-              if (isProcessing) {
-                handleCancel();
-              }
-              router.back();
-            }}
-            style={{ padding: spacing.sm }}
-          >
-            <X color={t.text} size={20} />
-          </TouchableOpacity>
-          <View style={{ flex: 1 }}>
-            <Text style={[styles.headerTitle, { color: t.text }]}>
-              {getTitle(tool as string)}
-            </Text>
-            <Text
-              style={[styles.headerSubtitle, { color: t.textSecondary }]}
-              numberOfLines={1}
+      {/* ─── Gradient Header ─── */}
+      <AppHeaderContainer>
+        <GradientView
+          colors={[colors.gradientStart, colors.gradientMid, colors.gradientEnd]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={styles.header}
+        >
+          <View style={styles.headerContent}>
+            <TouchableOpacity
+              onPress={() => {
+                if (isProcessing) {
+                  handleCancel();
+                }
+                router.back();
+              }}
+              style={{ padding: spacing.sm }}
             >
-              {file}
-            </Text>
+              <X color="#FFFFFF" size={20} />
+            </TouchableOpacity>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.headerTitle}>
+                {getTitle(tool as string)}
+              </Text>
+              <Text style={styles.headerSubtitle} numberOfLines={1}>
+                {file}
+              </Text>
+            </View>
           </View>
-        </View>
 
-        {/* Process Button at Top - shown when not processing and no success result */}
-        {!isProcessing && !result?.success && (
-          <TouchableOpacity
-            onPress={handleProcess}
-            style={styles.processButtonTop}
-            disabled={isProcessing}
-          >
-            <ChevronRight color="white" size={20} />
-            <Text style={styles.processButtonText}>Process PDF</Text>
-          </TouchableOpacity>
-        )}
-      </View>
+          {/* Process Button at Top - shown when not processing and no success result */}
+          {!isProcessing && !result?.success && (
+            <TouchableOpacity
+              onPress={handleProcess}
+              style={styles.processButtonTop}
+              disabled={isProcessing}
+            >
+              <ChevronRight color="white" size={20} />
+              <Text style={styles.processButtonText}>Process PDF</Text>
+            </TouchableOpacity>
+          )}
+        </GradientView>
+      </AppHeaderContainer>
 
       <KeyboardAvoidingView
         style={{ flex: 1 }}
@@ -3208,7 +3209,7 @@ export default function ToolProcessorScreen() {
                           style={{
                             flexDirection: "row", alignItems: "center", justifyContent: "center",
                             backgroundColor: t.card, borderRadius: 12, padding: spacing.md,
-                            borderWidth: 1, borderColor: t.primary + "30", borderStyle: "dashed",
+                            borderWidth: 1, borderColor: t.primary + "30",
                           }}
                         >
                           <Plus color={t.primary} size={18} />
@@ -3313,9 +3314,7 @@ const styles = StyleSheet.create({
   header: {
     paddingHorizontal: spacing.md,
     paddingTop: spacing.md,
-    paddingBottom: spacing.sm,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border,
+    paddingBottom: spacing.md,
   },
   headerContent: {
     flexDirection: "row",
@@ -3326,12 +3325,14 @@ const styles = StyleSheet.create({
   headerTitle: {
     fontSize: 20,
     fontWeight: "bold",
+    color: "#FFFFFF",
   },
   headerSubtitle: {
     fontSize: 12,
+    color: "rgba(255,255,255,0.8)",
   },
   processButtonTop: {
-    backgroundColor: colors.primary,
+    backgroundColor: "rgba(255,255,255,0.25)",
     borderRadius: 12,
     padding: spacing.md,
     flexDirection: "row",

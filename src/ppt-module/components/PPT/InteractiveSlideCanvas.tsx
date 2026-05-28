@@ -1,51 +1,51 @@
 // ─────────────────────────────────────────────
 //  PPT Module — InteractiveSlideCanvas
-//  Full-width editable slide canvas.
-//  TextInputs live directly inside the slide layout —
-//  no separate form panel needed.
+//  Read-only slide preview where each region is tappable.
+//  Editing happens in the SlideFieldEditor drawer below.
 // ─────────────────────────────────────────────
 
-import React, { useCallback } from 'react';
+import React from 'react';
 import {
   View,
   Text,
-  TextInput,
-  TouchableOpacity,
   StyleSheet,
   Dimensions,
-  ScrollView,
-  Platform,
+  Pressable,
+  StyleProp,
+  ViewStyle,
 } from 'react-native';
-import * as ImagePicker from 'expo-image-picker';
 import { Image } from 'expo-image';
-import { Slide, SlideContent, PPTTheme } from '../../types/ppt.types';
+import { Slide, PPTTheme } from '../../types/ppt.types';
 import { ImagePlus } from 'lucide-react-native';
+import { FieldId, fieldKey } from './SlideFieldEditor';
 
 const { width: SCREEN_W } = Dimensions.get('window');
 const H_PAD = 16;
 const CANVAS_W = SCREEN_W - H_PAD * 2;
-const CANVAS_H = Math.round(CANVAS_W * 9 / 16);
+const CANVAS_H = Math.round((CANVAS_W * 9) / 16);
 const ACCENT_W = 4;
 const INNER_PAD = 11;
 
-// Font sizes — proportional and readable within the canvas
-const FS_TITLE_HERO = Math.round(CANVAS_H * 0.13);   // ~26px — title/closing hero
-const FS_SUBTITLE   = Math.round(CANVAS_H * 0.085);  // ~17px
-const FS_TITLE      = Math.round(CANVAS_H * 0.088);  // ~18px — regular slide titles
-const FS_BODY       = Math.round(CANVAS_H * 0.068);  // ~14px
-const FS_SMALL      = Math.round(CANVAS_H * 0.057);  // ~11px
-const FS_STAT       = Math.round(CANVAS_H * 0.38);   // ~76px — big stat number
+// Font sizes — proportional to canvas dimensions
+const FS_TITLE_HERO = Math.round(CANVAS_H * 0.13);
+const FS_SUBTITLE = Math.round(CANVAS_H * 0.085);
+const FS_TITLE = Math.round(CANVAS_H * 0.088);
+const FS_BODY = Math.round(CANVAS_H * 0.068);
+const FS_SMALL = Math.round(CANVAS_H * 0.057);
+const FS_STAT = Math.round(CANVAS_H * 0.38);
 
 interface InteractiveSlideCanvasProps {
   slide: Slide;
   theme: PPTTheme;
-  onChange: (content: Partial<SlideContent>) => void;
+  activeField: FieldId | null;
+  onFieldFocus: (f: FieldId) => void;
 }
 
 export const InteractiveSlideCanvas: React.FC<InteractiveSlideCanvasProps> = ({
   slide,
   theme,
-  onChange,
+  activeField,
+  onFieldFocus,
 }) => {
   const { layout, content } = slide;
   const c = theme.colors;
@@ -58,180 +58,159 @@ export const InteractiveSlideCanvas: React.FC<InteractiveSlideCanvasProps> = ({
     layout === 'sectionDivider';
 
   const bgColor = isOnDark ? c.backgroundDark : c.background;
-  const phColor = isOnDark ? 'rgba(255,255,255,0.22)' : 'rgba(0,0,0,0.2)';
+  const phColor = isOnDark ? 'rgba(255,255,255,0.32)' : 'rgba(0,0,0,0.28)';
+  const titleColor = isOnDark ? c.textOnDark : c.primary;
+  const bodyColor = isOnDark ? c.textOnDark : c.text;
 
-  const pickImage = useCallback(async () => {
-    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (status !== 'granted') return;
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      allowsEditing: true,
-      quality: 0.85,
-    });
-    if (!result.canceled && result.assets[0]) {
-      onChange({ imageUri: result.assets[0].uri });
-    }
-  }, [onChange]);
+  const activeKey = activeField ? fieldKey(activeField) : null;
 
-  // ── Input style helper ──────────────────────
-  const inp = (
-    color: string,
-    fontSize: number,
-    opts?: { bold?: boolean; center?: boolean; flex?: boolean; italic?: boolean },
-  ): object => ({
-    color,
-    fontSize,
-    fontWeight: opts?.bold ? ('700' as const) : ('400' as const),
-    fontStyle: opts?.italic ? ('italic' as const) : ('normal' as const),
-    textAlign: opts?.center ? ('center' as const) : ('left' as const),
-    padding: 0,
-    margin: 0,
-    includeFontPadding: false,
-    ...(opts?.flex ? { flex: 1, textAlignVertical: 'top' as const } : {}),
-    ...(Platform.OS === 'android' ? { paddingVertical: 0 } : {}),
-  });
+  // Region wrapper: highlights active field & raises tap target
+  const Region: React.FC<{
+    field: FieldId;
+    children: React.ReactNode;
+    style?: StyleProp<ViewStyle>;
+  }> = ({ field, children, style }) => {
+    const isActive = activeKey === fieldKey(field);
+    return (
+      <Pressable
+        onPress={() => onFieldFocus(field)}
+        style={[
+          styles.region,
+          style,
+          isActive && {
+            backgroundColor: (isOnDark ? '#FFFFFF' : c.primary) + '14',
+            borderColor: c.primary,
+          },
+        ]}
+        hitSlop={4}
+      >
+        {children}
+      </Pressable>
+    );
+  };
 
-  const Divider = ({ color, opacity = 1 }: { color: string; opacity?: number }) => (
-    <View style={[styles.divider, { backgroundColor: color, opacity }]} />
+  // Helper to render either content text or a placeholder
+  const PlaceholderText: React.FC<{
+    value: string | undefined;
+    placeholder: string;
+    style: object;
+    numberOfLines?: number;
+  }> = ({ value, placeholder, style, numberOfLines }) => (
+    <Text style={[style, !value && { color: phColor }]} numberOfLines={numberOfLines}>
+      {value && value.length > 0 ? value : placeholder}
+    </Text>
   );
 
-  // ── Layout renderers ────────────────────────
+  // ─── Layout renderers (all read-only Text) ────
 
   const renderTitle = () => (
     <View style={styles.centered}>
-      <TextInput
-        value={content.title ?? ''}
-        onChangeText={v => onChange({ title: v })}
-        style={inp(c.textOnDark, FS_TITLE_HERO, { bold: true, center: true })}
-        placeholder={layout === 'closing' ? 'Closing Title' : 'Presentation Title'}
-        placeholderTextColor={phColor}
-        multiline
-      />
+      <Region field={{ kind: 'title' }} style={styles.regionCenter}>
+        <PlaceholderText
+          value={content.title}
+          placeholder={layout === 'closing' ? 'Closing Title' : 'Presentation Title'}
+          style={{
+            fontSize: FS_TITLE_HERO,
+            fontWeight: '700',
+            color: c.textOnDark,
+            textAlign: 'center',
+          }}
+          numberOfLines={3}
+        />
+      </Region>
       <View style={[styles.heroDivider, { backgroundColor: c.secondary }]} />
-      <TextInput
-        value={content.subtitle ?? ''}
-        onChangeText={v => onChange({ subtitle: v })}
-        style={inp(c.secondary, FS_SUBTITLE, { center: true })}
-        placeholder={layout === 'closing' ? 'Thank You · Questions?' : 'Your subtitle here'}
-        placeholderTextColor={phColor}
-        multiline
-      />
+      <Region field={{ kind: 'subtitle' }} style={styles.regionCenter}>
+        <PlaceholderText
+          value={content.subtitle}
+          placeholder={layout === 'closing' ? 'Thank You · Questions?' : 'Your subtitle here'}
+          style={{ fontSize: FS_SUBTITLE, color: c.secondary, textAlign: 'center' }}
+          numberOfLines={2}
+        />
+      </Region>
     </View>
   );
 
-  const renderTitleContent = () => (
-    <View style={styles.full}>
-      <TextInput
-        value={content.title ?? ''}
-        onChangeText={v => onChange({ title: v })}
-        style={[inp(c.primary, FS_TITLE, { bold: true }), { marginBottom: 5 }]}
-        placeholder="Slide Title"
-        placeholderTextColor={phColor}
-        returnKeyType="next"
-      />
-      <Divider color={c.primary} opacity={0.2} />
-
-      {/* Bullets mode */}
-      {(content.bullets ?? []).length > 0 ? (
-        <ScrollView style={{ flex: 1 }} showsVerticalScrollIndicator={false} bounces={false}>
-          {(content.bullets ?? []).map((b, i) => (
-            <View key={i} style={styles.bulletRow}>
-              <View style={[styles.bulletDot, { backgroundColor: c.primary }]} />
-              <TextInput
-                value={b}
-                onChangeText={val => {
-                  const next = [...(content.bullets ?? [])];
-                  next[i] = val;
-                  onChange({ bullets: next });
-                }}
-                style={[inp(c.text, FS_BODY), { flex: 1 }]}
-                placeholder={`Point ${i + 1}`}
-                placeholderTextColor={phColor}
-              />
-              <TouchableOpacity
-                onPress={() =>
-                  onChange({ bullets: (content.bullets ?? []).filter((_, j) => j !== i) })
-                }
-                hitSlop={8}
-              >
-                <Text style={styles.deleteX}>✕</Text>
-              </TouchableOpacity>
-            </View>
-          ))}
-          <TouchableOpacity
-            onPress={() => onChange({ bullets: [...(content.bullets ?? []), ''] })}
-            style={styles.addBtn}
-          >
-            <Text style={[styles.addBtnText, { color: c.primary }]}>+ Add point</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            onPress={() => onChange({ bullets: undefined })}
-            style={styles.addBtn}
-          >
-            <Text style={[styles.addBtnText, { color: c.textMuted }]}>Switch to body text</Text>
-          </TouchableOpacity>
-        </ScrollView>
-      ) : (
-        /* Body text mode */
-        <>
-          <TextInput
-            value={content.body ?? ''}
-            onChangeText={v => onChange({ body: v })}
-            style={[inp(c.text, FS_BODY, { flex: true }), { paddingTop: 5 }]}
-            placeholder="Body text or explanation…"
-            placeholderTextColor={phColor}
-            multiline
+  const renderTitleContent = () => {
+    const hasBullets = (content.bullets ?? []).length > 0;
+    return (
+      <View style={styles.full}>
+        <Region field={{ kind: 'title' }}>
+          <PlaceholderText
+            value={content.title}
+            placeholder="Slide Title"
+            style={{ fontSize: FS_TITLE, fontWeight: '700', color: c.primary }}
+            numberOfLines={2}
           />
-          <TouchableOpacity
-            onPress={() => onChange({ bullets: [''], body: undefined })}
-            style={styles.addBtn}
-          >
-            <Text style={[styles.addBtnText, { color: c.primary }]}>+ Use bullets</Text>
-          </TouchableOpacity>
-        </>
-      )}
-    </View>
-  );
+        </Region>
+        <View style={[styles.divider, { backgroundColor: c.primary, opacity: 0.2 }]} />
+        {hasBullets ? (
+          <Region field={{ kind: 'bullets' }} style={{ flex: 1 }}>
+            <View style={{ gap: 4 }}>
+              {(content.bullets ?? []).map((b, i) => (
+                <View key={i} style={styles.bulletRow}>
+                  <View style={[styles.bulletDot, { backgroundColor: c.primary }]} />
+                  <PlaceholderText
+                    value={b}
+                    placeholder={`Point ${i + 1}`}
+                    style={{ flex: 1, fontSize: FS_BODY, color: bodyColor }}
+                    numberOfLines={2}
+                  />
+                </View>
+              ))}
+            </View>
+          </Region>
+        ) : (
+          <Region field={{ kind: 'body' }} style={{ flex: 1 }}>
+            <PlaceholderText
+              value={content.body}
+              placeholder="Body text or explanation…"
+              style={{ fontSize: FS_BODY, color: bodyColor, lineHeight: FS_BODY * 1.4 }}
+              numberOfLines={8}
+            />
+          </Region>
+        )}
+      </View>
+    );
+  };
 
   const renderTwoColumn = () => (
     <View style={styles.full}>
-      <TextInput
-        value={content.title ?? ''}
-        onChangeText={v => onChange({ title: v })}
-        style={[inp(c.primary, FS_TITLE, { bold: true }), { marginBottom: 5 }]}
-        placeholder="Section Title"
-        placeholderTextColor={phColor}
-      />
-      <Divider color={c.primary} opacity={0.2} />
+      <Region field={{ kind: 'title' }}>
+        <PlaceholderText
+          value={content.title}
+          placeholder="Section Title"
+          style={{ fontSize: FS_TITLE, fontWeight: '700', color: c.primary }}
+        />
+      </Region>
+      <View style={[styles.divider, { backgroundColor: c.primary, opacity: 0.2 }]} />
       <View style={styles.columns}>
-        <TextInput
-          value={content.leftContent ?? ''}
-          onChangeText={v => onChange({ leftContent: v })}
-          style={[
-            inp(c.text, FS_BODY, { flex: true }),
-            { paddingTop: 4, paddingRight: 6, borderRightWidth: StyleSheet.hairlineWidth, borderRightColor: c.secondary + '80' },
-          ]}
-          placeholder="Left column…"
-          placeholderTextColor={phColor}
-          multiline
-        />
-        <TextInput
-          value={content.rightContent ?? ''}
-          onChangeText={v => onChange({ rightContent: v })}
-          style={[inp(c.text, FS_BODY, { flex: true }), { paddingTop: 4, paddingLeft: 6 }]}
-          placeholder="Right column…"
-          placeholderTextColor={phColor}
-          multiline
-        />
+        <Region
+          field={{ kind: 'leftContent' }}
+          style={{ flex: 1, borderRightWidth: StyleSheet.hairlineWidth, borderRightColor: c.secondary + '80', paddingRight: 6 }}
+        >
+          <PlaceholderText
+            value={content.leftContent}
+            placeholder="Left column…"
+            style={{ fontSize: FS_BODY, color: bodyColor }}
+            numberOfLines={8}
+          />
+        </Region>
+        <Region field={{ kind: 'rightContent' }} style={{ flex: 1, paddingLeft: 6 }}>
+          <PlaceholderText
+            value={content.rightContent}
+            placeholder="Right column…"
+            style={{ fontSize: FS_BODY, color: bodyColor }}
+            numberOfLines={8}
+          />
+        </Region>
       </View>
     </View>
   );
 
   const renderImageSide = (imageLeft: boolean) => {
     const imageArea = (
-      <TouchableOpacity
-        onPress={pickImage}
-        activeOpacity={0.78}
+      <Region
+        field={{ kind: 'image' }}
         style={[styles.imagePicker, { backgroundColor: c.secondary + '28' }]}
       >
         {content.imageUri ? (
@@ -241,31 +220,31 @@ export const InteractiveSlideCanvas: React.FC<InteractiveSlideCanvasProps> = ({
             contentFit="cover"
           />
         ) : (
-          <>
+          <View style={{ alignItems: 'center', gap: 4 }}>
             <ImagePlus size={20} color={c.primary} strokeWidth={1.5} />
             <Text style={[styles.imagePickerLabel, { color: c.primary }]}>Tap to add image</Text>
-          </>
+          </View>
         )}
-      </TouchableOpacity>
+      </Region>
     );
     const textArea = (
       <View style={{ flex: 1, gap: 5 }}>
-        <TextInput
-          value={content.title ?? ''}
-          onChangeText={v => onChange({ title: v })}
-          style={inp(c.primary, FS_TITLE - 2, { bold: true })}
-          placeholder="Title"
-          placeholderTextColor={phColor}
-          multiline
-        />
-        <TextInput
-          value={content.body ?? ''}
-          onChangeText={v => onChange({ body: v })}
-          style={inp(c.text, FS_BODY, { flex: true })}
-          placeholder="Description…"
-          placeholderTextColor={phColor}
-          multiline
-        />
+        <Region field={{ kind: 'title' }}>
+          <PlaceholderText
+            value={content.title}
+            placeholder="Title"
+            style={{ fontSize: FS_TITLE - 2, fontWeight: '700', color: c.primary }}
+            numberOfLines={2}
+          />
+        </Region>
+        <Region field={{ kind: 'body' }} style={{ flex: 1 }}>
+          <PlaceholderText
+            value={content.body}
+            placeholder="Description…"
+            style={{ fontSize: FS_BODY, color: bodyColor }}
+            numberOfLines={6}
+          />
+        </Region>
       </View>
     );
     return (
@@ -280,266 +259,304 @@ export const InteractiveSlideCanvas: React.FC<InteractiveSlideCanvasProps> = ({
     const statColor = c.accent === '#FFFFFF' ? c.secondary : c.accent;
     return (
       <View style={styles.centered}>
-        <TextInput
-          value={content.title ?? ''}
-          onChangeText={v => onChange({ title: v })}
-          style={[inp(c.secondary, FS_SMALL, { center: true }), { marginBottom: 6, opacity: 0.85 }]}
-          placeholder="Section Label"
-          placeholderTextColor={phColor}
-        />
-        <TextInput
-          value={content.stat?.value ?? ''}
-          onChangeText={v => onChange({ stat: { value: v, label: content.stat?.label ?? '' } })}
-          style={inp(statColor, FS_STAT, { bold: true, center: true })}
-          placeholder="94%"
-          placeholderTextColor={phColor}
-          keyboardType="default"
-        />
-        <TextInput
-          value={content.stat?.label ?? ''}
-          onChangeText={v => onChange({ stat: { value: content.stat?.value ?? '', label: v } })}
-          style={[inp(c.textOnDark, FS_BODY, { center: true }), { marginTop: 4 }]}
-          placeholder="Stat label"
-          placeholderTextColor={phColor}
-        />
-        <TextInput
-          value={content.footnote ?? ''}
-          onChangeText={v => onChange({ footnote: v })}
-          style={[inp(c.secondary, FS_SMALL, { center: true, italic: true }), { marginTop: 8, opacity: 0.6 }]}
-          placeholder="Source (optional)"
-          placeholderTextColor={phColor}
-        />
+        <Region field={{ kind: 'title' }} style={styles.regionCenter}>
+          <PlaceholderText
+            value={content.title}
+            placeholder="Section Label"
+            style={{
+              fontSize: FS_SMALL,
+              color: c.secondary,
+              textAlign: 'center',
+              opacity: 0.85,
+            }}
+          />
+        </Region>
+        <Region field={{ kind: 'statValue' }} style={styles.regionCenter}>
+          <PlaceholderText
+            value={content.stat?.value}
+            placeholder="94%"
+            style={{
+              fontSize: FS_STAT,
+              fontWeight: '700',
+              color: statColor,
+              textAlign: 'center',
+              lineHeight: FS_STAT * 1.05,
+            }}
+          />
+        </Region>
+        <Region field={{ kind: 'statLabel' }} style={styles.regionCenter}>
+          <PlaceholderText
+            value={content.stat?.label}
+            placeholder="Stat label"
+            style={{ fontSize: FS_BODY, color: c.textOnDark, textAlign: 'center' }}
+          />
+        </Region>
+        <Region field={{ kind: 'footnote' }} style={styles.regionCenter}>
+          <PlaceholderText
+            value={content.footnote}
+            placeholder="Source (optional)"
+            style={{
+              fontSize: FS_SMALL,
+              color: c.secondary,
+              textAlign: 'center',
+              fontStyle: 'italic',
+              opacity: 0.7,
+            }}
+          />
+        </Region>
       </View>
     );
   };
 
   const renderTimeline = () => (
     <View style={styles.full}>
-      <TextInput
-        value={content.title ?? ''}
-        onChangeText={v => onChange({ title: v })}
-        style={[inp(c.primary, FS_TITLE, { bold: true }), { marginBottom: 6 }]}
-        placeholder="Timeline Title"
-        placeholderTextColor={phColor}
-      />
-      <ScrollView style={{ flex: 1 }} showsVerticalScrollIndicator={false} bounces={false}>
-        {(content.timelineItems ?? []).map((item, i) => {
-          const dotColor = c.accent === '#FFFFFF' ? c.secondary : c.accent;
-          return (
-            <View key={i} style={styles.timelineRow}>
-              <View style={[styles.timelineDot, { backgroundColor: dotColor }]} />
-              <TextInput
-                value={item.year}
-                onChangeText={v => {
-                  const next = [...(content.timelineItems ?? [])];
-                  next[i] = { ...next[i], year: v };
-                  onChange({ timelineItems: next });
-                }}
-                style={[inp(c.primary, FS_SMALL, { bold: true }), { width: 36 }]}
-                placeholder="Year"
-                placeholderTextColor={phColor}
-                keyboardType="numeric"
-              />
-              <TextInput
-                value={item.event}
-                onChangeText={v => {
-                  const next = [...(content.timelineItems ?? [])];
-                  next[i] = { ...next[i], event: v };
-                  onChange({ timelineItems: next });
-                }}
-                style={[inp(c.text, FS_SMALL), { flex: 1 }]}
-                placeholder="Event"
-                placeholderTextColor={phColor}
-              />
-              <TouchableOpacity
-                onPress={() =>
-                  onChange({
-                    timelineItems: (content.timelineItems ?? []).filter((_, j) => j !== i),
-                  })
-                }
-                hitSlop={8}
-              >
-                <Text style={styles.deleteX}>✕</Text>
-              </TouchableOpacity>
-            </View>
-          );
-        })}
-        <TouchableOpacity
-          onPress={() =>
-            onChange({ timelineItems: [...(content.timelineItems ?? []), { year: '', event: '' }] })
-          }
-          style={styles.addBtn}
-        >
-          <Text style={[styles.addBtnText, { color: c.primary }]}>+ Add event</Text>
-        </TouchableOpacity>
-      </ScrollView>
+      <Region field={{ kind: 'title' }}>
+        <PlaceholderText
+          value={content.title}
+          placeholder="Timeline Title"
+          style={{ fontSize: FS_TITLE, fontWeight: '700', color: c.primary }}
+        />
+      </Region>
+      <Region field={{ kind: 'timeline' }} style={{ flex: 1, marginTop: 5 }}>
+        <View style={{ gap: 4 }}>
+          {(content.timelineItems ?? []).map((item, i) => {
+            const dotColor = c.accent === '#FFFFFF' ? c.secondary : c.accent;
+            return (
+              <View key={i} style={styles.timelineRow}>
+                <View style={[styles.timelineDot, { backgroundColor: dotColor }]} />
+                <PlaceholderText
+                  value={item.year}
+                  placeholder="Year"
+                  style={{ fontSize: FS_SMALL, fontWeight: '700', color: c.primary, width: 36 }}
+                />
+                <PlaceholderText
+                  value={item.event}
+                  placeholder="Event"
+                  style={{ flex: 1, fontSize: FS_SMALL, color: bodyColor }}
+                  numberOfLines={2}
+                />
+              </View>
+            );
+          })}
+          {(content.timelineItems ?? []).length === 0 ? (
+            <Text style={{ fontSize: FS_SMALL, color: phColor }}>
+              Tap here to add timeline events
+            </Text>
+          ) : null}
+        </View>
+      </Region>
     </View>
   );
 
   const renderQuote = () => (
     <View style={styles.centered}>
-      <Text style={{ fontSize: FS_STAT * 0.7, color: c.secondary, fontWeight: '700', lineHeight: FS_STAT * 0.6 }}>“</Text>
-      <TextInput
-        value={content.body ?? ''}
-        onChangeText={v => onChange({ body: v })}
-        style={[inp(c.textOnDark, FS_SUBTITLE, { center: true, italic: true })]}
-        placeholder="Type a memorable quote…"
-        placeholderTextColor={phColor}
-        multiline
-      />
+      <Text
+        style={{
+          fontSize: FS_STAT * 0.7,
+          color: c.secondary,
+          fontWeight: '700',
+          lineHeight: FS_STAT * 0.6,
+        }}
+      >
+        “
+      </Text>
+      <Region field={{ kind: 'body' }} style={styles.regionCenter}>
+        <PlaceholderText
+          value={content.body}
+          placeholder="Type a memorable quote…"
+          style={{
+            fontSize: FS_SUBTITLE,
+            color: c.textOnDark,
+            textAlign: 'center',
+            fontStyle: 'italic',
+          }}
+          numberOfLines={4}
+        />
+      </Region>
       <View style={[styles.heroDivider, { backgroundColor: c.secondary }]} />
-      <TextInput
-        value={content.subtitle ?? ''}
-        onChangeText={v => onChange({ subtitle: v })}
-        style={inp(c.secondary, FS_SMALL, { center: true })}
-        placeholder="Attribution / author"
-        placeholderTextColor={phColor}
-      />
+      <Region field={{ kind: 'subtitle' }} style={styles.regionCenter}>
+        <PlaceholderText
+          value={content.subtitle}
+          placeholder="Attribution / author"
+          style={{ fontSize: FS_SMALL, color: c.secondary, textAlign: 'center' }}
+        />
+      </Region>
     </View>
   );
 
   const renderSectionDivider = () => (
     <View style={styles.full}>
       <View style={{ flex: 1, justifyContent: 'center' }}>
-        <TextInput
-          value={content.sectionNumber ?? ''}
-          onChangeText={v => onChange({ sectionNumber: v })}
-          style={inp(c.secondary, FS_STAT * 0.7, { bold: true })}
-          placeholder="01"
-          placeholderTextColor={phColor}
-          keyboardType="numbers-and-punctuation"
-        />
-        <TextInput
-          value={content.title ?? ''}
-          onChangeText={v => onChange({ title: v })}
-          style={[inp(c.textOnDark, FS_TITLE * 1.2, { bold: true }), { marginTop: 4 }]}
-          placeholder="Section Title"
-          placeholderTextColor={phColor}
-          multiline
-        />
-        <TextInput
-          value={content.subtitle ?? ''}
-          onChangeText={v => onChange({ subtitle: v })}
-          style={[inp(c.secondary, FS_SMALL), { marginTop: 4 }]}
-          placeholder="Optional description"
-          placeholderTextColor={phColor}
-        />
+        <Region field={{ kind: 'sectionNumber' }}>
+          <PlaceholderText
+            value={content.sectionNumber}
+            placeholder="01"
+            style={{
+              fontSize: FS_STAT * 0.7,
+              fontWeight: '700',
+              color: c.secondary,
+              lineHeight: FS_STAT * 0.75,
+            }}
+          />
+        </Region>
+        <Region field={{ kind: 'title' }}>
+          <PlaceholderText
+            value={content.title}
+            placeholder="Section Title"
+            style={{
+              fontSize: FS_TITLE * 1.2,
+              fontWeight: '700',
+              color: c.textOnDark,
+            }}
+            numberOfLines={2}
+          />
+        </Region>
+        <Region field={{ kind: 'subtitle' }}>
+          <PlaceholderText
+            value={content.subtitle}
+            placeholder="Optional description"
+            style={{ fontSize: FS_SMALL, color: c.secondary }}
+          />
+        </Region>
       </View>
     </View>
   );
 
-  // Reusable inline list editor (used by agenda + processSteps)
-  const renderList = (
-    items: string[],
-    onItems: (next: string[]) => void,
-    label: string,
-    numbered: boolean,
-  ) => (
-    <ScrollView style={{ flex: 1 }} showsVerticalScrollIndicator={false} bounces={false}>
-      {items.map((item, i) => (
-        <View key={i} style={styles.bulletRow}>
-          {numbered ? (
-            <View style={[styles.numBadge, { backgroundColor: c.accent === '#FFFFFF' ? c.secondary : c.accent }]}>
-              <Text style={styles.numBadgeText}>{i + 1}</Text>
-            </View>
-          ) : (
-            <View style={[styles.bulletDot, { backgroundColor: c.primary }]} />
-          )}
-          <TextInput
-            value={item}
-            onChangeText={val => {
-              const next = [...items];
-              next[i] = val;
-              onItems(next);
-            }}
-            style={[inp(c.text, FS_BODY), { flex: 1 }]}
-            placeholder={`${label} ${i + 1}`}
-            placeholderTextColor={phColor}
-          />
-          <TouchableOpacity onPress={() => onItems(items.filter((_, j) => j !== i))} hitSlop={8}>
-            <Text style={styles.deleteX}>✕</Text>
-          </TouchableOpacity>
-        </View>
-      ))}
-      <TouchableOpacity onPress={() => onItems([...items, ''])} style={styles.addBtn}>
-        <Text style={[styles.addBtnText, { color: c.primary }]}>+ Add {label.toLowerCase()}</Text>
-      </TouchableOpacity>
-    </ScrollView>
-  );
-
   const renderAgenda = () => (
     <View style={styles.full}>
-      <TextInput
-        value={content.title ?? ''}
-        onChangeText={v => onChange({ title: v })}
-        style={[inp(c.primary, FS_TITLE, { bold: true }), { marginBottom: 5 }]}
-        placeholder="Agenda"
-        placeholderTextColor={phColor}
-      />
-      <Divider color={c.primary} opacity={0.2} />
-      {renderList(content.bullets ?? [], next => onChange({ bullets: next }), 'Item', true)}
+      <Region field={{ kind: 'title' }}>
+        <PlaceholderText
+          value={content.title}
+          placeholder="Agenda"
+          style={{ fontSize: FS_TITLE, fontWeight: '700', color: c.primary }}
+        />
+      </Region>
+      <View style={[styles.divider, { backgroundColor: c.primary, opacity: 0.2 }]} />
+      <Region field={{ kind: 'bullets' }} style={{ flex: 1 }}>
+        <View style={{ gap: 4 }}>
+          {(content.bullets ?? []).map((b, i) => (
+            <View key={i} style={styles.bulletRow}>
+              <View
+                style={[
+                  styles.numBadge,
+                  { backgroundColor: c.accent === '#FFFFFF' ? c.secondary : c.accent },
+                ]}
+              >
+                <Text style={styles.numBadgeText}>{i + 1}</Text>
+              </View>
+              <PlaceholderText
+                value={b}
+                placeholder={`Item ${i + 1}`}
+                style={{ flex: 1, fontSize: FS_BODY, color: bodyColor }}
+                numberOfLines={1}
+              />
+            </View>
+          ))}
+          {(content.bullets ?? []).length === 0 ? (
+            <Text style={{ fontSize: FS_BODY, color: phColor }}>
+              Tap here to add agenda items
+            </Text>
+          ) : null}
+        </View>
+      </Region>
     </View>
   );
 
   const renderProcessSteps = () => (
     <View style={styles.full}>
-      <TextInput
-        value={content.title ?? ''}
-        onChangeText={v => onChange({ title: v })}
-        style={[inp(c.primary, FS_TITLE, { bold: true }), { marginBottom: 5 }]}
-        placeholder="Process"
-        placeholderTextColor={phColor}
-      />
-      <Divider color={c.primary} opacity={0.2} />
-      {renderList(content.steps ?? [], next => onChange({ steps: next }), 'Step', true)}
+      <Region field={{ kind: 'title' }}>
+        <PlaceholderText
+          value={content.title}
+          placeholder="Process"
+          style={{ fontSize: FS_TITLE, fontWeight: '700', color: c.primary }}
+        />
+      </Region>
+      <View style={[styles.divider, { backgroundColor: c.primary, opacity: 0.2 }]} />
+      <Region field={{ kind: 'steps' }} style={{ flex: 1 }}>
+        <View style={{ gap: 4 }}>
+          {(content.steps ?? []).map((s, i) => (
+            <View key={i} style={styles.bulletRow}>
+              <View
+                style={[
+                  styles.numBadge,
+                  { backgroundColor: c.accent === '#FFFFFF' ? c.secondary : c.accent },
+                ]}
+              >
+                <Text style={styles.numBadgeText}>{i + 1}</Text>
+              </View>
+              <PlaceholderText
+                value={s}
+                placeholder={`Step ${i + 1}`}
+                style={{ flex: 1, fontSize: FS_BODY, color: bodyColor }}
+                numberOfLines={2}
+              />
+            </View>
+          ))}
+          {(content.steps ?? []).length === 0 ? (
+            <Text style={{ fontSize: FS_BODY, color: phColor }}>
+              Tap here to add process steps
+            </Text>
+          ) : null}
+        </View>
+      </Region>
     </View>
   );
 
   const renderComparison = () => (
     <View style={styles.full}>
-      <TextInput
-        value={content.title ?? ''}
-        onChangeText={v => onChange({ title: v })}
-        style={[inp(c.primary, FS_TITLE, { bold: true }), { marginBottom: 5 }]}
-        placeholder="Comparison Title"
-        placeholderTextColor={phColor}
-      />
-      <Divider color={c.primary} opacity={0.2} />
+      <Region field={{ kind: 'title' }}>
+        <PlaceholderText
+          value={content.title}
+          placeholder="Comparison Title"
+          style={{ fontSize: FS_TITLE, fontWeight: '700', color: c.primary }}
+        />
+      </Region>
+      <View style={[styles.divider, { backgroundColor: c.primary, opacity: 0.2 }]} />
       <View style={styles.columns}>
         <View style={{ flex: 1, paddingRight: 5 }}>
-          <TextInput
-            value={content.leftTitle ?? ''}
-            onChangeText={v => onChange({ leftTitle: v })}
-            style={[inp(c.primary, FS_SMALL, { bold: true, center: true }), { marginBottom: 3 }]}
-            placeholder="Option A"
-            placeholderTextColor={phColor}
-          />
-          <TextInput
-            value={content.leftContent ?? ''}
-            onChangeText={v => onChange({ leftContent: v })}
-            style={inp(c.text, FS_SMALL, { flex: true })}
-            placeholder="Pros / details…"
-            placeholderTextColor={phColor}
-            multiline
-          />
+          <Region field={{ kind: 'leftTitle' }}>
+            <PlaceholderText
+              value={content.leftTitle}
+              placeholder="Option A"
+              style={{
+                fontSize: FS_SMALL,
+                fontWeight: '700',
+                color: c.primary,
+                textAlign: 'center',
+              }}
+            />
+          </Region>
+          <Region field={{ kind: 'leftContent' }} style={{ flex: 1, marginTop: 3 }}>
+            <PlaceholderText
+              value={content.leftContent}
+              placeholder="Pros / details…"
+              style={{ fontSize: FS_SMALL, color: bodyColor }}
+              numberOfLines={6}
+            />
+          </Region>
         </View>
         <View style={{ width: StyleSheet.hairlineWidth, backgroundColor: c.secondary + '80' }} />
         <View style={{ flex: 1, paddingLeft: 5 }}>
-          <TextInput
-            value={content.rightTitle ?? ''}
-            onChangeText={v => onChange({ rightTitle: v })}
-            style={[inp(c.primary, FS_SMALL, { bold: true, center: true }), { marginBottom: 3 }]}
-            placeholder="Option B"
-            placeholderTextColor={phColor}
-          />
-          <TextInput
-            value={content.rightContent ?? ''}
-            onChangeText={v => onChange({ rightContent: v })}
-            style={inp(c.text, FS_SMALL, { flex: true })}
-            placeholder="Pros / details…"
-            placeholderTextColor={phColor}
-            multiline
-          />
+          <Region field={{ kind: 'rightTitle' }}>
+            <PlaceholderText
+              value={content.rightTitle}
+              placeholder="Option B"
+              style={{
+                fontSize: FS_SMALL,
+                fontWeight: '700',
+                color: c.primary,
+                textAlign: 'center',
+              }}
+            />
+          </Region>
+          <Region field={{ kind: 'rightContent' }} style={{ flex: 1, marginTop: 3 }}>
+            <PlaceholderText
+              value={content.rightContent}
+              placeholder="Pros / details…"
+              style={{ fontSize: FS_SMALL, color: bodyColor }}
+              numberOfLines={6}
+            />
+          </Region>
         </View>
       </View>
     </View>
@@ -556,20 +573,34 @@ export const InteractiveSlideCanvas: React.FC<InteractiveSlideCanvasProps> = ({
   const renderLayout = () => {
     switch (layout) {
       case 'title':
-      case 'closing':      return renderTitle();
-      case 'titleContent': return renderTitleContent();
-      case 'twoColumn':    return renderTwoColumn();
-      case 'imageLeft':    return renderImageSide(true);
-      case 'imageRight':   return renderImageSide(false);
-      case 'statHighlight':return renderStat();
-      case 'timeline':     return renderTimeline();
-      case 'quote':        return renderQuote();
-      case 'sectionDivider': return renderSectionDivider();
-      case 'agenda':       return renderAgenda();
-      case 'comparison':   return renderComparison();
-      case 'processSteps': return renderProcessSteps();
-      case 'blank':        return renderBlank();
-      default:             return renderTitleContent();
+      case 'closing':
+        return renderTitle();
+      case 'titleContent':
+        return renderTitleContent();
+      case 'twoColumn':
+        return renderTwoColumn();
+      case 'imageLeft':
+        return renderImageSide(true);
+      case 'imageRight':
+        return renderImageSide(false);
+      case 'statHighlight':
+        return renderStat();
+      case 'timeline':
+        return renderTimeline();
+      case 'quote':
+        return renderQuote();
+      case 'sectionDivider':
+        return renderSectionDivider();
+      case 'agenda':
+        return renderAgenda();
+      case 'comparison':
+        return renderComparison();
+      case 'processSteps':
+        return renderProcessSteps();
+      case 'blank':
+        return renderBlank();
+      default:
+        return renderTitleContent();
     }
   };
 
@@ -580,13 +611,8 @@ export const InteractiveSlideCanvas: React.FC<InteractiveSlideCanvasProps> = ({
         { width: CANVAS_W, height: CANVAS_H, backgroundColor: bgColor },
       ]}
     >
-      {/* Accent left bar */}
       <View style={[styles.accentBar, { backgroundColor: c.primary }]} />
-
-      {/* Editable content area */}
-      <View style={styles.inner}>
-        {renderLayout()}
-      </View>
+      <View style={styles.inner}>{renderLayout()}</View>
     </View>
   );
 };
@@ -610,36 +636,40 @@ const styles = StyleSheet.create({
     padding: INNER_PAD,
   },
 
-  // Layout containers
   centered: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    gap: 6,
+    gap: 4,
   },
+  regionCenter: { alignSelf: 'stretch', alignItems: 'center' },
   full: { flex: 1 },
   columns: { flex: 1, flexDirection: 'row', paddingTop: 5 },
 
-  // Hero title divider
+  region: {
+    borderRadius: 4,
+    borderWidth: 1,
+    borderColor: 'transparent',
+    paddingHorizontal: 2,
+    paddingVertical: 1,
+  },
+
   heroDivider: {
     width: 40,
     height: 2,
     borderRadius: 1,
     marginVertical: 6,
   },
-
-  // Content divider
   divider: {
     height: StyleSheet.hairlineWidth,
     marginBottom: 5,
+    marginTop: 2,
   },
 
-  // Bullets
   bulletRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    marginBottom: 4,
   },
   bulletDot: {
     width: 5,
@@ -658,40 +688,23 @@ const styles = StyleSheet.create({
     fontSize: 9,
     fontWeight: '700',
   },
-  deleteX: {
-    color: '#EF4444',
-    fontSize: 11,
-    fontWeight: '700',
-  },
-  addBtn: {
-    paddingVertical: 3,
-    alignSelf: 'flex-start',
-  },
-  addBtnText: {
-    fontSize: FS_SMALL,
-    fontWeight: '600',
-  },
 
-  // Image picker
   imagePicker: {
     flex: 1,
     borderRadius: 4,
     overflow: 'hidden',
     justifyContent: 'center',
     alignItems: 'center',
-    gap: 4,
   },
   imagePickerLabel: {
     fontSize: 9,
     fontWeight: '600',
   },
 
-  // Timeline
   timelineRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    marginBottom: 5,
   },
   timelineDot: {
     width: 6,
@@ -699,7 +712,6 @@ const styles = StyleSheet.create({
     borderRadius: 3,
   },
 
-  // Blank
   blankMsg: {
     fontSize: 11,
     fontStyle: 'italic',

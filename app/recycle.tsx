@@ -31,6 +31,9 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { AppHeaderContainer } from "@/components/AppHeaderContainer";
+import { GradientView } from "@/components/GradientView";
+import { colors as brandColors } from "@/constants/theme";
 
 export default function RecycleBinScreen() {
   const router = useRouter();
@@ -183,23 +186,32 @@ export default function RecycleBinScreen() {
 
   return (
     <SafeAreaView style={[styles.safe, { backgroundColor: t.background }]}>
-      {/* Header */}
-      <View style={[styles.header, { borderBottomColor: t.border }]}>
-        <TouchableOpacity
-          onPress={() => router.back()}
-          style={[styles.backBtn, { backgroundColor: t.surface }]}
+      {/* ─── Gradient Header ─── */}
+      <AppHeaderContainer>
+        <GradientView
+          colors={[
+            brandColors.gradientStart,
+            brandColors.gradientMid,
+            brandColors.gradientEnd,
+          ]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={styles.header}
         >
-          <ArrowLeft size={20} color={t.text} />
-        </TouchableOpacity>
-        <Text style={[styles.headerTitle, { color: t.text }]}>Recycle Bin</Text>
-        {files.length > 0 && (
-          <TouchableOpacity onPress={handleEmptyAll}>
-            <Text style={[styles.emptyAllText, { color: t.error }]}>
-              Empty All
-            </Text>
+          <TouchableOpacity
+            onPress={() => router.back()}
+            style={styles.backBtn}
+          >
+            <ArrowLeft size={20} color="#FFFFFF" />
           </TouchableOpacity>
-        )}
-      </View>
+          <Text style={styles.headerTitle}>Recycle Bin</Text>
+          {files.length > 0 && (
+            <TouchableOpacity onPress={handleEmptyAll} style={styles.emptyAllBtn}>
+              <Text style={styles.emptyAllText}>Empty All</Text>
+            </TouchableOpacity>
+          )}
+        </GradientView>
+      </AppHeaderContainer>
 
       {loading ? (
         <View style={styles.center}>
@@ -239,9 +251,8 @@ const styles = StyleSheet.create({
   header: {
     flexDirection: "row",
     alignItems: "center",
-    paddingHorizontal: 16,
+    paddingHorizontal: 12,
     paddingVertical: 12,
-    borderBottomWidth: 1,
   },
   backBtn: {
     width: 36,
@@ -249,16 +260,25 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     justifyContent: "center",
     alignItems: "center",
+    backgroundColor: "rgba(255,255,255,0.2)",
   },
   headerTitle: {
     flex: 1,
     fontSize: 20,
     fontWeight: "700",
     marginLeft: 12,
+    color: "#FFFFFF",
+  },
+  emptyAllBtn: {
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 10,
+    backgroundColor: "rgba(255,255,255,0.22)",
   },
   emptyAllText: {
     fontSize: 14,
-    fontWeight: "600",
+    fontWeight: "700",
+    color: "#FFFFFF",
   },
   center: {
     flex: 1,

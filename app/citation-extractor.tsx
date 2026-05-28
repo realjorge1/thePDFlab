@@ -33,6 +33,9 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { AppHeaderContainer } from "@/components/AppHeaderContainer";
+import { GradientView } from "@/components/GradientView";
+import { colors as brandColors } from "@/constants/theme";
 
 const STYLES = [
   { key: "apa", label: "APA 7th" },
@@ -308,20 +311,24 @@ export default function CitationExtractorScreen() {
     <SafeAreaView
       style={[styles.safe, { backgroundColor: t.settingsBg }]}
     >
-      <View
-        style={[
-          styles.header,
-          { backgroundColor: t.card, borderBottomColor: t.border },
-        ]}
-      >
-        <Pressable onPress={() => router.back()} style={styles.backBtn}>
-          <ArrowLeft size={24} color={t.text} />
-        </Pressable>
-        <Text style={[styles.headerTitle, { color: t.text }]}>
-          Citation Extractor
-        </Text>
-        <View style={{ width: 40 }} />
-      </View>
+      <AppHeaderContainer>
+        <GradientView
+          colors={[
+            brandColors.gradientStart,
+            brandColors.gradientMid,
+            brandColors.gradientEnd,
+          ]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={styles.header}
+        >
+          <Pressable onPress={() => router.back()} style={styles.backBtn}>
+            <ArrowLeft size={22} color="#FFFFFF" />
+          </Pressable>
+          <Text style={styles.headerTitle}>Citation Extractor</Text>
+          <View style={{ width: 38 }} />
+        </GradientView>
+      </AppHeaderContainer>
 
       <ScrollView contentContainerStyle={styles.content}>
         {/* File Picker */}
@@ -477,12 +484,18 @@ const styles = StyleSheet.create({
   header: {
     flexDirection: "row",
     alignItems: "center",
-    paddingHorizontal: 16,
+    paddingHorizontal: 12,
     paddingVertical: 12,
-    borderBottomWidth: 1,
   },
-  backBtn: { width: 40, alignItems: "flex-start" },
-  headerTitle: { flex: 1, textAlign: "center", fontSize: 18, fontWeight: "700" },
+  backBtn: {
+    width: 38,
+    height: 38,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(255,255,255,0.2)",
+  },
+  headerTitle: { flex: 1, textAlign: "center", fontSize: 18, fontWeight: "700", color: "#FFFFFF" },
   content: { paddingHorizontal: 10, paddingTop: 16, paddingBottom: 40 },
   filePicker: {
     flexDirection: "row",

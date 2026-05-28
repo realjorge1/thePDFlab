@@ -16,7 +16,11 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import * as DocumentPicker from 'expo-document-picker';
+import { useRouter } from 'expo-router';
 import { useTheme } from '@/services/ThemeProvider';
+import { AppHeaderContainer } from '@/components/AppHeaderContainer';
+import { GradientView } from '@/components/GradientView';
+import { colors as brandColors } from '@/constants/theme';
 import { openPPTX, toPPTPresentation } from '../../services/pptxEditor.service';
 import { usePPTEditor } from '../../hooks/usePPTEditor';
 import { useExportPPT } from '../../hooks/useExportPPT';
@@ -40,6 +44,7 @@ export const PPTOpenEditScreen: React.FC<PPTOpenEditScreenProps> = ({
   onGoBack,
 }) => {
   const { colors: t } = useTheme();
+  const router = useRouter();
   const [screenState, setScreenState] = useState<ScreenState>('pick');
   const [loadError, setLoadError] = useState<string | null>(null);
   const [exportModalVisible, setExportModalVisible] = useState(false);
@@ -90,6 +95,28 @@ export const PPTOpenEditScreen: React.FC<PPTOpenEditScreenProps> = ({
     }
   }, [exporter, editor.presentation.title]);
 
+  // ─── View: route to the high-fidelity /ppt-viewer ─────
+  // The native SlideCard renderer can't reconstruct the original .pptx
+  // styling (colors, theme, shapes, layouts) — those are stripped by the
+  // text-only parser. The /ppt-viewer pipeline either server-renders to
+  // PDF or falls back to the offline HTML renderer that preserves theme
+  // colors, fills, fonts, alignment, bullets, etc.
+  const handleViewFile = useCallback(() => {
+    const path = editor.presentation.filePath;
+    if (!path) {
+      if (onViewPresentation) onViewPresentation(editor.presentation);
+      return;
+    }
+    const uri = path.startsWith('file://') ? path : `file://${path}`;
+    router.push({
+      pathname: '/ppt-viewer',
+      params: {
+        uri: encodeURIComponent(uri),
+        name: editor.presentation.title || 'Presentation',
+      },
+    });
+  }, [editor.presentation, router, onViewPresentation]);
+
   // ─── Pick screen ─────────────────────────
   if (screenState === 'pick') {
     return (
@@ -97,18 +124,27 @@ export const PPTOpenEditScreen: React.FC<PPTOpenEditScreenProps> = ({
         style={[styles.safe, { backgroundColor: t.background }]}
         edges={['top', 'bottom']}
       >
-        {/* Header */}
-        <View style={[styles.header, { backgroundColor: t.card, borderBottomColor: t.border }]}>
-          <TouchableOpacity
-            onPress={onGoBack}
-            hitSlop={10}
-            style={[styles.backBtn, { backgroundColor: t.backgroundSecondary }]}
+        {/* ─── Gradient Header ─── */}
+        <AppHeaderContainer>
+          <GradientView
+            colors={[brandColors.gradientStart, brandColors.gradientMid, brandColors.gradientEnd]}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={styles.gradientHeader}
           >
-            <ArrowLeft size={18} color={t.text} strokeWidth={2.2} />
-          </TouchableOpacity>
-          <Text style={[styles.headerTitle, { color: t.text }]}>Open & Re-theme</Text>
-          <View style={{ width: 34 }} />
-        </View>
+            <View style={styles.headerRow}>
+              <TouchableOpacity
+                onPress={onGoBack}
+                hitSlop={10}
+                style={styles.gradientIconBtn}
+              >
+                <ArrowLeft size={18} color="#FFFFFF" strokeWidth={2.2} />
+              </TouchableOpacity>
+              <Text style={styles.headerTitle} numberOfLines={1}>Open & Re-theme</Text>
+              <View style={{ width: 34 }} />
+            </View>
+          </GradientView>
+        </AppHeaderContainer>
 
         <View style={styles.pickContainer}>
           <View style={[styles.pickIllustration, { backgroundColor: t.backgroundSecondary }]}>
@@ -161,38 +197,46 @@ export const PPTOpenEditScreen: React.FC<PPTOpenEditScreenProps> = ({
       style={[styles.safe, { backgroundColor: t.background }]}
       edges={['top', 'bottom']}
     >
-      {/* Header */}
-      <View style={[styles.header, { backgroundColor: t.card, borderBottomColor: t.border }]}>
-        <TouchableOpacity
-          onPress={() => setScreenState('pick')}
-          hitSlop={10}
-          style={[styles.backBtn, { backgroundColor: t.backgroundSecondary }]}
+      {/* ─── Gradient Header ─── */}
+      <AppHeaderContainer>
+        <GradientView
+          colors={[brandColors.gradientStart, brandColors.gradientMid, brandColors.gradientEnd]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={styles.gradientHeader}
         >
-          <ArrowLeft size={18} color={t.text} strokeWidth={2.2} />
-        </TouchableOpacity>
-        <Text style={[styles.headerTitle, { color: t.text }]} numberOfLines={1}>
-          {editor.presentation.title}
-        </Text>
-        <View style={styles.headerActions}>
-          {onViewPresentation && (
+          <View style={styles.headerRow}>
             <TouchableOpacity
-              onPress={() => onViewPresentation(editor.presentation)}
-              style={[styles.viewBtn, { borderColor: t.border, backgroundColor: t.backgroundSecondary }]}
+              onPress={() => setScreenState('pick')}
+              hitSlop={10}
+              style={styles.gradientIconBtn}
             >
-              <Eye size={14} color={t.text} strokeWidth={2} />
-              <Text style={[styles.viewBtnText, { color: t.text }]}>View</Text>
+              <ArrowLeft size={18} color="#FFFFFF" strokeWidth={2.2} />
             </TouchableOpacity>
-          )}
-          <TouchableOpacity
-            style={[styles.exportBtn, { backgroundColor: pptTheme.colors.primary }]}
-            onPress={handleExport}
-            activeOpacity={0.85}
-          >
-            <Upload size={14} color="#FFFFFF" strokeWidth={2.5} />
-            <Text style={styles.exportBtnText}>Export</Text>
-          </TouchableOpacity>
-        </View>
-      </View>
+            <Text style={styles.headerTitle} numberOfLines={1}>
+              {editor.presentation.title}
+            </Text>
+            <View style={styles.headerActions}>
+              <TouchableOpacity
+                onPress={handleViewFile}
+                style={styles.viewBtn}
+                activeOpacity={0.85}
+              >
+                <Eye size={14} color="#FFFFFF" strokeWidth={2} />
+                <Text style={styles.viewBtnText}>View</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.exportBtn}
+                onPress={handleExport}
+                activeOpacity={0.85}
+              >
+                <Upload size={14} color="#FFFFFF" strokeWidth={2.5} />
+                <Text style={styles.exportBtnText}>Export</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </GradientView>
+      </AppHeaderContainer>
 
       <ScrollView
         style={styles.flex}
@@ -278,27 +322,31 @@ const styles = StyleSheet.create({
   safe: { flex: 1 },
   flex: { flex: 1 },
 
-  // Header
-  header: {
+  // Gradient header (matches app signature header style)
+  gradientHeader: {
+    paddingBottom: 12,
+  },
+  headerRow: {
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 12,
-    paddingVertical: 10,
-    borderBottomWidth: StyleSheet.hairlineWidth,
+    paddingTop: 12,
     gap: 10,
   },
-  backBtn: {
+  gradientIconBtn: {
     width: 34,
     height: 34,
     borderRadius: 10,
     alignItems: 'center',
     justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.2)',
   },
   headerTitle: {
     flex: 1,
     fontSize: 16,
     fontWeight: '700',
     letterSpacing: -0.2,
+    color: '#FFFFFF',
   },
   headerActions: {
     flexDirection: 'row',
@@ -310,10 +358,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 7,
     borderRadius: 10,
-    borderWidth: 1,
     gap: 4,
+    backgroundColor: 'rgba(255,255,255,0.18)',
   },
-  viewBtnText: { fontSize: 13, fontWeight: '600' },
+  viewBtnText: { fontSize: 13, fontWeight: '600', color: '#FFFFFF' },
   exportBtn: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -321,6 +369,7 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     borderRadius: 10,
     gap: 5,
+    backgroundColor: 'rgba(255,255,255,0.25)',
   },
   exportBtnText: { color: '#FFFFFF', fontWeight: '700', fontSize: 13 },
 

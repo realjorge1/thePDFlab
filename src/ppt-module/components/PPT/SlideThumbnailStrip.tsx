@@ -166,7 +166,6 @@ const styles = StyleSheet.create({
   addCard: {
     borderRadius: 7,
     borderWidth: 1.5,
-    borderStyle: 'dashed',
     alignItems: 'center',
     justifyContent: 'center',
   },

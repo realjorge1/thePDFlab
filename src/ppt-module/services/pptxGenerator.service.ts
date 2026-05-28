@@ -1075,10 +1075,20 @@ export async function generatePPTX(
         ? RNFS.DocumentDirectoryPath
         : RNFS.ExternalDirectoryPath ?? RNFS.DocumentDirectoryPath;
 
-    const safeName = presentation.title
-      .replace(/[^a-z0-9]/gi, '_')
-      .toLowerCase();
-    const fileName = `${safeName}_${Date.now()}.pptx`;
+    // Filename mirrors the user-given title. Strip only filesystem-illegal
+    // characters; preserve case and spaces so "Stories" stays "Stories.pptx".
+    const baseName =
+      presentation.title
+        .replace(/[<>:"/\\|?*\x00-\x1f]/g, '')
+        .replace(/\s+/g, ' ')
+        .trim() || 'Presentation';
+
+    let fileName = `${baseName}.pptx`;
+    let suffix = 1;
+    while (await RNFS.exists(`${dir}/${fileName}`)) {
+      fileName = `${baseName} (${suffix}).pptx`;
+      suffix += 1;
+    }
     const filePath = `${dir}/${fileName}`;
 
     await RNFS.writeFile(filePath, base64 as string, 'base64');

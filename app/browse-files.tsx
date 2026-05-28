@@ -30,6 +30,9 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { AppHeaderContainer } from "@/components/AppHeaderContainer";
+import { GradientView } from "@/components/GradientView";
+import { colors as brandColors } from "@/constants/theme";
 
 /**
  * Browse Files Screen
@@ -474,46 +477,52 @@ export default function BrowseFilesScreen() {
       style={[styles.container, { backgroundColor }]}
       edges={["top"]}
     >
-      {/* Header */}
-      <View style={[styles.header, { borderBottomColor: textColor + "20" }]}>
-        <TouchableOpacity
-          style={styles.backButton}
-          onPress={() => router.back()}
+      {/* ─── Gradient Header ─── */}
+      <AppHeaderContainer>
+        <GradientView
+          colors={[
+            brandColors.gradientStart,
+            brandColors.gradientMid,
+            brandColors.gradientEnd,
+          ]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={styles.header}
         >
-          <ChevronLeft size={24} color={textColor} />
-        </TouchableOpacity>
-        <View style={styles.headerContent}>
-          <Text style={[styles.headerTitle, { color: textColor }]}>
-            Browse Files
-          </Text>
-          {folder && (
-            <Text
-              style={[styles.folderName, { color: textColor + "80" }]}
-              numberOfLines={1}
-            >
-              📂 {folder.name}
-            </Text>
-          )}
-        </View>
-        <TouchableOpacity
-          style={styles.headerButton}
-          onPress={handlePickFile}
-          disabled={isImporting}
-        >
-          <FileText
-            size={22}
-            color={isImporting ? textColor + "40" : primaryColor}
-          />
-        </TouchableOpacity>
-        {folder && (
+          <TouchableOpacity
+            style={styles.backButton}
+            onPress={() => router.back()}
+          >
+            <ChevronLeft size={24} color="#FFFFFF" />
+          </TouchableOpacity>
+          <View style={styles.headerContent}>
+            <Text style={styles.headerTitle}>Browse Files</Text>
+            {folder && (
+              <Text style={styles.folderName} numberOfLines={1}>
+                📂 {folder.name}
+              </Text>
+            )}
+          </View>
           <TouchableOpacity
             style={styles.headerButton}
-            onPress={handleOpenFolder}
+            onPress={handlePickFile}
+            disabled={isImporting}
           >
-            <FolderOpen size={22} color={primaryColor} />
+            <FileText
+              size={22}
+              color={isImporting ? "rgba(255,255,255,0.4)" : "#FFFFFF"}
+            />
           </TouchableOpacity>
-        )}
-      </View>
+          {folder && (
+            <TouchableOpacity
+              style={styles.headerButton}
+              onPress={handleOpenFolder}
+            >
+              <FolderOpen size={22} color="#FFFFFF" />
+            </TouchableOpacity>
+          )}
+        </GradientView>
+      </AppHeaderContainer>
 
       {/* Error Banner */}
       {error && (
@@ -584,9 +593,8 @@ const styles = StyleSheet.create({
   header: {
     flexDirection: "row",
     alignItems: "center",
-    paddingHorizontal: 16,
+    paddingHorizontal: 12,
     paddingVertical: 12,
-    borderBottomWidth: 1,
   },
   backButton: {
     padding: 4,
@@ -597,11 +605,13 @@ const styles = StyleSheet.create({
   },
   headerTitle: {
     fontSize: 20,
-    fontWeight: "600",
+    fontWeight: "700",
+    color: "#FFFFFF",
   },
   folderName: {
     fontSize: 13,
     marginTop: 2,
+    color: "rgba(255,255,255,0.8)",
   },
   headerButton: {
     padding: 8,

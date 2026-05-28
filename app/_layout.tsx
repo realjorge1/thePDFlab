@@ -37,6 +37,7 @@ import { ReturnCardOverlay } from "@/components/ScheduledTasks";
 import { SubscriptionProvider } from "@/context/SubscriptionContext";
 import { useScheduledTasks } from "@/hooks/useScheduledTasks";
 import { wakeUpBackend } from "@/config/api";
+import { initAIProvider } from "@/services/ai";
 import { initKeepAlive } from "@/services/backendKeepAlive";
 import { setPendingGeneration } from "@/services/generatedDocStore";
 import type { ScheduledTask } from "@/services/scheduledTasks";
@@ -103,7 +104,13 @@ export default function RootLayout() {
     // Run background startup tasks in parallel with font loading
     // Wake Render backend while the app initialises (cold starts take ~60s).
     // initKeepAlive then keeps it warm with a silent ping every 10 minutes.
-    wakeUpBackend().catch(() => {});
+    // Once the backend responds, probe it so AI swaps off the mock provider
+    // globally (every AI screen shares the same singleton provider).
+    wakeUpBackend()
+      .then((ok) => {
+        if (ok) return initAIProvider();
+      })
+      .catch(() => {});
     initKeepAlive();
 
     Promise.all([

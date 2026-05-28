@@ -10,6 +10,7 @@
  *   directly, converting content:// SAF URIs to a cached file:// path first.
  */
 
+import { AppHeaderContainer } from "@/components/AppHeaderContainer";
 import { GradientView } from "@/components/GradientView";
 import { colors } from "@/constants/theme";
 import { useFileIndex } from "@/hooks/useFileIndex";
@@ -32,7 +33,6 @@ import {
   ActivityIndicator,
   Dimensions,
   Modal,
-  Platform,
   Pressable,
   RefreshControl,
   ScrollView,
@@ -447,10 +447,10 @@ export default function ShareScreen() {
   // ── Main render ────────────────────────────────────────────────────────────
   return (
     <SafeAreaView style={[styles.container, { backgroundColor }]}>
-        {/* Header */}
-        <View style={styles.headerContainer}>
+        {/* ─── Gradient Header ─── */}
+        <AppHeaderContainer style={styles.headerContainer}>
           <GradientView
-            colors={["#4F46E5", "#7C3AED", "#EC4899"]}
+            colors={[colors.gradientStart, colors.gradientMid, colors.gradientEnd]}
             start={{ x: 0, y: 0 }}
             end={{ x: 1, y: 1 }}
             style={styles.header}
@@ -498,7 +498,7 @@ export default function ShareScreen() {
               )}
             </View>
           </GradientView>
-        </View>
+        </AppHeaderContainer>
 
         {/* File count */}
         {!isLoading && filteredFiles.length > 0 && (
@@ -635,7 +635,7 @@ const styles = StyleSheet.create({
   },
   header: {
     paddingHorizontal: 20,
-    paddingTop: Platform.OS === "android" ? 20 : 16,
+    paddingTop: 16,
     paddingBottom: 18,
   },
   headerTop: {

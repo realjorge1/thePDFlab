@@ -4,6 +4,7 @@
 
 import { AppHeaderContainer } from "@/components/AppHeaderContainer";
 import { GradientView } from "@/components/GradientView";
+import { VoiceInputButton } from "@/components/VoiceInputButton";
 import { SCHEDULE_PENDING_KEY_PREFIX } from "@/app/schedule-task";
 import type { PendingScheduleData } from "@/app/schedule-task";
 import { colors as appColors } from "@/constants/theme";
@@ -607,6 +608,14 @@ export default function GenerateDocumentModal({
                     ]}>
                       {prompt.length} chars {prompt.trim().length > 10 ? "✓" : "(min 10)"}
                     </Text>
+                    <VoiceInputButton
+                      size={16}
+                      color={PURPLE_MID}
+                      disabled={isLoading}
+                      onTranscribed={(text) =>
+                        setPrompt((prev) => (prev ? `${prev} ${text}` : text))
+                      }
+                    />
                   </View>
                   <TextInput
                     style={[s.promptInput, { color: isDark ? "#F1F5F9" : "#0F172A" }]}

@@ -43,6 +43,9 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
+import { AppHeaderContainer } from "@/components/AppHeaderContainer";
+import { GradientView } from "@/components/GradientView";
+import { colors as brandColors } from "@/constants/theme";
 
 export default function ImageToFilePreviewScreen() {
   const router = useRouter();
@@ -188,39 +191,44 @@ export default function ImageToFilePreviewScreen() {
         style={styles.flex1}
         behavior={Platform.OS === "ios" ? "padding" : undefined}
       >
-        {/* ── Header ── */}
-        <View
-          style={[
-            styles.header,
-            { backgroundColor: t.card, borderBottomColor: t.border },
-          ]}
-        >
-          <Pressable
-            onPress={() => router.back()}
-            hitSlop={12}
-            style={styles.headerBtn}
-          >
-            <ChevronLeft color={t.primary} size={26} strokeWidth={2.2} />
-          </Pressable>
-          <Text style={[styles.headerTitle, { color: t.text }]} numberOfLines={1}>
-            {headerTitle}
-          </Text>
-          <Pressable
-            onPress={handleCreate}
-            disabled={isCreating || uris.length === 0}
-            style={[
-              styles.createBtn,
-              { backgroundColor: t.primary },
-              (isCreating || uris.length === 0) && styles.createBtnDisabled,
+        {/* ── Gradient Header ── */}
+        <AppHeaderContainer>
+          <GradientView
+            colors={[
+              brandColors.gradientStart,
+              brandColors.gradientMid,
+              brandColors.gradientEnd,
             ]}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={styles.header}
           >
-            {isCreating ? (
-              <ActivityIndicator color="#fff" size="small" />
-            ) : (
-              <Text style={styles.createBtnText}>Create</Text>
-            )}
-          </Pressable>
-        </View>
+            <Pressable
+              onPress={() => router.back()}
+              hitSlop={12}
+              style={styles.headerBtn}
+            >
+              <ChevronLeft color="#FFFFFF" size={26} strokeWidth={2.2} />
+            </Pressable>
+            <Text style={styles.headerTitle} numberOfLines={1}>
+              {headerTitle}
+            </Text>
+            <Pressable
+              onPress={handleCreate}
+              disabled={isCreating || uris.length === 0}
+              style={[
+                styles.createBtn,
+                (isCreating || uris.length === 0) && styles.createBtnDisabled,
+              ]}
+            >
+              {isCreating ? (
+                <ActivityIndicator color="#fff" size="small" />
+              ) : (
+                <Text style={styles.createBtnText}>Create</Text>
+              )}
+            </Pressable>
+          </GradientView>
+        </AppHeaderContainer>
 
         <ScrollView
           style={styles.flex1}
@@ -376,7 +384,6 @@ const styles = StyleSheet.create({
     alignItems: "center",
     paddingHorizontal: 12,
     paddingVertical: 10,
-    borderBottomWidth: StyleSheet.hairlineWidth,
     gap: 8,
   },
   headerBtn: {
@@ -385,12 +392,14 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     alignItems: "center",
     justifyContent: "center",
+    backgroundColor: "rgba(255,255,255,0.2)",
   },
   headerTitle: {
     flex: 1,
     fontSize: 17,
     fontWeight: "700",
     letterSpacing: -0.2,
+    color: "#FFFFFF",
   },
   createBtn: {
     paddingHorizontal: 18,
@@ -399,6 +408,7 @@ const styles = StyleSheet.create({
     minWidth: 80,
     alignItems: "center",
     justifyContent: "center",
+    backgroundColor: "rgba(255,255,255,0.25)",
   },
   createBtnDisabled: { opacity: 0.5 },
   createBtnText: { color: "#fff", fontSize: 15, fontWeight: "700" },
@@ -442,7 +452,6 @@ const styles = StyleSheet.create({
 
   emptyCard: {
     borderWidth: 1,
-    borderStyle: "dashed",
     borderRadius: 14,
     padding: 24,
     alignItems: "center",

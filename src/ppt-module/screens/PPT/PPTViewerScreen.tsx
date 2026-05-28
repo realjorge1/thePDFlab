@@ -19,11 +19,13 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { WebView } from 'react-native-webview';
-import { PPTPresentation } from '../../types/ppt.types';
+import { PPTPresentation, Slide } from '../../types/ppt.types';
 import { getTheme } from '../../themes/pptThemes';
 import { SlideCard } from '../../components/PPT/SlideCard';
 import { SlideThumbnailStrip } from '../../components/PPT/SlideThumbnailStrip';
 import { buildViewerSource } from '../../services/pptxViewer.service';
+import { AppHeaderContainer } from '@/components/AppHeaderContainer';
+import { X, Edit3, Smartphone } from 'lucide-react-native';
 
 const { width: SCREEN_W } = Dimensions.get('window');
 
@@ -54,6 +56,14 @@ export const PPTViewerScreen: React.FC<PPTViewerScreenProps> = ({
     remoteUrl,
   );
 
+  // Header background derives from the current slide's identity color.
+  // On-dark layouts use the dark slide bg; others use the theme primary.
+  const currentSlide: Slide | undefined = presentation.slides[currentIndex];
+  const onDarkLayouts = new Set(['title', 'closing', 'statHighlight', 'quote', 'sectionDivider']);
+  const headerBg = currentSlide && onDarkLayouts.has(currentSlide.layout)
+    ? theme.colors.backgroundDark
+    : theme.colors.primary;
+
   const goTo = useCallback(
     (index: number) => {
       setCurrentIndex(index);
@@ -74,37 +84,40 @@ export const PPTViewerScreen: React.FC<PPTViewerScreenProps> = ({
     <SafeAreaView style={styles.safe}>
       <StatusBar barStyle="light-content" backgroundColor={theme.colors.backgroundDark} />
 
-      {/* ─── Top Bar ───────────────────── */}
-      <View style={[styles.topBar, { backgroundColor: theme.colors.backgroundDark }]}>
-        <TouchableOpacity onPress={onClose} style={styles.topBarBtn}>
-          <Text style={styles.topBarIcon}>✕</Text>
-        </TouchableOpacity>
+      {/* ─── Top Bar — card-style header tinted with current slide's color ─── */}
+      <AppHeaderContainer>
+        <View style={[styles.topBar, { backgroundColor: headerBg }]}>
+          <TouchableOpacity onPress={onClose} style={styles.topBarBtn} hitSlop={6}>
+            <X size={18} color="#FFFFFF" strokeWidth={2.2} />
+          </TouchableOpacity>
 
-        <View style={styles.topBarCenter}>
-          <Text style={styles.topBarTitle} numberOfLines={1}>
-            {presentation.title}
-          </Text>
-          <Text style={styles.slideCounter}>
-            {currentIndex + 1} / {presentation.slides.length}
-          </Text>
-        </View>
+          <View style={styles.topBarCenter}>
+            <Text style={styles.topBarTitle} numberOfLines={1}>
+              {presentation.title}
+            </Text>
+            <Text style={styles.slideCounter}>
+              {currentIndex + 1} / {presentation.slides.length}
+            </Text>
+          </View>
 
-        <View style={styles.topBarRight}>
-          {useWebview && (
-            <TouchableOpacity
-              onPress={() => setUseWebview(false)}
-              style={styles.topBarBtn}
-            >
-              <Text style={[styles.topBarIcon, { fontSize: 12 }]}>📱 Native</Text>
-            </TouchableOpacity>
-          )}
-          {onEdit && (
-            <TouchableOpacity onPress={onEdit} style={styles.topBarBtn}>
-              <Text style={styles.topBarIcon}>✏️</Text>
-            </TouchableOpacity>
-          )}
+          <View style={styles.topBarRight}>
+            {useWebview && (
+              <TouchableOpacity
+                onPress={() => setUseWebview(false)}
+                style={styles.topBarBtn}
+                hitSlop={6}
+              >
+                <Smartphone size={16} color="#FFFFFF" strokeWidth={2.2} />
+              </TouchableOpacity>
+            )}
+            {onEdit && (
+              <TouchableOpacity onPress={onEdit} style={styles.topBarBtn} hitSlop={6}>
+                <Edit3 size={16} color="#FFFFFF" strokeWidth={2.2} />
+              </TouchableOpacity>
+            )}
+          </View>
         </View>
-      </View>
+      </AppHeaderContainer>
 
       {/* ─── Content ───────────────────── */}
       {useWebview && viewerSource.uri ? (
@@ -240,7 +253,6 @@ const styles = StyleSheet.create({
     minWidth: 36,
     alignItems: 'center',
   },
-  topBarIcon: { color: '#FFFFFF', fontSize: 16 },
   topBarCenter: { flex: 1, alignItems: 'center' },
   topBarTitle: {
     color: '#FFFFFF',

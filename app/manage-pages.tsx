@@ -3,6 +3,9 @@
  * Allows users to delete, rotate, and reorder PDF pages
  */
 
+import { AppHeaderContainer } from "@/components/AppHeaderContainer";
+import { GradientView } from "@/components/GradientView";
+import { colors as brandColors } from "@/constants/theme";
 import { useThemeColor } from "@/hooks/use-theme-color";
 import { Ionicons } from "@expo/vector-icons";
 import { useLocalSearchParams, useRouter } from "expo-router";
@@ -11,13 +14,13 @@ import {
   ActivityIndicator,
   Alert,
   Modal,
-  Platform,
   ScrollView,
   StyleSheet,
   Text,
   TouchableOpacity,
   View,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 
 type PageAction = "delete" | "rotate" | "extract";
 
@@ -227,32 +230,46 @@ export default function ManagePagesScreen() {
   ];
 
   return (
-    <View style={[styles.container, { backgroundColor }]}>
-      {/* Header */}
-      <View style={[styles.header, { backgroundColor: primaryColor }]}>
-        <TouchableOpacity
-          style={styles.headerButton}
-          onPress={() => router.back()}
+    <SafeAreaView
+      style={[styles.container, { backgroundColor }]}
+      edges={["top", "bottom"]}
+    >
+      {/* ─── Gradient Header ─── */}
+      <AppHeaderContainer>
+        <GradientView
+          colors={[
+            brandColors.gradientStart,
+            brandColors.gradientMid,
+            brandColors.gradientEnd,
+          ]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={styles.header}
         >
-          <Ionicons name="arrow-back" size={24} color="white" />
-        </TouchableOpacity>
-        <View style={styles.headerCenter}>
-          <Text style={styles.headerTitle}>Manage Pages</Text>
-          <Text style={styles.headerSubtitle}>
-            {selectedPages.length} of {totalPages} selected
-          </Text>
-        </View>
-        <TouchableOpacity
-          style={styles.headerButton}
-          onPress={selectedPages.length > 0 ? deselectAllPages : selectAllPages}
-        >
-          <Ionicons
-            name={selectedPages.length > 0 ? "close" : "checkbox-outline"}
-            size={24}
-            color="white"
-          />
-        </TouchableOpacity>
-      </View>
+          <TouchableOpacity
+            style={styles.headerButton}
+            onPress={() => router.back()}
+          >
+            <Ionicons name="arrow-back" size={24} color="white" />
+          </TouchableOpacity>
+          <View style={styles.headerCenter}>
+            <Text style={styles.headerTitle}>Manage Pages</Text>
+            <Text style={styles.headerSubtitle}>
+              {selectedPages.length} of {totalPages} selected
+            </Text>
+          </View>
+          <TouchableOpacity
+            style={styles.headerButton}
+            onPress={selectedPages.length > 0 ? deselectAllPages : selectAllPages}
+          >
+            <Ionicons
+              name={selectedPages.length > 0 ? "close" : "checkbox-outline"}
+              size={24}
+              color="white"
+            />
+          </TouchableOpacity>
+        </GradientView>
+      </AppHeaderContainer>
 
       {/* Action Buttons */}
       <View style={[styles.actionsBar, { backgroundColor: secondaryBg }]}>
@@ -489,7 +506,7 @@ export default function ManagePagesScreen() {
           </View>
         </View>
       </Modal>
-    </View>
+    </SafeAreaView>
   );
 }
 
@@ -501,9 +518,9 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    paddingTop: Platform.OS === "ios" ? 50 : 40,
+    paddingTop: 12,
     paddingBottom: 12,
-    paddingHorizontal: 16,
+    paddingHorizontal: 12,
   },
   headerButton: {
     width: 40,
@@ -511,6 +528,7 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     justifyContent: "center",
     alignItems: "center",
+    backgroundColor: "rgba(255,255,255,0.2)",
   },
   headerCenter: {
     flex: 1,

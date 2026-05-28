@@ -40,6 +40,9 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { AppHeaderContainer } from "@/components/AppHeaderContainer";
+import { GradientView } from "@/components/GradientView";
+import { colors as brandColors } from "@/constants/theme";
 
 // ─── Colours ─────────────────────────────────────────────────────────────────
 const ACCENT = "#7C3AED";
@@ -490,18 +493,29 @@ export default function AIGeneratedPreviewScreen() {
 
   return (
     <SafeAreaView style={[styles.safe, { backgroundColor: bg }]}>
-      {/* Header */}
-      <View style={[styles.header, { backgroundColor: t.card, borderBottomColor: t.border }]}>
-        <Pressable onPress={handleDiscard} style={styles.backBtn}>
-          <ArrowLeft size={24} color={t.text} />
-        </Pressable>
-        <Text style={[styles.headerTitle, { color: t.text }]}>Preview Document</Text>
-        <Pressable onPress={() => setEditMode((e) => !e)} style={styles.editBtn}>
-          {editMode
-            ? <Eye size={20} color={ACCENT} strokeWidth={2} />
-            : <Pencil size={18} color={t.text} strokeWidth={2} />}
-        </Pressable>
-      </View>
+      {/* ─── Gradient Header ─── */}
+      <AppHeaderContainer>
+        <GradientView
+          colors={[
+            brandColors.gradientStart,
+            brandColors.gradientMid,
+            brandColors.gradientEnd,
+          ]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={styles.header}
+        >
+          <Pressable onPress={handleDiscard} style={styles.backBtn}>
+            <ArrowLeft size={22} color="#FFFFFF" />
+          </Pressable>
+          <Text style={styles.headerTitle}>Preview Document</Text>
+          <Pressable onPress={() => setEditMode((e) => !e)} style={styles.editBtn}>
+            {editMode
+              ? <Eye size={20} color="#FFFFFF" strokeWidth={2} />
+              : <Pencil size={18} color="#FFFFFF" strokeWidth={2} />}
+          </Pressable>
+        </GradientView>
+      </AppHeaderContainer>
 
       {/* Title editor */}
       <View style={[styles.titleBar, { backgroundColor: isDark ? "#0F172A" : "#F8FAFC", borderBottomColor: border }]}>
@@ -756,13 +770,26 @@ const styles = StyleSheet.create({
   header: {
     flexDirection: "row",
     alignItems: "center",
-    paddingHorizontal: 16,
+    paddingHorizontal: 12,
     paddingVertical: 12,
-    borderBottomWidth: 1,
   },
-  backBtn: { width: 40, alignItems: "flex-start" },
-  editBtn: { width: 40, alignItems: "flex-end" },
-  headerTitle: { flex: 1, textAlign: "center", fontSize: 18, fontWeight: "700" },
+  backBtn: {
+    width: 38,
+    height: 38,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(255,255,255,0.2)",
+  },
+  editBtn: {
+    width: 38,
+    height: 38,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(255,255,255,0.2)",
+  },
+  headerTitle: { flex: 1, textAlign: "center", fontSize: 18, fontWeight: "700", color: "#FFFFFF" },
 
   // Format badge (used in title bar)
   fmtBadge: {

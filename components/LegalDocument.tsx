@@ -16,6 +16,9 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
+import { AppHeaderContainer } from "@/components/AppHeaderContainer";
+import { GradientView } from "@/components/GradientView";
+import { colors as brandColors } from "@/constants/theme";
 import type {
   LegalSection,
   LegalSubsection,
@@ -156,24 +159,32 @@ export default function LegalDocument({
     <SafeAreaView
       style={[styles.container, { backgroundColor: colors.background }]}
     >
-      {/* Header */}
-      <View style={[styles.header, { borderBottomColor: colors.border }]}>
-        <TouchableOpacity
-          onPress={onBack}
-          style={styles.backButton}
-          hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+      {/* ─── Gradient Header ─── */}
+      <AppHeaderContainer>
+        <GradientView
+          colors={[
+            brandColors.gradientStart,
+            brandColors.gradientMid,
+            brandColors.gradientEnd,
+          ]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={styles.header}
         >
-          <ArrowLeft size={22} color={colors.text} />
-        </TouchableOpacity>
-        <Text
-          style={[styles.headerTitle, { color: colors.text }]}
-          numberOfLines={1}
-        >
-          {title}
-        </Text>
-        {/* Spacer to balance the back button */}
-        <View style={styles.headerSpacer} />
-      </View>
+          <TouchableOpacity
+            onPress={onBack}
+            style={styles.backButton}
+            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+          >
+            <ArrowLeft size={22} color="#FFFFFF" />
+          </TouchableOpacity>
+          <Text style={styles.headerTitle} numberOfLines={1}>
+            {title}
+          </Text>
+          {/* Spacer to balance the back button */}
+          <View style={styles.headerSpacer} />
+        </GradientView>
+      </AppHeaderContainer>
 
       {/* Content */}
       <ScrollView
@@ -232,22 +243,24 @@ const styles = StyleSheet.create({
   header: {
     flexDirection: "row",
     alignItems: "center",
-    paddingHorizontal: 16,
+    paddingHorizontal: 12,
     paddingVertical: 14,
-    borderBottomWidth: StyleSheet.hairlineWidth,
   },
   backButton: {
     width: 36,
     height: 36,
+    borderRadius: 12,
     alignItems: "center",
     justifyContent: "center",
+    backgroundColor: "rgba(255,255,255,0.2)",
   },
   headerTitle: {
     flex: 1,
     textAlign: "center",
     fontSize: 17,
-    fontWeight: "600",
+    fontWeight: "700",
     letterSpacing: -0.2,
+    color: "#FFFFFF",
   },
   headerSpacer: {
     width: 36,

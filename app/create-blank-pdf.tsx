@@ -38,6 +38,9 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { AppHeaderContainer } from "@/components/AppHeaderContainer";
+import { GradientView } from "@/components/GradientView";
+import { colors as brandColors } from "@/constants/theme";
 
 // ── Lazy-loaded heavy editor components (deferred until screen is visible) ──
 const WebEditor = React.lazy(() => import("@/components/editor/WebEditor"));
@@ -351,32 +354,42 @@ function PdfEditorScreen() {
         backgroundColor={t.card}
       />
 
-      {/* ── Header — tapping blank areas dismisses keyboard ────────────── */}
-      <View
-        style={[
-          styles.header,
-          { backgroundColor: t.card, borderBottomColor: t.border },
-        ]}
-        onStartShouldSetResponder={() => { blurWebEditor(); return false; }}
-      >
-        <Pressable onPress={() => router.back()} style={styles.headerBtn}>
-          <Text style={styles.cancelText}>Cancel</Text>
-        </Pressable>
-
-        <Text style={[styles.headerTitle, { color: t.text }]}>New PDF</Text>
-
-        <Pressable
-          onPress={handleSave}
-          disabled={isSaving}
-          style={[styles.createBtn, isSaving && styles.createBtnDisabled]}
+      {/* ── Gradient Header — tapping blank areas dismisses keyboard ──── */}
+      <AppHeaderContainer>
+        <GradientView
+          colors={[
+            brandColors.gradientStart,
+            brandColors.gradientMid,
+            brandColors.gradientEnd,
+          ]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={styles.header}
         >
-          {isSaving ? (
-            <ActivityIndicator color="#fff" size="small" />
-          ) : (
-            <Text style={styles.createBtnText}>Create</Text>
-          )}
-        </Pressable>
-      </View>
+          <View
+            style={styles.headerInner}
+            onStartShouldSetResponder={() => { blurWebEditor(); return false; }}
+          >
+            <Pressable onPress={() => router.back()} style={styles.headerBtn}>
+              <Text style={styles.cancelText}>Cancel</Text>
+            </Pressable>
+
+            <Text style={styles.headerTitle}>New PDF</Text>
+
+            <Pressable
+              onPress={handleSave}
+              disabled={isSaving}
+              style={[styles.createBtn, isSaving && styles.createBtnDisabled]}
+            >
+              {isSaving ? (
+                <ActivityIndicator color="#fff" size="small" />
+              ) : (
+                <Text style={styles.createBtnText}>Create</Text>
+              )}
+            </Pressable>
+          </View>
+        </GradientView>
+      </AppHeaderContainer>
 
       {/* ── Title bar — tapping outside input dismisses keyboard ──────── */}
       <View
@@ -509,27 +522,27 @@ export default function CreateBlankPdfScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1 },
   /* Header */
-  header: {
+  header: { paddingVertical: 2 },
+  headerInner: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderBottomWidth: 1,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
   },
   headerBtn: { paddingVertical: 8, paddingHorizontal: 4 },
-  cancelText: { fontSize: 17, color: "#007AFF", fontWeight: "400" },
-  headerTitle: { fontSize: 18, fontWeight: "600" },
+  cancelText: { fontSize: 17, color: "#FFFFFF", fontWeight: "500" },
+  headerTitle: { fontSize: 18, fontWeight: "700", color: "#FFFFFF" },
   createBtn: {
     paddingHorizontal: 16,
     paddingVertical: 8,
-    borderRadius: 8,
-    backgroundColor: "#007AFF",
+    borderRadius: 10,
+    backgroundColor: "rgba(255,255,255,0.25)",
     minWidth: 70,
     alignItems: "center",
   },
   createBtnDisabled: { opacity: 0.6 },
-  createBtnText: { color: "#fff", fontSize: 17, fontWeight: "600" },
+  createBtnText: { color: "#fff", fontSize: 17, fontWeight: "700" },
   /* Title row */
   titleRow: {
     flexDirection: "row",

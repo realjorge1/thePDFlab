@@ -92,7 +92,6 @@ const styles = StyleSheet.create({
     padding: spacing.sm + 2,
     borderRadius: 10,
     borderWidth: 1,
-    borderStyle: "dashed",
     marginHorizontal: spacing.md,
     marginBottom: spacing.sm,
   },

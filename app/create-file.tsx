@@ -14,6 +14,7 @@ import {
   FileText,
   Images,
   Layers,
+  Mic,
   MonitorPlay,
   ScanLine,
   Sheet,
@@ -43,7 +44,7 @@ interface CreationOption {
   bgColor: string;
   accentColor: string;
   fileType: FileType | null;
-  method: "blank" | "image" | "scan" | "merge";
+  method: "blank" | "image" | "scan" | "voice" | "merge";
   comingSoon?: boolean;
 }
 
@@ -116,6 +117,18 @@ const CREATION_OPTIONS: CreationOption[] = [
     method: "scan",
   },
   {
+    id: "voice-to-doc",
+    title: "Voice to Document",
+    subtitle: "Record speech → text → PDF/Word",
+    icon: Mic,
+    iconColor: "#A855F7",
+    bgColor: "#F3E8FF",
+    accentColor: "#A855F7",
+    fileType: null,
+    method: "voice",
+    comingSoon: true,
+  },
+  {
     id: "blank-ppt",
     title: "Presentation",
     subtitle: "Create a .pptx slideshow",
@@ -169,6 +182,10 @@ const SECTIONS: Section[] = [
   {
     title: "Scan to Text",
     items: CREATION_OPTIONS.filter((o) => o.method === "scan"),
+  },
+  {
+    title: "Dictate",
+    items: CREATION_OPTIONS.filter((o) => o.method === "voice"),
   },
   {
     title: "Quick Actions",
@@ -324,6 +341,12 @@ export default function CreateFileScreen() {
           pathname: "/tool-processor",
           params: { tool: "merge" },
         });
+        return;
+      }
+
+      // Voice → navigate to on-device speech-to-text screen
+      if (option.method === "voice") {
+        router.push("/voice-to-document" as any);
         return;
       }
 

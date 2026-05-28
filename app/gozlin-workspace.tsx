@@ -6,6 +6,8 @@
 
 import { PINGate } from "@/components/PINGate";
 import { PremiumGate } from "@/components/PremiumGate";
+import { VoiceInputButton } from "@/components/VoiceInputButton";
+import { isVoiceAvailable } from "@/services/whisperService";
 import { spacing } from "@/constants/theme";
 import { colors as appColors } from "@/constants/theme";
 import { sendChat, summarize, extractTasks } from "@/services/ai/ai.service";
@@ -44,6 +46,7 @@ import {
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  Alert,
   DeviceEventEmitter,
   KeyboardAvoidingView,
   Modal,
@@ -534,6 +537,18 @@ export default function GozlinWorkspaceScreen() {
     setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 100);
   }, []);
 
+  // ── Voice → instant note ──────────────────────────────────────────────────
+  // Dictate a thought/meeting/lecture and drop it straight in as a new note
+  // block. From there the existing "To summary" / "To tasks" actions take over.
+  const addVoiceNote = useCallback((text: string) => {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    const base: NoteBlock = { id: newId(), kind: "note", text: trimmed };
+    setBlocks((prev) => [...prev, base]);
+    setLastEditedId(base.id);
+    setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 120);
+  }, []);
+
   const runCompute = useCallback(
     (id: string) => {
       setBlocks((prev) =>
@@ -879,7 +894,7 @@ export default function GozlinWorkspaceScreen() {
           <View style={{ height: spacing.xl }} />
         </ScrollView>
 
-        <AddBar onAdd={addBlock} t={t} mode={mode} />
+        <AddBar onAdd={addBlock} onVoiceNote={addVoiceNote} t={t} mode={mode} />
       </KeyboardAvoidingView>
 
       {/* ── Ask AI About This Block modal ────────────────────────────── */}
@@ -1160,24 +1175,31 @@ function BlockCard({
               />
             </TouchableOpacity>
           </View>
-          <TextInput
-            value={(block as NoteBlock).text}
-            onChangeText={(v) => onUpdate(block.id, { text: v } as Partial<Block>)}
-            placeholder="Write a note…"
-            placeholderTextColor={
-              noteColor ? `${stickyTextColor(noteColor)}88` : t.textTertiary
-            }
-            multiline
-            style={[
-              styles.textArea,
-              {
-                color: noteColor ? stickyTextColor(noteColor) : t.text,
-                backgroundColor: noteColor
-                  ? `${noteColor}${mode === "dark" ? "44" : "22"}`
-                  : mode === "dark" ? "#1E293B" : "#F8FAFC",
-              },
-            ]}
-          />
+          <View style={styles.fieldWrap}>
+            <TextInput
+              value={(block as NoteBlock).text}
+              onChangeText={(v) => onUpdate(block.id, { text: v } as Partial<Block>)}
+              placeholder="Write a note…"
+              placeholderTextColor={
+                noteColor ? `${stickyTextColor(noteColor)}88` : t.textTertiary
+              }
+              multiline
+              style={[
+                styles.textArea,
+                {
+                  color: noteColor ? stickyTextColor(noteColor) : t.text,
+                  backgroundColor: noteColor
+                    ? `${noteColor}${mode === "dark" ? "44" : "22"}`
+                    : mode === "dark" ? "#1E293B" : "#F8FAFC",
+                  paddingRight: 38,
+                },
+              ]}
+            />
+            <FieldMic
+              current={(block as NoteBlock).text}
+              onText={(next) => onUpdate(block.id, { text: next } as Partial<Block>)}
+            />
+          </View>
           {(block as NoteBlock).sourceLabel ? (
             <Text
               style={{
@@ -1243,6 +1265,37 @@ function BlockIcon({ kind }: { kind: BlockKind }) {
     <View style={[styles.iconBadge, { backgroundColor: `${color}22` }]}>
       <Icon color={color} size={12} strokeWidth={2.4} />
     </View>
+  );
+}
+
+// ─── Inline dictation mic (additive; reuses the shared VoiceInputButton) ─────
+// Floats in the bottom-right corner of a block's text field and APPENDS the
+// transcribed text to whatever is already there. Renders nothing on builds
+// where on-device voice isn't available (VoiceInputButton self-hides), so the
+// field keeps working exactly as before. This does not alter any existing flow.
+function FieldMic({
+  current,
+  onText,
+  disabled,
+}: {
+  current: string;
+  onText: (next: string) => void;
+  disabled?: boolean;
+}) {
+  return (
+    <VoiceInputButton
+      size={15}
+      color={ACCENT}
+      disabled={disabled}
+      onTranscribed={(text) => {
+        const trimmed = text.trim();
+        if (!trimmed) return;
+        const base = current && current.trim() ? `${current} ` : "";
+        onText(`${base}${trimmed}`);
+      }}
+      onError={(msg) => Alert.alert("Voice", msg)}
+      style={styles.fieldMic}
+    />
   );
 }
 
@@ -1417,14 +1470,21 @@ function AIBody({
 
   return (
     <View style={{ gap: 8 }}>
-      <TextInput
-        value={block.prompt}
-        onChangeText={(v) => onUpdate(block.id, { prompt: v } as Partial<Block>)}
-        placeholder="Ask gozlin anything…"
-        placeholderTextColor={t.textTertiary}
-        multiline
-        style={[styles.textArea, { color: t.text, backgroundColor: bg }]}
-      />
+      <View style={styles.fieldWrap}>
+        <TextInput
+          value={block.prompt}
+          onChangeText={(v) => onUpdate(block.id, { prompt: v } as Partial<Block>)}
+          placeholder="Ask gozlin anything…"
+          placeholderTextColor={t.textTertiary}
+          multiline
+          style={[styles.textArea, { color: t.text, backgroundColor: bg, paddingRight: 38 }]}
+        />
+        <FieldMic
+          current={block.prompt}
+          onText={(next) => onUpdate(block.id, { prompt: next } as Partial<Block>)}
+          disabled={block.loading}
+        />
+      </View>
 
       <View style={{ flexDirection: "row", gap: 8 }}>
         <TouchableOpacity
@@ -1507,8 +1567,13 @@ function TaskBody({
               backgroundColor: bg,
               textDecorationLine: isDone ? "line-through" : "none",
               opacity: isDone ? 0.6 : 1,
+              paddingRight: 36,
             },
           ]}
+        />
+        <FieldMic
+          current={block.text}
+          onText={(next) => onUpdate(block.id, { text: next } as Partial<Block>)}
         />
       </View>
       <TouchableOpacity
@@ -1692,14 +1757,21 @@ function AskScientiaBody({
   const bg = mode === "dark" ? "#1E293B" : "#F8FAFC";
   return (
     <View style={{ gap: 8 }}>
-      <TextInput
-        value={block.query}
-        onChangeText={(v) => onUpdate(block.id, { query: v, result: undefined, error: undefined } as Partial<Block>)}
-        placeholder="Ask GozlinScientia anything… formulas, calculations, concepts, units…"
-        placeholderTextColor={t.textTertiary}
-        multiline
-        style={[styles.textArea, { color: t.text, backgroundColor: bg }]}
-      />
+      <View style={styles.fieldWrap}>
+        <TextInput
+          value={block.query}
+          onChangeText={(v) => onUpdate(block.id, { query: v, result: undefined, error: undefined } as Partial<Block>)}
+          placeholder="Ask GozlinScientia anything… formulas, calculations, concepts, units…"
+          placeholderTextColor={t.textTertiary}
+          multiline
+          style={[styles.textArea, { color: t.text, backgroundColor: bg, paddingRight: 38 }]}
+        />
+        <FieldMic
+          current={block.query}
+          onText={(next) => onUpdate(block.id, { query: next, result: undefined, error: undefined } as Partial<Block>)}
+          disabled={block.loading}
+        />
+      </View>
       <TouchableOpacity
         onPress={() => onRun(block.id)}
         disabled={block.loading || !block.query.trim()}
@@ -1921,14 +1993,21 @@ function ScienceCalcBody({
 
       {/* Custom text input */}
       {customMode ? (
-        <TextInput
-          value={block.query}
-          onChangeText={(v) => onUpdate(block.id, { query: v, result: undefined, error: undefined } as Partial<Block>)}
-          placeholder={`Custom ${block.category} calculation or question…`}
-          placeholderTextColor={t.textTertiary}
-          multiline
-          style={[styles.textArea, { color: t.text, backgroundColor: bg }]}
-        />
+        <View style={styles.fieldWrap}>
+          <TextInput
+            value={block.query}
+            onChangeText={(v) => onUpdate(block.id, { query: v, result: undefined, error: undefined } as Partial<Block>)}
+            placeholder={`Custom ${block.category} calculation or question…`}
+            placeholderTextColor={t.textTertiary}
+            multiline
+            style={[styles.textArea, { color: t.text, backgroundColor: bg, paddingRight: 38 }]}
+          />
+          <FieldMic
+            current={block.query}
+            onText={(next) => onUpdate(block.id, { query: next, result: undefined, error: undefined } as Partial<Block>)}
+            disabled={block.loading}
+          />
+        </View>
       ) : !selectedFormula ? (
         <View style={[scStyles.formulaHint, { backgroundColor: `${catColor}08`, borderColor: `${catColor}25` }]}>
           <Atom color={catColor} size={14} strokeWidth={2.2} />
@@ -2110,9 +2189,10 @@ function ScientiaResultPanel({
 // ─── Add bar ─────────────────────────────────────────────────────────────────
 
 function AddBar({
-  onAdd, t, mode,
+  onAdd, onVoiceNote, t, mode,
 }: {
   onAdd: (kind: BlockKind) => void;
+  onVoiceNote: (text: string) => void;
   t: any;
   mode: "light" | "dark";
 }) {
@@ -2136,6 +2216,24 @@ function AddBar({
     >
       <ScrollView horizontal showsHorizontalScrollIndicator={false}>
         <View style={styles.addBarInner}>
+          {/* Voice → instant note (only shown when on-device voice is available) */}
+          {isVoiceAvailable() ? (
+            <View
+              style={[
+                styles.addBtn,
+                { backgroundColor: `${ACCENT}15`, borderColor: `${ACCENT}55` },
+              ]}
+            >
+              <VoiceInputButton
+                size={13}
+                color={ACCENT}
+                onTranscribed={onVoiceNote}
+                onError={(msg) => Alert.alert("Voice", msg)}
+                style={styles.voiceChipMic}
+              />
+              <Text style={[styles.addBtnText, { color: ACCENT }]}>Voice</Text>
+            </View>
+          ) : null}
           {items.map((it) => (
             <TouchableOpacity
               key={it.kind}
@@ -2264,6 +2362,18 @@ const styles = StyleSheet.create({
     lineHeight: 19,
     textAlignVertical: "top",
   },
+  // ── Inline dictation mic (additive — see FieldMic) ──
+  fieldWrap: { position: "relative" },
+  fieldMic: {
+    position: "absolute",
+    right: 6,
+    bottom: 6,
+    backgroundColor: `${ACCENT}14`,
+    borderRadius: 8,
+    paddingHorizontal: 3,
+    paddingVertical: 3,
+  },
+  voiceChipMic: { paddingHorizontal: 0 },
   computeWrap: { gap: 8 },
   computeRow: { flexDirection: "row", alignItems: "center", gap: 6 },
   computeName: {

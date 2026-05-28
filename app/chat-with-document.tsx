@@ -6,6 +6,7 @@
 import { AIChatBubble } from "@/components/ai";
 import { LibraryFilePicker } from "@/components/LibraryFilePicker";
 import { PremiumGate } from "@/components/PremiumGate";
+import { VoiceInputButton } from "@/components/VoiceInputButton";
 import { spacing } from "@/constants/theme";
 import type { AIChatMessage, AIDocumentRef } from "@/services/ai";
 import {
@@ -48,6 +49,9 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { AppHeaderContainer } from "@/components/AppHeaderContainer";
+import { GradientView } from "@/components/GradientView";
+import { colors as brandColors } from "@/constants/theme";
 
 const ACCENT = "#EC4899"; // pink-500 — matches the AI feature color
 const SCREEN_WIDTH = Dimensions.get("window").width;
@@ -581,6 +585,13 @@ export default function ChatWithDocumentScreen() {
             blurOnSubmit={false}
             onSubmitEditing={handleSend}
           />
+          <VoiceInputButton
+            disabled={isLoading}
+            onTranscribed={(text) =>
+              setInputText((prev) => (prev ? `${prev} ${text}` : text))
+            }
+            style={{ marginHorizontal: 4 }}
+          />
           <TouchableOpacity
             onPress={handleSend}
             disabled={!inputText.trim() || isLoading}
@@ -617,32 +628,41 @@ export default function ChatWithDocumentScreen() {
         style={styles.flex}
         behavior={Platform.OS === "ios" ? "padding" : "height"}
       >
-        {/* Header */}
-        <View style={[styles.header, { borderBottomColor: t.border }]}>
-          <TouchableOpacity
-            onPress={() => router.back()}
-            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-            style={styles.headerBackBtn}
+        {/* ─── Gradient Header ─── */}
+        <AppHeaderContainer>
+          <GradientView
+            colors={[
+              brandColors.gradientStart,
+              brandColors.gradientMid,
+              brandColors.gradientEnd,
+            ]}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={styles.header}
           >
-            <X size={22} color={t.text} />
-          </TouchableOpacity>
-
-          <View style={styles.headerTitleRow}>
-            <FileText size={18} color={ACCENT} />
-            <Text style={[styles.headerTitle, { color: t.text }]}>
-              Chat with File
-            </Text>
-          </View>
-
-          {phase === "ready" && (
             <TouchableOpacity
-              onPress={handleNewDocument}
+              onPress={() => router.back()}
               hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              style={styles.headerBackBtn}
             >
-              <MessageSquarePlus size={20} color={t.textSecondary} />
+              <X size={22} color="#FFFFFF" />
             </TouchableOpacity>
-          )}
-        </View>
+
+            <View style={styles.headerTitleRow}>
+              <FileText size={18} color="#FFFFFF" />
+              <Text style={styles.headerTitle}>Chat with File</Text>
+            </View>
+
+            {phase === "ready" && (
+              <TouchableOpacity
+                onPress={handleNewDocument}
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              >
+                <MessageSquarePlus size={20} color="#FFFFFF" />
+              </TouchableOpacity>
+            )}
+          </GradientView>
+        </AppHeaderContainer>
 
         {/* Content based on phase */}
         {phase === "pick" && renderPickPhase()}
@@ -765,7 +785,6 @@ const styles = StyleSheet.create({
     alignItems: "center",
     paddingHorizontal: spacing.md,
     paddingVertical: 12,
-    borderBottomWidth: 1,
   },
   headerBackBtn: {
     marginRight: 12,
@@ -779,6 +798,7 @@ const styles = StyleSheet.create({
   headerTitle: {
     fontSize: 17,
     fontWeight: "700",
+    color: "#FFFFFF",
   },
 
   // Center container (pick, processing, error)

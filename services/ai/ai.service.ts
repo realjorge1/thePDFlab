@@ -220,6 +220,7 @@ export async function sendChat(
   documentName?: string,
 ): Promise<AIResponse> {
   assertAIPremium();
+  await initAIProvider();
   return _provider.chat({
     message,
     history,
@@ -233,6 +234,7 @@ export async function summarize(
   documentName?: string,
 ): Promise<AIResponse> {
   assertAIPremium();
+  await initAIProvider();
   return _provider.summarize({ text: prepareText(text), documentName });
 }
 
@@ -242,6 +244,7 @@ export async function translate(
   documentName?: string,
 ): Promise<AIResponse> {
   assertAIPremium();
+  await initAIProvider();
   return _provider.translate({
     text: prepareText(text),
     targetLanguage,
@@ -255,6 +258,7 @@ export async function analyze(
   documentName?: string,
 ): Promise<AIResponse> {
   assertAIPremium();
+  await initAIProvider();
   return _provider.analyze({
     text: prepareText(text),
     analysisType,
@@ -267,6 +271,7 @@ export async function extractTasks(
   documentName?: string,
 ): Promise<AIResponse> {
   assertAIPremium();
+  await initAIProvider();
   return _provider.extractTasks({ text: prepareText(text), documentName });
 }
 
@@ -279,6 +284,7 @@ export async function generateDocument(
   audience?: string,
 ): Promise<AIResponse> {
   assertAIPremium();
+  await initAIProvider();
   return _provider.generateDocument({
     prompt: prepareText(prompt),
     fileType,
@@ -294,6 +300,7 @@ export async function classifyDocument(
   filename?: string,
 ): Promise<AIResponse> {
   assertAIPremium();
+  await initAIProvider();
   return _provider.classify({ text: prepareText(text), filename });
 }
 
@@ -302,6 +309,7 @@ export async function highlightKeyPoints(
   documentName?: string,
 ): Promise<AIResponse> {
   assertAIPremium();
+  await initAIProvider();
   return _provider.highlight({ text: prepareText(text), documentName });
 }
 
@@ -405,6 +413,7 @@ export async function explainText(
   depth?: "short" | "medium" | "deep",
 ): Promise<AIResponse> {
   assertAIPremium();
+  await initAIProvider();
   return _provider.explain({ text: prepareText(text), mode, depth });
 }
 
