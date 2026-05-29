@@ -7,15 +7,10 @@ import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import {
   Atom,
-  BarChart3,
-  FileText,
-  Lock,
+  Languages,
   MessageSquare,
-  Package,
-  PenSquare,
   Search,
   Sparkles,
-  Zap,
 } from "lucide-react-native";
 import React, { useEffect, useRef, useState } from "react";
 import {
@@ -40,46 +35,32 @@ const ANNUAL_SAVINGS = parseFloat(
 ); // 13.89
 const ANNUAL_MONTHLY_EQUIV = parseFloat((ANNUAL_PRICE / 12).toFixed(2)); // 3.83
 
-// Curated top features — most compelling shown upfront
-const TOP_AI_FEATURES = [
+// Premium features — the complete, curated list shown on this screen
+const PREMIUM_FEATURES = [
   {
-    label: "Chat with Documents",
+    label: "Chat with documents",
     icon: MessageSquare,
     detail: "Ask anything, get instant answers",
   },
   {
-    label: "Summarize & Translate",
-    icon: FileText,
-    detail: "Any language, any length",
-  },
-  { label: "Generate Documents", icon: Zap, detail: "AI-drafted in seconds" },
-  {
-    label: "Analyze & Explain",
-    icon: BarChart3,
-    detail: "Deep insights on any file",
-  },
-];
-
-const TOP_TOOL_FEATURES = [
-  {
-    label: "Sign Documents",
-    icon: PenSquare,
-    detail: "Legally binding e-signatures",
+    label: "Create translated copies of your document",
+    icon: Languages,
+    detail: "Any language, full document",
   },
   {
-    label: "File Security & Lock",
-    icon: Lock,
-    detail: "Password-protect anything",
+    label: "GozlinScientia & Workspace",
+    icon: Atom,
+    detail: "Scientific calc + AI notebook",
   },
   {
-    label: "Edit & Annotate",
-    icon: PenSquare,
-    detail: "Mark up PDFs with precision",
-  },
-  {
-    label: "Research Files",
+    label: "Search and explore files",
     icon: Search,
     detail: "Smart search across all your docs",
+  },
+  {
+    label: "Premium AI features",
+    icon: Sparkles,
+    detail: "Summarize, generate, analyze & more",
   },
 ];
 
@@ -216,7 +197,7 @@ export default function PremiumScreen() {
             </Text>
           </Text>
           <Text style={[styles.heroSub, { color: themeColors.textSecondary }]}>
-            Everything you need — AI, tools, research & explore and security in
+            Chat, translate, research and the full suite of premium AI — all in
             one place.
           </Text>
         </View>
@@ -420,7 +401,6 @@ export default function PremiumScreen() {
             WHAT YOU GET
           </Text>
 
-          {/* AI Features */}
           <View
             style={[
               styles.featCard,
@@ -437,14 +417,14 @@ export default function PremiumScreen() {
                   { backgroundColor: themeColors.primary + "18" },
                 ]}
               >
-                <Zap size={14} color={themeColors.primary} />
+                <Sparkles size={14} color={themeColors.primary} />
               </View>
               <Text style={[styles.featCardTitle, { color: themeColors.text }]}>
-                AI Features
+                Premium Features
               </Text>
             </View>
 
-            {TOP_AI_FEATURES.map((feat, idx) => (
+            {PREMIUM_FEATURES.map((feat, idx) => (
               <View key={idx}>
                 {idx > 0 && (
                   <View
@@ -494,169 +474,6 @@ export default function PremiumScreen() {
                 </View>
               </View>
             ))}
-          </View>
-
-          {/* Productivity Tools */}
-          <View
-            style={[
-              styles.featCard,
-              {
-                backgroundColor: themeColors.card,
-                borderColor: themeColors.border,
-                marginTop: 14,
-              },
-            ]}
-          >
-            <View style={styles.featCardHeader}>
-              <View
-                style={[
-                  styles.featCardIconWrap,
-                  { backgroundColor: themeColors.primary + "18" },
-                ]}
-              >
-                <FileText size={14} color={themeColors.primary} />
-              </View>
-              <Text style={[styles.featCardTitle, { color: themeColors.text }]}>
-                Productivity Tools
-              </Text>
-            </View>
-
-            {TOP_TOOL_FEATURES.map((feat, idx) => (
-              <View key={idx}>
-                {idx > 0 && (
-                  <View
-                    style={[
-                      styles.featDivider,
-                      { backgroundColor: themeColors.border },
-                    ]}
-                  />
-                )}
-                <View style={styles.featRow}>
-                  <View
-                    style={[
-                      styles.featIconWrap,
-                      { backgroundColor: themeColors.primary + "12" },
-                    ]}
-                  >
-                    <feat.icon size={15} color={themeColors.primary} />
-                  </View>
-                  <View style={styles.featText}>
-                    <Text
-                      style={[styles.featName, { color: themeColors.text }]}
-                    >
-                      {feat.label}
-                    </Text>
-                    <Text
-                      style={[
-                        styles.featDetail,
-                        { color: themeColors.textSecondary },
-                      ]}
-                    >
-                      {feat.detail}
-                    </Text>
-                  </View>
-                  <View
-                    style={[
-                      styles.checkDot,
-                      { backgroundColor: "#22C55E" + "20" },
-                    ]}
-                  >
-                    <View
-                      style={[
-                        styles.checkDotInner,
-                        { backgroundColor: "#22C55E" },
-                      ]}
-                    />
-                  </View>
-                </View>
-              </View>
-            ))}
-          </View>
-
-          {/* ── Gozlin WorkSpace card ── */}
-          <View
-            style={[
-              styles.featCard,
-              {
-                backgroundColor: themeColors.card,
-                borderColor: "#9333EA" + "40",
-                borderWidth: 1.5,
-                marginTop: 14,
-              },
-            ]}
-          >
-            <View style={styles.featCardHeader}>
-              <View style={[styles.featCardIconWrap, { backgroundColor: "#9333EA18" }]}>
-                <Sparkles size={14} color="#9333EA" />
-              </View>
-              <Text style={[styles.featCardTitle, { color: themeColors.text }]}>
-                Gozlin WorkSpace
-              </Text>
-            </View>
-
-            {[
-              { label: "AI-Powered Notebook", icon: Zap, detail: "Notes, tasks, charts & AI in one doc" },
-              { label: "GozlinScientia", icon: Atom, detail: "Scientific calc across all disciplines" },
-              { label: "Persistent Sessions", icon: FileText, detail: "Auto-saves exactly where you left off" },
-              { label: "Smart Summaries", icon: BarChart3, detail: "Convert notes to summaries or tasks" },
-            ].map((feat, idx) => (
-              <View key={idx}>
-                {idx > 0 && (
-                  <View style={[styles.featDivider, { backgroundColor: themeColors.border }]} />
-                )}
-                <View style={styles.featRow}>
-                  <View style={[styles.featIconWrap, { backgroundColor: "#9333EA12" }]}>
-                    <feat.icon size={15} color="#9333EA" />
-                  </View>
-                  <View style={styles.featText}>
-                    <Text style={[styles.featName, { color: themeColors.text }]}>{feat.label}</Text>
-                    <Text style={[styles.featDetail, { color: themeColors.textSecondary }]}>{feat.detail}</Text>
-                  </View>
-                  <View style={[styles.checkDot, { backgroundColor: "#22C55E20" }]}>
-                    <View style={[styles.checkDotInner, { backgroundColor: "#22C55E" }]} />
-                  </View>
-                </View>
-              </View>
-            ))}
-          </View>
-
-          {/* ── And More card ── */}
-          <View
-            style={[
-              styles.andMoreCard,
-              {
-                backgroundColor: themeColors.primary + "08",
-                borderColor: themeColors.primary + "30",
-              },
-            ]}
-          >
-            <View style={styles.andMoreHeader}>
-              <View
-                style={[
-                  styles.featCardIconWrap,
-                  { backgroundColor: themeColors.primary + "18" },
-                ]}
-              >
-                <Package size={14} color={themeColors.primary} />
-              </View>
-              <View style={styles.andMoreHeaderText}>
-                <Text
-                  style={[styles.featCardTitle, { color: themeColors.text }]}
-                >
-                  And so much more
-                </Text>
-                <Text
-                  style={[
-                    styles.andMoreSub,
-                    { color: themeColors.textSecondary },
-                  ]}
-                >
-                  Exclusive features unlocked with Pro
-                </Text>
-              </View>
-            </View>
-
-            <View style={styles.andMorePillsWrap}></View>
           </View>
         </View>
 
@@ -924,35 +741,6 @@ const styles = StyleSheet.create({
     flexShrink: 0,
   },
   checkDotInner: { width: 9, height: 9, borderRadius: 5 },
-
-  /* And More card */
-  andMoreCard: {
-    marginTop: 14,
-    borderRadius: 20,
-    borderWidth: 1.5,
-    overflow: "hidden",
-    padding: 16,
-  },
-  andMoreHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 10,
-    marginBottom: 14,
-  },
-  andMoreHeaderText: { flex: 1 },
-  andMoreSub: { fontSize: 12, marginTop: 2 },
-  andMorePillsWrap: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
-  andMorePill: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 7,
-    borderWidth: 1,
-    borderRadius: 100,
-    paddingHorizontal: 12,
-    paddingVertical: 7,
-  },
-  andMorePillDot: { width: 6, height: 6, borderRadius: 3 },
-  andMorePillText: { fontSize: 12, fontWeight: "500" },
 
   /* CTA */
   ctaWrap: {

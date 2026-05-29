@@ -178,23 +178,23 @@ const styles = StyleSheet.create({
   },
   wordsText: {
     fontFamily: Platform.select({ ios: 'Georgia', android: 'serif', default: 'serif' }),
-    fontSize: 42,
+    fontSize: 34,
     fontWeight: '400',
     fontStyle: 'italic',
     color: 'rgba(255,255,255,0.90)',
     letterSpacing: 1,
     includeFontPadding: false,
-    lineHeight: 48,
+    lineHeight: 40,
   },
   inscribedText: {
     fontFamily: Platform.select({ ios: 'Georgia', android: 'serif', default: 'serif' }),
-    fontSize: 64,
+    fontSize: 52,
     fontWeight: '800',
     fontStyle: 'italic',
     color: '#FFFFFF',
     letterSpacing: -1,
     includeFontPadding: false,
-    lineHeight: 70,
+    lineHeight: 58,
   },
 
   welcomeContainer: {
