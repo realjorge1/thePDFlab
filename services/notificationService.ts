@@ -1,10 +1,15 @@
 /**
  * Notification Service
- * Provides in-app and local notifications for processing, downloads, and AI tasks.
- * Uses expo-notifications when available, falls back to Alert-based notifications.
+ * Delivers REAL device notifications (status-bar / notification-drawer) for
+ * processing, downloads, AI tasks, and Read Aloud — via expo-notifications.
+ *
+ * These are true OS notifications, never on-screen Alert dialogs. If the OS
+ * notification permission is unavailable we silently no-op rather than fall
+ * back to an intrusive center-screen alert.
  */
 import { loadSettings } from "@/services/settingsService";
-import { Alert, Platform } from "react-native";
+import * as Notifications from "expo-notifications";
+import { Platform } from "react-native";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -22,98 +27,105 @@ interface NotificationPayload {
   type: NotificationType;
 }
 
-// ─── Lazy load expo-notifications ─────────────────────────────────────────────
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-let _Notifications: any = null;
-let _notificationsLoaded = false;
-
-async function getNotifications() {
-  if (_notificationsLoaded) return _Notifications;
-  try {
-    // Dynamic require — resolves only if expo-notifications is installed
-    // String concat prevents static analysis from resolving the module
-    const prefix = "expo-";
-    const suffix = "notifications";
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    _Notifications = require(prefix + suffix);
-    _notificationsLoaded = true;
-    return _Notifications;
-  } catch {
-    _notificationsLoaded = true;
-    _Notifications = null;
-    return null;
-  }
-}
+const ANDROID_CHANNEL_ID = "wordsinscribed-tasks";
 
 // ─── Setup ────────────────────────────────────────────────────────────────────
 
 let _initialized = false;
+let _permissionGranted = false;
+let _handlerSet = false;
 
-export async function initNotifications(): Promise<void> {
-  if (_initialized) return;
-  _initialized = true;
+/** Configure how notifications behave while the app is in the foreground. */
+function ensureHandler() {
+  if (_handlerSet) return;
+  _handlerSet = true;
+  Notifications.setNotificationHandler({
+    // Show the notification in the tray/banner even when the app is foregrounded.
+    handleNotification: async () => ({
+      // `shouldShowAlert` is the legacy field; `shouldShowBanner`/`shouldShowList`
+      // are the current ones. Setting all keeps every SDK version happy.
+      shouldShowAlert: true,
+      shouldShowBanner: true,
+      shouldShowList: true,
+      shouldPlaySound: false,
+      shouldSetBadge: false,
+    }),
+  });
+}
 
-  const Notifications = await getNotifications();
-  if (!Notifications) return;
+/**
+ * Initialise notifications: request OS permission and create the Android
+ * channel. Safe to call repeatedly — work happens only once. Call at app
+ * startup and whenever the user enables a notification toggle.
+ */
+export async function initNotifications(): Promise<boolean> {
+  ensureHandler();
 
-  try {
-    // Request permissions
-    const { status } = await Notifications.requestPermissionsAsync();
-    if (status !== "granted") {
-      console.warn("[Notifications] Permission not granted");
-      return;
-    }
-
-    // Set notification handler (show notification even when app is in foreground)
-    Notifications.setNotificationHandler({
-      handleNotification: async () => ({
-        shouldShowAlert: true,
-        shouldPlaySound: false,
-        shouldSetBadge: false,
-        shouldShowBanner: true,
-        shouldShowList: true,
-      }),
-    });
-
-    // Android notification channel
-    if (Platform.OS === "android") {
-      await Notifications.setNotificationChannelAsync("wordsinscribed-tasks", {
-        name: "Task Notifications",
+  // Android requires an explicit channel for notifications to post.
+  if (Platform.OS === "android") {
+    try {
+      await Notifications.setNotificationChannelAsync(ANDROID_CHANNEL_ID, {
+        name: "Task & Reading Notifications",
         importance: Notifications.AndroidImportance.DEFAULT,
         vibrationPattern: [0, 100],
         lightColor: "#6366F1",
       });
+    } catch (e) {
+      if (__DEV__) console.warn("[Notifications] Channel setup failed:", e);
+    }
+  }
+
+  if (_initialized) return _permissionGranted;
+  _initialized = true;
+
+  try {
+    const existing = await Notifications.getPermissionsAsync();
+    let status = existing.status;
+    if (status !== "granted") {
+      const req = await Notifications.requestPermissionsAsync();
+      status = req.status;
+    }
+    _permissionGranted = status === "granted";
+    if (!_permissionGranted && __DEV__) {
+      console.warn("[Notifications] Permission not granted");
     }
   } catch (e) {
-    console.warn("[Notifications] Init failed:", e);
+    if (__DEV__) console.warn("[Notifications] Init failed:", e);
+    _permissionGranted = false;
   }
+
+  return _permissionGranted;
 }
 
 // ─── Send Notification ────────────────────────────────────────────────────────
 
 async function sendLocalNotification(payload: NotificationPayload) {
-  const Notifications = await getNotifications();
-
-  if (Notifications) {
-    try {
-      await Notifications.scheduleNotificationAsync({
-        content: {
-          title: payload.title,
-          body: payload.body,
-          data: { type: payload.type },
-          ...(Platform.OS === "android" ? { channelId: "wordsinscribed-tasks" } : {}),
-        },
-        trigger: null, // immediate
-      });
-      return;
-    } catch {
-      // Fall through to Alert
-    }
+  // Make sure permission + channel are ready (covers the case where a task
+  // fires before initNotifications() ran, e.g. a fast background download).
+  if (!_initialized) {
+    await initNotifications();
+  } else {
+    ensureHandler();
   }
+  if (!_permissionGranted) return; // no permission → stay silent, never alert
 
-  // Fallback: in-app alert
-  Alert.alert(payload.title, payload.body);
+  try {
+    await Notifications.scheduleNotificationAsync({
+      content: {
+        title: payload.title,
+        body: payload.body,
+        data: { type: payload.type },
+      },
+      // `null` trigger = deliver immediately. On Android the channel must be
+      // supplied via the trigger object.
+      trigger:
+        Platform.OS === "android"
+          ? ({ channelId: ANDROID_CHANNEL_ID } as Notifications.NotificationTriggerInput)
+          : null,
+    });
+  } catch (e) {
+    if (__DEV__) console.warn("[Notifications] Failed to post:", e);
+  }
 }
 
 // ─── Public API ───────────────────────────────────────────────────────────────

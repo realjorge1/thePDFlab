@@ -25,72 +25,76 @@ function createDefaultPresentation(title = '', themeId: ThemeId = DEFAULT_THEME_
     themeId,
     createdAt: new Date(),
     updatedAt: new Date(),
+    // Start every field empty — the canvas and editor show labelled
+    // placeholders so the user types straight in without deleting anything.
     slides: [
       {
         id: uuid(),
         layout: 'title',
         content: {
           title,
-          subtitle: 'Your subtitle here',
+          subtitle: '',
         },
       },
       {
         id: uuid(),
         layout: 'titleContent',
         content: {
-          title: 'Introduction',
-          bullets: ['Key point one', 'Key point two', 'Key point three'],
+          title: '',
         },
       },
       {
         id: uuid(),
         layout: 'closing',
         content: {
-          title: 'Thank You',
-          subtitle: 'Questions?',
+          title: '',
+          subtitle: '',
         },
       },
     ],
   };
 }
 
-// ─── Sensible starter content per layout ────
+// ─── Starter content per layout ────
+// All fields start empty: the InteractiveSlideCanvas and SlideFieldEditor
+// render labelled placeholders for blank fields, so users never have to
+// clear pre-filled sample text before typing their own.
 function defaultContentForLayout(layout: SlideLayout): SlideContent {
   switch (layout) {
     case 'title':
-      return { title: 'New Slide', subtitle: 'Your subtitle here' };
+      return { title: '', subtitle: '' };
     case 'closing':
-      return { title: 'Thank You', subtitle: 'Questions?' };
+      return { title: '', subtitle: '' };
     case 'titleContent':
-      return { title: 'New Slide', bullets: ['Key point one', 'Key point two'] };
+      return { title: '' };
     case 'twoColumn':
-      return { title: 'Two Columns', leftContent: '', rightContent: '' };
+      return { title: '', leftContent: '', rightContent: '' };
     case 'agenda':
-      return { title: 'Agenda', bullets: ['First topic', 'Second topic', 'Third topic'] };
+      return { title: '', bullets: [] };
     case 'comparison':
       return {
-        title: 'Comparison',
-        leftTitle: 'Option A',
-        rightTitle: 'Option B',
+        title: '',
+        leftTitle: '',
+        rightTitle: '',
         leftContent: '',
         rightContent: '',
       };
     case 'processSteps':
-      return { title: 'Process', steps: ['Step one', 'Step two', 'Step three'] };
+      return { title: '', steps: [] };
     case 'quote':
-      return { body: 'A memorable quote that makes your point.', subtitle: 'Author' };
+      return { body: '', subtitle: '' };
     case 'sectionDivider':
-      return { sectionNumber: '01', title: 'Section Title', subtitle: '' };
+      return { sectionNumber: '', title: '', subtitle: '' };
     case 'statHighlight':
-      return { title: 'Key Metric', stat: { value: '94%', label: 'Stat label' } };
+      return { title: '', stat: { value: '', label: '' } };
     case 'timeline':
-      return { title: 'Timeline', timelineItems: [{ year: '2024', event: 'Milestone' }] };
+      return { title: '', timelineItems: [] };
     case 'imageLeft':
     case 'imageRight':
-      return { title: 'Title', body: 'Description…' };
+      return { title: '', body: '' };
     case 'blank':
     default:
-      return { title: 'New Slide' };
+      return {};
   }
 }
 
@@ -180,7 +184,15 @@ function applyAction(
           ? { ...s, content: { ...s.content, ...action.payload.content } }
           : s,
       );
-      return { ...presentation, slides, updatedAt: now };
+      // The first slide's heading IS the presentation title (and the export
+      // file name). Keep them in sync so editing the title slide also drives
+      // the title shown in the header and used when saving.
+      const firstTitle = slides[0]?.content.title;
+      const title =
+        action.payload.index === 0 && typeof firstTitle === 'string'
+          ? firstTitle
+          : presentation.title;
+      return { ...presentation, title, slides, updatedAt: now };
     }
 
     case 'UPDATE_SLIDE_LAYOUT': {

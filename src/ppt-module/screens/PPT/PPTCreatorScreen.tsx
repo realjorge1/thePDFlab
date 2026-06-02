@@ -119,14 +119,21 @@ export const PPTCreatorScreen: React.FC<PPTCreatorScreenProps> = ({ onGoBack, in
     }).start();
   }, [selIdx, selectedSlide?.layout, canvasOpacity]);
 
+  // The presentation title is whatever heading the user gave the first
+  // (title) slide — never a separate prompt. Fall back gracefully so saving
+  // is never blocked just because the heading is still blank.
+  const resolveTitle = useCallback(() => {
+    const heading =
+      editor.presentation.title?.trim() ||
+      editor.presentation.slides[0]?.content.title?.trim() ||
+      '';
+    return heading || 'Untitled Presentation';
+  }, [editor.presentation]);
+
   // ─── Create (generate → save to app library → success alert) ──
   const handleCreate = useCallback(async () => {
     if (isCreating) return;
-    const title = editor.presentation.title.trim();
-    if (!title) {
-      Alert.alert('Title required', 'Give your presentation a title before creating it.');
-      return;
-    }
+    const title = resolveTitle();
     setIsCreating(true);
     try {
       const res = await exporter.exportPPTX({ ...editor.presentation, title });
@@ -147,7 +154,7 @@ export const PPTCreatorScreen: React.FC<PPTCreatorScreenProps> = ({ onGoBack, in
       setIsCreating(false);
       exporter.reset();
     }
-  }, [editor.presentation, exporter, isCreating]);
+  }, [editor.presentation, exporter, isCreating, resolveTitle]);
 
   // ─── Present: export the live deck to a temp .pptx and open it in the
   // high-fidelity /ppt-viewer (PDF render + offline HTML fallback). The
@@ -155,11 +162,7 @@ export const PPTCreatorScreen: React.FC<PPTCreatorScreenProps> = ({ onGoBack, in
   // view real files through the same pipeline used elsewhere in the app.
   const handlePresent = useCallback(async () => {
     if (isPreparingPresent) return;
-    const title = editor.presentation.title.trim();
-    if (!title) {
-      Alert.alert('Title required', 'Give your presentation a title before previewing it.');
-      return;
-    }
+    const title = resolveTitle();
     setIsPreparingPresent(true);
     try {
       const res = await exporter.exportPPTX({ ...editor.presentation, title });
@@ -183,15 +186,11 @@ export const PPTCreatorScreen: React.FC<PPTCreatorScreenProps> = ({ onGoBack, in
       setIsPreparingPresent(false);
       exporter.reset();
     }
-  }, [editor.presentation, exporter, isPreparingPresent, router]);
+  }, [editor.presentation, exporter, isPreparingPresent, router, resolveTitle]);
 
   // ─── Save to Device (generate silently → system share/save sheet) ──
   const handleSaveToDevice = useCallback(async () => {
-    const title = editor.presentation.title.trim();
-    if (!title) {
-      Alert.alert('Title required', 'Give your presentation a title before saving it.');
-      return;
-    }
+    const title = resolveTitle();
     const res = await exporter.exportPPTX({ ...editor.presentation, title });
     if (res?.success && res.filePath) {
       await saveFileToDevice({
@@ -206,24 +205,16 @@ export const PPTCreatorScreen: React.FC<PPTCreatorScreenProps> = ({ onGoBack, in
       Alert.alert('Error', res?.error ?? 'Failed to generate presentation.');
       exporter.reset();
     }
-  }, [editor.presentation, exporter]);
+  }, [editor.presentation, exporter, resolveTitle]);
 
   // ─── Slide management ──
+  // Adding a slide just inserts a fresh page after the current one and
+  // selects it — no layout prompt. The SLIDE LAYOUT picker below the canvas
+  // is where the user changes layout whenever they want.
   const handleAddSlide = useCallback(() => {
-    Alert.alert('Add Slide', 'Choose a layout:', [
-      { text: 'Content',       onPress: () => editor.addSlide('titleContent',  editor.selectedSlideIndex) },
-      { text: 'Agenda',        onPress: () => editor.addSlide('agenda',        editor.selectedSlideIndex) },
-      { text: 'Comparison',    onPress: () => editor.addSlide('comparison',    editor.selectedSlideIndex) },
-      { text: 'Process Steps', onPress: () => editor.addSlide('processSteps',  editor.selectedSlideIndex) },
-      { text: 'Quote',         onPress: () => editor.addSlide('quote',         editor.selectedSlideIndex) },
-      { text: 'Section Divider', onPress: () => editor.addSlide('sectionDivider', editor.selectedSlideIndex) },
-      { text: 'Two Columns',   onPress: () => editor.addSlide('twoColumn',     editor.selectedSlideIndex) },
-      { text: 'Big Stat',      onPress: () => editor.addSlide('statHighlight', editor.selectedSlideIndex) },
-      { text: 'Timeline',      onPress: () => editor.addSlide('timeline',      editor.selectedSlideIndex) },
-      { text: 'Image + Text',  onPress: () => editor.addSlide('imageLeft',     editor.selectedSlideIndex) },
-      { text: 'Closing Slide', onPress: () => editor.addSlide('closing',       editor.selectedSlideIndex) },
-      { text: 'Cancel', style: 'cancel' },
-    ]);
+    const at = editor.selectedSlideIndex;
+    editor.addSlide('titleContent', at);
+    editor.selectSlide(at + 1);
   }, [editor]);
 
   const handleDeleteSlide = useCallback(
@@ -561,7 +552,10 @@ export const PPTCreatorScreen: React.FC<PPTCreatorScreenProps> = ({ onGoBack, in
           onDelete={handleDeleteSlide}
           onDuplicate={handleDuplicate}
           onMove={handleMove}
-          onAddAfter={index => editor.addSlide('titleContent', index)}
+          onAddAfter={index => {
+            editor.addSlide('titleContent', index);
+            editor.selectSlide(index + 1);
+          }}
           onAdd={handleAddSlide}
         />
       </KeyboardAvoidingView>

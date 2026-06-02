@@ -236,9 +236,10 @@ function buildSlide(
         });
       }
 
-      if (content.bullets && content.bullets.length > 0) {
+      const contentBullets = (content.bullets ?? []).filter(b => b && b.trim());
+      if (contentBullets.length > 0) {
         pSlide.addText(
-          content.bullets.map(b => ({ text: b, options: { bullet: { type: 'bullet' } } })),
+          contentBullets.map(b => ({ text: b, options: { bullet: { type: 'bullet' } } })),
           {
             x: 0.55,
             y: 1.8,

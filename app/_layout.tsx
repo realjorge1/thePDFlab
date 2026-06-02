@@ -39,6 +39,7 @@ import { useScheduledTasks } from "@/hooks/useScheduledTasks";
 import { wakeUpBackend } from "@/config/api";
 import { initAIProvider } from "@/services/ai";
 import { initKeepAlive } from "@/services/backendKeepAlive";
+import { initNotifications } from "@/services/notificationService";
 import { setPendingGeneration } from "@/services/generatedDocStore";
 import type { ScheduledTask } from "@/services/scheduledTasks";
 import { useRouter } from "expo-router";
@@ -51,6 +52,7 @@ import { loadSettings } from "@/services/settingsService";
 import { ThemeProvider } from "@/services/ThemeProvider";
 import { setAutoDetectLanguage, setRate } from "@/services/ttsService";
 import { Stack } from "expo-router";
+import { StatusBar } from "expo-status-bar";
 import * as SplashScreen from "expo-splash-screen";
 import { useCallback, useEffect, useState } from "react";
 import { StyleSheet, View } from "react-native";
@@ -113,6 +115,10 @@ export default function RootLayout() {
       .catch(() => {});
     initKeepAlive();
 
+    // Prepare the OS notification channel + permission early so task/Read-Aloud
+    // notifications post to the device's notification drawer (not as alerts).
+    initNotifications().catch(() => {});
+
     Promise.all([
       loadNativeFonts(),
       // Purge expired recycle bin entries (15-day retention)
@@ -148,6 +154,11 @@ export default function RootLayout() {
     <ThemeProvider>
       <SubscriptionProvider>
       <View style={styles.container} onLayout={onLayoutReady}>
+        {/* Edge-to-edge is mandatory on Android (SDK 54): the app draws behind a
+            transparent status bar. This only controls icon contrast app-wide —
+            "auto" = dark icons in light mode, light icons in dark mode. Screens
+            reserve the bar's height via SafeAreaView / useSafeAreaInsets. */}
+        <StatusBar style="auto" />
         <Stack
           screenOptions={{
             headerShown: false,

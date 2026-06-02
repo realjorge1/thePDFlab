@@ -54,6 +54,7 @@ interface ParsedShape {
   rotation: number;     // degrees
   fillColor: string | null;
   borderColor: string | null;
+  geom: string;         // prstGeom preset: 'rect' | 'ellipse' | 'roundRect' | …
   isTitle: boolean;
   phType: string;
   paragraphs: ParsedPara[];
@@ -68,16 +69,33 @@ interface ParsedSlide {
 //  XML helpers
 // ─────────────────────────────────────────────────
 
+// Characters that can legally follow a tag name in an opening tag. Used to
+// match whole tag names only — otherwise the prefix `<p:sp` would also match
+// `<p:spPr>` and `<p:spTree>`, corrupting every shape lookup (and looping
+// forever on pptxgenjs output, which is why the offline view came up blank).
+const TAG_BOUNDARY = new Set([' ', '\t', '\n', '\r', '>', '/']);
+
+/** Index of the next `<tag` whose name ends on a real boundary, or -1. */
+function findTagOpen(xml: string, tag: string, from: number): number {
+  const needle = `<${tag}`;
+  let i = from;
+  for (;;) {
+    const si = xml.indexOf(needle, i);
+    if (si === -1) return -1;
+    if (TAG_BOUNDARY.has(xml[si + needle.length])) return si;
+    i = si + needle.length;
+  }
+}
+
 /** Return the inner content of the first occurrence of <tag ...>…</tag> */
 function firstInner(xml: string, tag: string): string | null {
-  const open = `<${tag}`;
-  const close = `</${tag}>`;
-  const si = xml.indexOf(open);
+  const si = findTagOpen(xml, tag, 0);
   if (si === -1) return null;
   const gt = xml.indexOf('>', si);
   if (gt === -1) return null;
   // Self-closing?
   if (xml[gt - 1] === '/') return '';
+  const close = `</${tag}>`;
   const ei = xml.indexOf(close, gt + 1);
   if (ei === -1) return null;
   return xml.slice(gt + 1, ei);
@@ -85,13 +103,13 @@ function firstInner(xml: string, tag: string): string | null {
 
 /** Return ALL occurrences of <tag>…</tag>, handling simple nesting */
 function allInner(xml: string, tag: string): string[] {
-  const open = `<${tag}`;
   const close = `</${tag}>`;
+  const closeLen = close.length;
   const results: string[] = [];
   let pos = 0;
 
   while (pos < xml.length) {
-    const si = xml.indexOf(open, pos);
+    const si = findTagOpen(xml, tag, pos);
     if (si === -1) break;
 
     const gt = xml.indexOf('>', si);
@@ -105,9 +123,11 @@ function allInner(xml: string, tag: string): string[] {
     let search = contentStart;
 
     while (depth > 0 && search < xml.length) {
-      const ni = xml.indexOf(open, search);
+      const ni = findTagOpen(xml, tag, search);
       const ci = xml.indexOf(close, search);
-      if (ci === -1) { depth = 0; break; }
+      // No matching close left — bail out and stop scanning entirely so we
+      // never spin in place on malformed / unexpected markup.
+      if (ci === -1) { depth = 0; pos = xml.length; break; }
 
       if (ni !== -1 && ni < ci) {
         const innerGt = xml.indexOf('>', ni);
@@ -115,15 +135,15 @@ function allInner(xml: string, tag: string): string[] {
           search = innerGt + 1;
         } else {
           depth++;
-          search = ni + open.length;
+          search = innerGt + 1;
         }
       } else {
         depth--;
         if (depth === 0) {
           results.push(xml.slice(contentStart, ci));
-          pos = ci + close.length;
+          pos = ci + closeLen;
         }
-        search = ci + close.length;
+        search = ci + closeLen;
       }
     }
 
@@ -313,6 +333,10 @@ function parseSlide(
     const h = extM ? sy(parseInt(extM[2])) : CANVAS_H;
     const rotation = rotM ? parseInt(rotM[1]) / 60000 : 0; // 60000ths of a degree
 
+    // Preset geometry so circles/rounded cards keep their shape on screen.
+    const geomM = spPr.match(/<a:prstGeom[^>]*\bprst="([^"]+)"/);
+    const geom = geomM ? geomM[1] : 'rect';
+
     // Shape fill & border
     let fillColor: string | null = null;
     if (spPr.includes('<a:noFill')) {
@@ -422,6 +446,7 @@ function parseSlide(
       x, y, w, h, rotation,
       fillColor,
       borderColor,
+      geom,
       isTitle,
       phType,
       paragraphs,
@@ -466,6 +491,12 @@ function generateSlideHtml(slide: ParsedSlide): SlideViewData {
     }
     if (shape.borderColor) {
       divStyles.push(`border:1px solid ${shape.borderColor}`);
+    }
+    if (shape.geom === 'ellipse') {
+      divStyles.push('border-radius:50%');
+    } else if (shape.geom === 'roundRect') {
+      const r = Math.max(6, Math.min(shape.w, shape.h) * 0.12);
+      divStyles.push(`border-radius:${r.toFixed(0)}px`);
     }
     if (shape.rotation) {
       divStyles.push(`transform:rotate(${shape.rotation.toFixed(2)}deg)`);

@@ -389,8 +389,8 @@ export default function DownloadsScreen() {
           return newMap;
         });
 
+        // Real OS notification (notification drawer) — no on-screen alert.
         notifyDownloadComplete(downloadItem.title);
-        Alert.alert("Success", "Downloaded successfully!");
       } catch (error) {
         console.error("Download error:", error);
 

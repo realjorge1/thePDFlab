@@ -6,10 +6,13 @@
 // code path that bypasses the screen-level <PremiumGate> (e.g. scheduled tasks).
 // ============================================
 
-let _hasPremiumAccess = false;
+import { FORCE_PREMIUM_UNLOCK } from "@/config/revenuecat";
+
+let _hasPremiumAccess = FORCE_PREMIUM_UNLOCK;
 
 export function setAIPremiumAccess(hasAccess: boolean): void {
-  _hasPremiumAccess = hasAccess;
+  // TEST OVERRIDE keeps AI access pinned on regardless of real status.
+  _hasPremiumAccess = FORCE_PREMIUM_UNLOCK || hasAccess;
 }
 
 export function hasAIPremiumAccess(): boolean {

@@ -18,6 +18,7 @@ import React, { useCallback, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  AppState,
   Platform,
   Pressable,
   StyleSheet,
@@ -85,6 +86,7 @@ import {
 } from "@/services/fileService";
 import { loadMobileViewVendorScripts } from "@/services/mobileViewVendorLoader";
 import { recycleFile } from "@/services/recycleBinService";
+import { bumpReadingTime } from "@/services/workspaceInsightsService";
 
 // ============================================================================
 // SCROLL TRACKER (injected into WebView)
@@ -236,6 +238,15 @@ export default function DocxViewerScreen() {
     return () => {
       isMountedRef.current = false;
     };
+  }, []);
+
+  // ── Reading-time heartbeat → WorkSpace Progress dashboard ──
+  React.useEffect(() => {
+    const BEAT_MS = 20000;
+    const id = setInterval(() => {
+      if (AppState.currentState === "active") bumpReadingTime(BEAT_MS);
+    }, BEAT_MS);
+    return () => clearInterval(id);
   }, []);
 
   // Load document + check star on mount

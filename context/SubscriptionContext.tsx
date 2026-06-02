@@ -1,4 +1,5 @@
 import {
+  FORCE_PREMIUM_UNLOCK,
   PREMIUM_ENTITLEMENT_ID,
   REVENUECAT_ANDROID_API_KEY,
   REVENUECAT_IOS_API_KEY,
@@ -37,6 +38,8 @@ const SubscriptionContext = createContext<SubscriptionState>({
 });
 
 function isPremiumActive(info: CustomerInfo): boolean {
+  // TEST OVERRIDE: force-unlock regardless of real entitlement status.
+  if (FORCE_PREMIUM_UNLOCK) return true;
   return info.entitlements.active[PREMIUM_ENTITLEMENT_ID] !== undefined;
 }
 
@@ -50,10 +53,15 @@ function applyPremium(
 }
 
 export function SubscriptionProvider({ children }: { children: ReactNode }) {
-  const [isPremium, setIsPremium] = useState(false);
-  const [isLoading, setIsLoading] = useState(true);
+  const [isPremium, setIsPremium] = useState(FORCE_PREMIUM_UNLOCK);
+  // When force-unlocked, skip the loading gate so screens render immediately
+  // even if RevenueCat can't be configured in this build.
+  const [isLoading, setIsLoading] = useState(!FORCE_PREMIUM_UNLOCK);
 
   useEffect(() => {
+    // Keep the non-React AI guard in sync immediately on mount.
+    setAIPremiumAccess(FORCE_PREMIUM_UNLOCK);
+
     if (__DEV__) {
       Purchases.setLogLevel(LOG_LEVEL.DEBUG);
     }

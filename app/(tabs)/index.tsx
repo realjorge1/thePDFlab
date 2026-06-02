@@ -731,8 +731,8 @@ export default function HomeScreen() {
                       style={styles.bentoCardWide}
                       onPress={() =>
                         router.push({
-                          pathname: "/library",
-                          params: { sourceFilter: "downloaded" },
+                          pathname: "/(tabs)/download",
+                          params: { tab: "downloads" },
                         })
                       }
                       activeOpacity={0.85}

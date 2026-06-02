@@ -28,6 +28,8 @@ import React, {
 import {
   ActivityIndicator,
   Alert,
+  Animated,
+  Easing,
   FlatList,
   Linking,
   RefreshControl,
@@ -44,7 +46,7 @@ import { AppHeaderContainer } from "@/components/AppHeaderContainer";
 import { GradientView } from "@/components/GradientView";
 import { PINGate } from "@/components/PINGate";
 import { PremiumGate } from "@/components/PremiumGate";
-import { colors, shadows } from "@/constants/theme";
+import { colors } from "@/constants/theme";
 import { useTheme } from "@/services/ThemeProvider";
 import { upsertFileRecord } from "@/services/fileIndexService";
 import { notifyDownloadComplete } from "@/services/notificationService";
@@ -185,6 +187,27 @@ export default function DownloadsScreen() {
 
   // Refs
   const searchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Rotating search-button animation while a search is in flight
+  const spinValue = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    if (!isSearching) return;
+    spinValue.setValue(0);
+    const loop = Animated.loop(
+      Animated.timing(spinValue, {
+        toValue: 1,
+        duration: 800,
+        easing: Easing.linear,
+        useNativeDriver: true,
+      }),
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [isSearching, spinValue]);
+  const spin = spinValue.interpolate({
+    inputRange: [0, 1],
+    outputRange: ["0deg", "360deg"],
+  });
 
   // Update active tab when navigating with tab param
   useEffect(() => {
@@ -401,8 +424,8 @@ export default function DownloadsScreen() {
           return newMap;
         });
 
+        // Real OS notification (notification drawer) — no on-screen alert.
         notifyDownloadComplete(downloadItem.title);
-        Alert.alert("Success", "Downloaded successfully!");
       } catch (error) {
         console.error("Download error:", error);
 
@@ -615,7 +638,7 @@ export default function DownloadsScreen() {
       const classified = classifyOptions(item.downloadOptions, item.source);
 
       return (
-        <View style={[styles.resultCard, { backgroundColor: t.card }]}>
+        <View style={styles.resultCard}>
           <View style={styles.resultHeader}>
             <View style={styles.resultHeaderLeft}>
               <View
@@ -783,7 +806,7 @@ export default function DownloadsScreen() {
   const renderDownloadItem = useCallback(
     ({ item }: { item: DownloadItem }) => (
       <TouchableOpacity
-        style={[styles.downloadCard, { backgroundColor: t.card }]}
+        style={styles.downloadCard}
         onPress={() => handleOpen(item)}
         activeOpacity={0.7}
       >
@@ -1035,7 +1058,9 @@ export default function DownloadsScreen() {
                 activeOpacity={0.7}
               >
                 {isSearching ? (
-                  <ActivityIndicator size="small" color="#fff" />
+                  <Animated.View style={{ transform: [{ rotate: spin }] }}>
+                    <Search size={20} color="#fff" />
+                  </Animated.View>
                 ) : (
                   <Search size={20} color="#fff" />
                 )}
@@ -1065,6 +1090,9 @@ export default function DownloadsScreen() {
               renderItem={renderSearchResult}
               keyExtractor={searchKeyExtractor}
               contentContainerStyle={styles.resultsList}
+              ItemSeparatorComponent={() => (
+                <View style={[styles.rowSeparator, { backgroundColor: t.border }]} />
+              )}
               showsVerticalScrollIndicator={false}
               removeClippedSubviews={true}
               maxToRenderPerBatch={10}
@@ -1075,7 +1103,6 @@ export default function DownloadsScreen() {
                 <View style={styles.emptyContainer}>
                   {isSearching ? (
                     <View style={styles.loadingContainer}>
-                      <ActivityIndicator size="large" color={t.primary} />
                       <Text
                         style={[styles.loadingText, { color: t.textSecondary }]}
                       >
@@ -1133,6 +1160,9 @@ export default function DownloadsScreen() {
               renderItem={renderDownloadItem}
               keyExtractor={downloadKeyExtractor}
               contentContainerStyle={styles.downloadsList}
+              ItemSeparatorComponent={() => (
+                <View style={[styles.rowSeparator, { backgroundColor: t.border }]} />
+              )}
               showsVerticalScrollIndicator={false}
               removeClippedSubviews={true}
               maxToRenderPerBatch={10}
@@ -1331,15 +1361,17 @@ const styles = StyleSheet.create({
 
   // Results List
   resultsList: {
-    padding: 16,
+    paddingTop: 8,
     paddingBottom: 32,
   },
   resultCard: {
-    backgroundColor: colors.cardBackground,
-    padding: 16,
-    borderRadius: 16,
-    marginBottom: 12,
-    ...shadows.medium,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+  },
+  // Thin separator line between list rows (matches recent files)
+  rowSeparator: {
+    height: StyleSheet.hairlineWidth,
+    marginHorizontal: 16,
   },
   resultHeader: {
     flexDirection: "row",
@@ -1447,17 +1479,13 @@ const styles = StyleSheet.create({
     fontWeight: "500",
   },
   downloadsList: {
-    padding: 12,
+    paddingTop: 6,
     paddingBottom: 24,
   },
   downloadCard: {
     flexDirection: "row",
-    backgroundColor: colors.cardBackground,
-    paddingVertical: 10,
-    paddingHorizontal: 12,
-    borderRadius: 12,
-    marginBottom: 8,
-    ...shadows.small,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
   },
   downloadInfo: {
     flex: 1,

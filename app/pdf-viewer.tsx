@@ -18,6 +18,7 @@ import React, { useCallback, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  AppState,
   Platform,
   Pressable,
   ScrollView,
@@ -95,6 +96,7 @@ import {
 import { repairPdfViaBackend } from "@/services/pdfRepairClient";
 import { validatePdfFile } from "@/services/pdfValidationService";
 import { recycleFile } from "@/services/recycleBinService";
+import { bumpReadingTime } from "@/services/workspaceInsightsService";
 import { WebView } from "react-native-webview";
 import type { WebView as WebViewType } from "react-native-webview";
 
@@ -141,6 +143,12 @@ interface ViewerState {
   readAloudActive: boolean;
   /** Per-page text array populated by PDFTextExtractor — independent of mobile view */
   readAloudPageTexts: string[];
+  /**
+   * True while we silently pre-extract text in the background (shortly after
+   * the PDF opens) so Read Aloud / Search start instantly when tapped. Mounts
+   * the same hidden extractor; cleared once extraction completes.
+   */
+  prewarmExtract: boolean;
   // ── Star ──
   isStarred: boolean;
   fileId: string | null;
@@ -250,6 +258,7 @@ export default function PdfViewerScreen() {
     searchMobileCurrent: 0,
     readAloudActive: false,
     readAloudPageTexts: [],
+    prewarmExtract: false,
     isStarred: false,
     fileId: null,
     selectionVisible: false,
@@ -280,6 +289,8 @@ export default function PdfViewerScreen() {
   const pendingSearchQueryRef = useRef<string | null>(null);
   /** Whether we've already attempted to restore the saved page on this open. */
   const restoredPageRef = useRef(false);
+  /** Whether background text pre-extraction has been kicked off for this open. */
+  const prewarmStartedRef = useRef(false);
 
   // ── Lifecycle ────────────────────────────────────────────────────
   React.useEffect(() => {
@@ -287,6 +298,16 @@ export default function PdfViewerScreen() {
     return () => {
       isMountedRef.current = false;
     };
+  }, []);
+
+  // ── Reading-time heartbeat → WorkSpace Progress dashboard ──
+  // Credits time only while the screen is mounted and the app is foregrounded.
+  React.useEffect(() => {
+    const BEAT_MS = 20000;
+    const id = setInterval(() => {
+      if (AppState.currentState === "active") bumpReadingTime(BEAT_MS);
+    }, BEAT_MS);
+    return () => clearInterval(id);
   }, []);
 
   // Normalize URI + check star on mount
@@ -301,9 +322,62 @@ export default function PdfViewerScreen() {
     }
     restoredPageRef.current = false;
     setTargetPage(undefined);
+    prewarmStartedRef.current = false;
     normalizeUri();
     checkStarStatus();
   }, [uri]);
+
+  // ── Background pre-extraction (speed) ────────────────────────────
+  // Once the PDF is validated and on disk, quietly extract its text in the
+  // background so Read Aloud (and Search) start INSTANTLY when tapped instead
+  // of waiting for a cold extraction. Uses the same hidden PDFTextExtractor and
+  // identical message contract; we simply mount it ahead of the user's tap.
+  //
+  // Guards: file:// only (content:// can't be inlined), not while loading/in
+  // error/recovery, skipped for very large files (the extractor inlines bytes
+  // as base64), and only once per open. A short delay keeps first paint snappy.
+  React.useEffect(() => {
+    const PREWARM_MAX_BYTES = 25 * 1024 * 1024; // mirror the text-layer ceiling
+    const canPrewarm =
+      !!state.normalizedUri &&
+      !state.normalizedUri.startsWith("content://") &&
+      !state.loading &&
+      !state.error &&
+      !state.showRecovery &&
+      !state.editMode &&
+      state.readAloudPageTexts.length === 0 &&
+      !state.readAloudActive &&
+      !state.searchExtracting &&
+      !prewarmStartedRef.current &&
+      (state.fileSize == null || state.fileSize <= PREWARM_MAX_BYTES);
+
+    if (!canPrewarm) return;
+
+    prewarmStartedRef.current = true;
+    const timer = setTimeout(() => {
+      if (!isMountedRef.current) return;
+      setState((prev) =>
+        // Re-check inside the setter in case the user already triggered things.
+        prev.readAloudPageTexts.length > 0 ||
+        prev.readAloudActive ||
+        prev.searchExtracting
+          ? prev
+          : { ...prev, prewarmExtract: true },
+      );
+    }, 600);
+
+    return () => clearTimeout(timer);
+  }, [
+    state.normalizedUri,
+    state.loading,
+    state.error,
+    state.showRecovery,
+    state.editMode,
+    state.fileSize,
+    state.readAloudPageTexts.length,
+    state.readAloudActive,
+    state.searchExtracting,
+  ]);
 
   // ── Star status ──────────────────────────────────────────────────
   const checkStarStatus = useCallback(async () => {
@@ -2099,12 +2173,20 @@ export default function PdfViewerScreen() {
            needs text; extracted texts are cached for reuse. */}
       <PDFTextExtractor
         uri={state.normalizedUri ?? null}
-        active={state.readAloudActive || state.searchExtracting}
+        active={
+          // Read Aloud only needs the extractor if text isn't cached yet
+          // (a completed pre-warm leaves it populated → no re-extraction).
+          (state.readAloudActive && state.readAloudPageTexts.length === 0) ||
+          state.searchExtracting ||
+          state.prewarmExtract
+        }
         onProgress={(pageTexts) => {
           // Stream pages into Read Aloud as they extract so playback can start
-          // on page 1 without waiting for the whole document. Search still
-          // waits for the final onPageTexts aggregate below.
-          if (!state.readAloudActive) return;
+          // on page 1 without waiting for the whole document. During a silent
+          // pre-warm (no UI open yet) we ALSO accumulate, so that text is ready
+          // the instant the user taps Read Aloud. Search still waits for the
+          // final onPageTexts aggregate below.
+          if (!state.readAloudActive && !state.prewarmExtract) return;
           setState((prev) => ({ ...prev, readAloudPageTexts: pageTexts }));
         }}
         onPageTexts={(pageTexts) => {
@@ -2125,6 +2207,9 @@ export default function PdfViewerScreen() {
             ...prev,
             readAloudPageTexts: pageTexts,
             searchExtracting: false,
+            // Pre-warm done: unmount the hidden extractor to free memory. The
+            // extracted text stays cached in readAloudPageTexts for instant use.
+            prewarmExtract: false,
             ...(pending != null
               ? { searchMatchPages: matchPages, searchPageIndex: 0 }
               : {}),
@@ -2134,9 +2219,15 @@ export default function PdfViewerScreen() {
         }}
         onError={(msg) => {
           if (__DEV__) console.warn("[PDFTextExtractor]", msg);
-          // Clear extraction state so the UI doesn't stay in loading forever
+          // Clear extraction state so the UI doesn't stay in loading forever.
+          // A failed pre-warm is silent — the user can still tap Read Aloud,
+          // which re-tries extraction with its own visible "Preparing…" state.
           pendingSearchQueryRef.current = null;
-          setState((prev) => ({ ...prev, searchExtracting: false }));
+          setState((prev) => ({
+            ...prev,
+            searchExtracting: false,
+            prewarmExtract: false,
+          }));
         }}
       />
 

@@ -1,7 +1,7 @@
 /**
  * Folders Screen
  * Full folder management system with nested folder navigation,
- * breadcrumb trail, file display, and CRUD operations.
+ * file display, and CRUD operations.
  */
 
 import { AppHeaderContainer } from "@/components/AppHeaderContainer";
@@ -32,7 +32,6 @@ import {
   deleteFolder,
   getAllFolders,
   getFileFolderMap,
-  getFolderPath,
   moveFileToFolder,
   moveFilesToFolder,
   removeFileFromAllFolders,
@@ -50,7 +49,6 @@ import {
   FolderOpen,
   FolderPlus,
   Grid3x3,
-  Home,
   List,
   Search,
 } from "lucide-react-native";
@@ -411,7 +409,6 @@ export default function FoldersScreen() {
 
   // ── Navigation state ────────────────────────────────────────────────────
   const [currentFolderId, setCurrentFolderId] = useState<string | null>(null);
-  const [breadcrumbs, setBreadcrumbs] = useState<Folder[]>([]);
 
   // ── Data ────────────────────────────────────────────────────────────────
   const [folders, setFolders] = useState<Folder[]>([]);
@@ -520,25 +517,12 @@ export default function FoldersScreen() {
     setFavoriteIds(favs);
   }, []);
 
-  const loadBreadcrumbs = useCallback(async () => {
-    if (currentFolderId) {
-      const path = await getFolderPath(currentFolderId);
-      setBreadcrumbs(path);
-    } else {
-      setBreadcrumbs([]);
-    }
-  }, [currentFolderId]);
-
   useEffect(() => {
     loadData();
     AsyncStorage.getItem(FOLDER_VIEW_MODE_KEY).then((v) => {
       if (v === "grid" || v === "list") setViewMode(v);
     });
   }, [loadData]);
-
-  useEffect(() => {
-    loadBreadcrumbs();
-  }, [loadBreadcrumbs]);
 
   useFocusEffect(
     useCallback(() => {
@@ -907,16 +891,11 @@ export default function FoldersScreen() {
       return (
         <Pressable
           key={folder.id}
-          style={({ pressed }) => [
-            s.folderCard,
-            {
-              backgroundColor: pressed ? t.card + "CC" : t.card,
-              borderColor: t.borderLight,
-            },
-          ]}
+          style={({ pressed }) => [s.flatFolderRow, pressed && { opacity: 0.7 }]}
           onPress={() => handleNavigateToFolder(folder.id)}
           onLongPress={() => setActionFolder(folder)}
           delayLongPress={500}
+          android_ripple={{ color: t.primary + "20" }}
         >
           <View
             style={[s.folderIcon, { backgroundColor: folder.color + "20" }]}
@@ -1226,53 +1205,6 @@ export default function FoldersScreen() {
         </View>
       </AppHeaderContainer>
 
-      {/* ── Breadcrumbs ────────────────────────────────────────────────── */}
-      {breadcrumbs.length > 0 && (
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          style={[
-            s.breadcrumbBar,
-            { backgroundColor: t.background, borderBottomColor: t.borderLight },
-          ]}
-          contentContainerStyle={s.breadcrumbContent}
-        >
-          <TouchableOpacity
-            style={s.breadcrumbItem}
-            onPress={() => handleNavigateToFolder(null)}
-          >
-            <Home color={t.primary} size={16} />
-            <Text style={[s.breadcrumbText, { color: t.primary }]}>
-              Folders
-            </Text>
-          </TouchableOpacity>
-          {breadcrumbs.map((bc, idx) => (
-            <React.Fragment key={bc.id}>
-              <ChevronRight color={t.textTertiary} size={14} />
-              <TouchableOpacity
-                style={s.breadcrumbItem}
-                onPress={() => handleNavigateToFolder(bc.id)}
-              >
-                <Text
-                  style={[
-                    s.breadcrumbText,
-                    {
-                      color:
-                        idx === breadcrumbs.length - 1 ? t.text : t.primary,
-                      fontWeight:
-                        idx === breadcrumbs.length - 1 ? "700" : "500",
-                    },
-                  ]}
-                  numberOfLines={1}
-                >
-                  {bc.name}
-                </Text>
-              </TouchableOpacity>
-            </React.Fragment>
-          ))}
-        </ScrollView>
-      )}
-
       {/* ── Search ─────────────────────────────────────────────────────── */}
       <View style={[s.searchSection, { backgroundColor: t.background }]}>
         <View
@@ -1375,6 +1307,15 @@ export default function FoldersScreen() {
           {...(viewMode === "grid"
             ? { numColumns: 3, columnWrapperStyle: s.gridRow }
             : {})}
+          ItemSeparatorComponent={
+            viewMode === "list"
+              ? () => (
+                  <View
+                    style={[s.rowSeparator, { backgroundColor: t.borderLight }]}
+                  />
+                )
+              : undefined
+          }
           contentContainerStyle={
             viewMode === "grid" ? s.gridContent : s.listContent
           }
@@ -1802,28 +1743,6 @@ const s = StyleSheet.create({
     fontWeight: "700",
     color: "#FFFFFF",
   },
-  // ── Breadcrumbs ──
-  breadcrumbBar: {
-    borderBottomWidth: 1,
-    maxHeight: 44,
-  },
-  breadcrumbContent: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    gap: 6,
-  },
-  breadcrumbItem: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 4,
-  },
-  breadcrumbText: {
-    fontSize: 13,
-    fontWeight: "500",
-    maxWidth: 120,
-  },
   // ── Search ──
   searchSection: {
     paddingHorizontal: 16,
@@ -1872,20 +1791,18 @@ const s = StyleSheet.create({
     fontSize: 13,
     fontWeight: "600",
   },
-  // ── Folder card ──
-  folderCard: {
+  // ── Flat folder row (no border — matches library/recent style) ──
+  flatFolderRow: {
     flexDirection: "row",
     alignItems: "center",
-    paddingVertical: 12,
-    paddingHorizontal: 14,
-    borderRadius: 14,
-    borderWidth: 1,
-    marginBottom: 8,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05,
-    shadowRadius: 8,
-    elevation: 2,
+    paddingVertical: 7,
+    paddingHorizontal: 16,
+    height: 62,
+  },
+  // ── Row separator (thin line, inset to text start) ──
+  rowSeparator: {
+    height: StyleSheet.hairlineWidth,
+    marginHorizontal: 16,
   },
   folderIcon: {
     width: 44,

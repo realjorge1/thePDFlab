@@ -28,7 +28,8 @@
       "predictiveBackGestureEnabled": false,
       "package": "com.wordsinscribed.app",
       "permissions": [
-        "RECORD_AUDIO"
+        "RECORD_AUDIO",
+        "POST_NOTIFICATIONS"
       ]
     },
     "web": {
@@ -49,7 +50,13 @@
           }
         }
       ],
-      "expo-asset"
+      "expo-asset",
+      [
+        "expo-notifications",
+        {
+          "color": "#6366F1"
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true,

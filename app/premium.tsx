@@ -53,9 +53,9 @@ const PREMIUM_FEATURES = [
     detail: "Scientific calc + AI notebook",
   },
   {
-    label: "Search and explore files",
+    label: "Search and Explore",
     icon: Search,
-    detail: "Smart search across all your docs",
+    detail: "Download books and documents for offline use",
   },
   {
     label: "Premium AI features",
@@ -161,7 +161,7 @@ export default function PremiumScreen() {
                 onPress={handleRestorePress}
                 disabled={isLoading}
               >
-                <Text style={styles.navRestoreText}>Restore</Text>
+                <Text style={styles.navRestoreText}>Renew</Text>
               </TouchableOpacity>
             </View>
           </GradientView>
@@ -590,11 +590,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 8,
     borderRadius: 12,
-    backgroundColor: "rgba(255,255,255,0.15)",
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.35)",
+    backgroundColor: "#F5C842",
   },
-  navRestoreText: { fontSize: 13, fontWeight: "600", color: "#FFFFFF" },
+  navRestoreText: { fontSize: 13, fontWeight: "700", color: "#3D2C00" },
 
   scrollContent: { paddingBottom: 20 },
 

@@ -26,6 +26,7 @@ import React, {
 import {
   ActivityIndicator,
   Alert,
+  AppState,
   Modal,
   Pressable,
   ScrollView,
@@ -76,6 +77,7 @@ import {
   saveUnderline,
 } from "@/services/viewerStorageService";
 import { setReadingProgress } from "@/services/readingProgressService";
+import { bumpReadingTime } from "@/services/workspaceInsightsService";
 import type { Highlight, Strikethrough, Underline } from "@/src/types/document-viewer.types";
 
 import {
@@ -130,6 +132,15 @@ export default function EpubViewerScreen() {
     return () => {
       isMountedRef.current = false;
     };
+  }, []);
+
+  // ── Reading-time heartbeat → WorkSpace Progress dashboard ──
+  useEffect(() => {
+    const BEAT_MS = 20000;
+    const id = setInterval(() => {
+      if (AppState.currentState === "active") bumpReadingTime(BEAT_MS);
+    }, BEAT_MS);
+    return () => clearInterval(id);
   }, []);
 
   const { uri, name } = useLocalSearchParams<{ uri: string; name: string }>();

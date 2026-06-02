@@ -5,12 +5,15 @@ import {
   Dimensions,
   Platform,
   ScrollView,
-  StatusBar,
   StyleSheet,
   Text,
   TouchableOpacity,
   View,
 } from 'react-native';
+// Edge-to-edge aware status bar. The core RN <StatusBar backgroundColor> is a
+// no-op under Android edge-to-edge (mandatory in SDK 54), so use expo-status-bar
+// which only controls icon style.
+import { StatusBar } from 'expo-status-bar';
 import { GradientView } from './GradientView';
 
 const SCREEN_H = Dimensions.get('window').height;
@@ -90,7 +93,8 @@ export function OnboardingScreen({ onFinish }: Props) {
 
   return (
     <View style={styles.root}>
-      <StatusBar barStyle="light-content" backgroundColor={colors.gradientStart} />
+      {/* Dark gradient behind → light (white) status-bar icons */}
+      <StatusBar style="light" />
 
       <GradientView
         colors={[colors.gradientStart, colors.gradientMid, colors.gradientEnd]}

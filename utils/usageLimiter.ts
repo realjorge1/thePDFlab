@@ -15,6 +15,7 @@
  */
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { FORCE_PREMIUM_UNLOCK } from '@/config/revenuecat';
 
 const DOWNLOAD_COUNT_KEY = 'download_count';
 const FREE_DOWNLOAD_LIMIT = 3;
@@ -25,7 +26,7 @@ const FREE_DOWNLOAD_LIMIT = 3;
  * Free users may download up to FREE_DOWNLOAD_LIMIT times.
  */
 export const canDownload = async (isPro: boolean): Promise<boolean> => {
-  if (isPro) return true;
+  if (FORCE_PREMIUM_UNLOCK || isPro) return true;
 
   try {
     const count = Number(await AsyncStorage.getItem(DOWNLOAD_COUNT_KEY)) || 0;

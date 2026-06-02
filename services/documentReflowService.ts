@@ -11,8 +11,18 @@ import type {
 import * as FileSystem from "expo-file-system/legacy";
 import { loadMobileViewVendorScripts } from "./mobileViewVendorLoader";
 
+// Escaping the ~1.3 MB pdf.js worker on every HTML build is measurable work.
+// The vendor scripts are immutable singletons (loaded once), so cache the
+// escaped result keyed on the source string reference.
+const _escapeCache = new Map<string, string>();
 function escapeForScriptTag(js: string): string {
-  return js.replace(/<\/script/gi, "<\\/script");
+  const hit = _escapeCache.get(js);
+  if (hit !== undefined) return hit;
+  const escaped = js.replace(/<\/script/gi, "<\\/script");
+  // Only retain large vendor blobs (the things worth caching); skip tiny
+  // one-off strings so the map can't grow unbounded.
+  if (js.length > 4096) _escapeCache.set(js, escaped);
+  return escaped;
 }
 
 // ============================================================================
