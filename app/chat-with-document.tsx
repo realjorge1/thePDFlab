@@ -52,15 +52,24 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { AppHeaderContainer } from "@/components/AppHeaderContainer";
 import { GradientView } from "@/components/GradientView";
 import { colors as brandColors } from "@/constants/theme";
+import Animated from "react-native-reanimated";
+import { PressableScale } from "@/components/ui/PressableScale";
+import { useTypingGlow } from "@/hooks/useTypingGlow";
+import { isCancelError, runCancelable } from "@/services/activity/activityStore";
 
 const ACCENT = "#EC4899"; // pink-500 — matches the AI feature color
 const SCREEN_WIDTH = Dimensions.get("window").width;
+
+// Animated TextInput so the composer can softly glow while the user types.
+const AnimatedTextInput = Animated.createAnimatedComponent(TextInput);
 
 type ChatPhase = "pick" | "processing" | "ready" | "error";
 
 export default function ChatWithDocumentScreen() {
   const { colors: t, mode } = useTheme();
   const router = useRouter();
+  // Composer glow: the input softly lights up with the accent while typing.
+  const { glowStyle, onType } = useTypingGlow(ACCENT);
   const params = useLocalSearchParams<{
     uri?: string;
     name?: string;
@@ -197,20 +206,23 @@ export default function ChatWithDocumentScreen() {
   );
 
   // ── Send message ──────────────────────────────────────────────────────────
-  const handleSend = useCallback(async () => {
-    const text = inputText.trim();
+  const handleSend = useCallback(async (override?: string) => {
+    const text = (override ?? inputText).trim();
     if (!text || isLoading || !chatSession) return;
 
     const userMsg = createMessage("user", text);
+    const userMsgId = userMsg.id;
     setMessages((prev) => [...prev, userMsg]);
     setInputText("");
     setIsLoading(true);
 
     try {
-      const result = await askDocumentQuestion(
-        chatSession.docId,
-        text,
-        messages,
+      // Run through the global spring overlay so the user can pull to cancel;
+      // the signal aborts the underlying request for a true cancellation.
+      const result = await runCancelable(
+        (signal) =>
+          askDocumentQuestion(chatSession.docId, text, messages, signal),
+        { kind: "ai", label: "Searching the document" },
       );
 
       // Format the answer with citations
@@ -239,6 +251,12 @@ export default function ChatWithDocumentScreen() {
       const assistantMsg = createMessage("assistant", answerText);
       setMessages((prev) => [...prev, assistantMsg]);
     } catch (err) {
+      // User pulled down to cancel — restore to the pre-send state.
+      if (isCancelError(err)) {
+        setMessages((prev) => prev.filter((m) => m.id !== userMsgId));
+        setInputText(text);
+        return;
+      }
       const errMsg =
         err instanceof Error ? err.message : "Something went wrong";
 
@@ -266,10 +284,13 @@ export default function ChatWithDocumentScreen() {
     }
   }, [inputText, isLoading, chatSession, messages, doc, processDocument]);
 
-  // ── Suggested prompt handler ──────────────────────────────────────────────
-  const handleSuggestedPrompt = useCallback((prompt: string) => {
-    setInputText(prompt);
-  }, []);
+  // ── Suggested prompt handler (auto-sends on tap) ──────────────────────────
+  const handleSuggestedPrompt = useCallback(
+    (prompt: string) => {
+      handleSend(prompt);
+    },
+    [handleSend],
+  );
 
   // ── New document ──────────────────────────────────────────────────────────
   const handleNewDocument = useCallback(() => {
@@ -536,8 +557,9 @@ export default function ChatWithDocumentScreen() {
                 contentContainerStyle={styles.suggestionsContent}
               >
                 {chatSession.suggestedPrompts.map((prompt, idx) => (
-                  <TouchableOpacity
+                  <PressableScale
                     key={idx}
+                    haptic="light"
                     style={[
                       styles.suggestionChip,
                       {
@@ -547,7 +569,6 @@ export default function ChatWithDocumentScreen() {
                       },
                     ]}
                     onPress={() => handleSuggestedPrompt(prompt)}
-                    activeOpacity={0.7}
                   >
                     <Text
                       style={[styles.suggestionText, { color: ACCENT }]}
@@ -555,7 +576,7 @@ export default function ChatWithDocumentScreen() {
                     >
                       {prompt}
                     </Text>
-                  </TouchableOpacity>
+                  </PressableScale>
                 ))}
               </ScrollView>
             </View>
@@ -563,9 +584,12 @@ export default function ChatWithDocumentScreen() {
 
         {/* Input Area */}
         <View style={[styles.inputRow, { borderTopColor: t.border }]}>
-          <TextInput
+          <AnimatedTextInput
             value={inputText}
-            onChangeText={setInputText}
+            onChangeText={(v) => {
+              setInputText(v);
+              onType();
+            }}
             placeholder={
               chatSession
                 ? `Ask about "${chatSession.filename}"...`
@@ -578,12 +602,13 @@ export default function ChatWithDocumentScreen() {
                 backgroundColor: mode === "dark" ? "#1E293B" : "#F1F5F9",
                 color: t.text,
               },
+              glowStyle,
             ]}
             multiline
             maxLength={2000}
             editable={!isLoading}
             blurOnSubmit={false}
-            onSubmitEditing={handleSend}
+            onSubmitEditing={() => handleSend()}
           />
           <VoiceInputButton
             disabled={isLoading}
@@ -592,9 +617,10 @@ export default function ChatWithDocumentScreen() {
             }
             style={{ marginHorizontal: 4 }}
           />
-          <TouchableOpacity
-            onPress={handleSend}
+          <PressableScale
+            onPress={() => handleSend()}
             disabled={!inputText.trim() || isLoading}
+            haptic="medium"
             style={[
               styles.sendBtn,
               {
@@ -602,13 +628,12 @@ export default function ChatWithDocumentScreen() {
                   inputText.trim() && !isLoading ? ACCENT : t.border,
               },
             ]}
-            activeOpacity={0.7}
           >
             <Send
               color={inputText.trim() && !isLoading ? "#FFF" : t.textTertiary}
               size={18}
             />
-          </TouchableOpacity>
+          </PressableScale>
         </View>
       </View>
     </>
@@ -887,7 +912,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
-    marginHorizontal: spacing.md,
+    marginHorizontal: 0,
     marginTop: 4,
     marginBottom: 4,
     paddingHorizontal: spacing.sm + 2,
@@ -913,7 +938,7 @@ const styles = StyleSheet.create({
   // Chat area
   chatContainer: {
     flex: 1,
-    marginHorizontal: spacing.md,
+    marginHorizontal: 0,
     marginBottom: spacing.sm,
     borderRadius: 16,
     overflow: "hidden",

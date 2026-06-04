@@ -46,31 +46,39 @@ export class BackendAIProvider implements AIProvider {
     if (req.documentText) body.documentText = req.documentText;
     if (req.documentName) body.documentName = req.documentName;
 
-    const res = await this.post("/chat", body);
+    const res = await this.post("/chat", body, req.signal);
     return { content: res.response || res.data?.text || "" };
   }
 
   // ── Summarize ─────────────────────────────────────────────────────────────
   async summarize(req: AISummarizeRequest): Promise<AIResponse> {
-    const res = await this.post("/summarize", { text: req.text });
+    const res = await this.post("/summarize", { text: req.text }, req.signal);
     return { content: res.summary || res.data?.text || "" };
   }
 
   // ── Translate ─────────────────────────────────────────────────────────────
   async translate(req: AITranslateRequest): Promise<AIResponse> {
-    const res = await this.post("/translate", {
-      text: req.text,
-      targetLanguage: req.targetLanguage,
-    });
+    const res = await this.post(
+      "/translate",
+      {
+        text: req.text,
+        targetLanguage: req.targetLanguage,
+      },
+      req.signal,
+    );
     return { content: res.translatedText || res.data?.text || "" };
   }
 
   // ── Analyze ───────────────────────────────────────────────────────────────
   async analyze(req: AIAnalyzeRequest): Promise<AIResponse> {
-    const res = await this.post("/analyze", {
-      text: req.text,
-      analysisType: req.analysisType,
-    });
+    const res = await this.post(
+      "/analyze",
+      {
+        text: req.text,
+        analysisType: req.analysisType,
+      },
+      req.signal,
+    );
     const structured = pickStructured(res);
     return {
       content: res.analysis || res.data?.text || "",
@@ -80,9 +88,13 @@ export class BackendAIProvider implements AIProvider {
 
   // ── Extract Tasks ─────────────────────────────────────────────────────────
   async extractTasks(req: AITasksRequest): Promise<AIResponse> {
-    const res = await this.post("/extract-tasks", {
-      text: req.text,
-    });
+    const res = await this.post(
+      "/extract-tasks",
+      {
+        text: req.text,
+      },
+      req.signal,
+    );
     const tasks = res.tasks || res.data?.tasks;
     const structured = pickStructured(res);
     const taskCount = Array.isArray(tasks) ? tasks.length : 0;
@@ -96,14 +108,18 @@ export class BackendAIProvider implements AIProvider {
 
   // ── Generate Document ─────────────────────────────────────────────────────
   async generateDocument(req: AIGenerateDocumentRequest): Promise<AIResponse> {
-    const res = await this.post("/generate-document", {
-      prompt: req.prompt,
-      fileType: req.fileType,
-      category: req.category,
-      tone: req.tone,
-      wordCount: req.wordCount,
-      audience: req.audience,
-    });
+    const res = await this.post(
+      "/generate-document",
+      {
+        prompt: req.prompt,
+        fileType: req.fileType,
+        category: req.category,
+        tone: req.tone,
+        wordCount: req.wordCount,
+        audience: req.audience,
+      },
+      req.signal,
+    );
     return {
       content: res.generatedText || res.data?.text || "",
     };
@@ -111,10 +127,14 @@ export class BackendAIProvider implements AIProvider {
 
   // ── Classify ───────────────────────────────────────────────────────────
   async classify(req: AIClassifyRequest): Promise<AIResponse> {
-    const res = await this.post("/classify", {
-      text: req.text,
-      filename: req.filename,
-    });
+    const res = await this.post(
+      "/classify",
+      {
+        text: req.text,
+        filename: req.filename,
+      },
+      req.signal,
+    );
     return {
       content: res.data?.text || JSON.stringify(res.data, null, 2) || "",
       structuredData: res.data,
@@ -123,7 +143,7 @@ export class BackendAIProvider implements AIProvider {
 
   // ── Highlight ──────────────────────────────────────────────────────────
   async highlight(req: AIHighlightRequest): Promise<AIResponse> {
-    const res = await this.post("/highlight", { text: req.text });
+    const res = await this.post("/highlight", { text: req.text }, req.signal);
     // res.data is either the structured { highlights, meta } object or a
     // fallback text string if the model returned non-JSON.
     const structured =
@@ -146,11 +166,15 @@ export class BackendAIProvider implements AIProvider {
 
   // ── Explain ────────────────────────────────────────────────────────────
   async explain(req: AIExplainRequest): Promise<AIResponse> {
-    const res = await this.post("/explain", {
-      text: req.text,
-      mode: req.mode,
-      depth: (req as any).depth,
-    });
+    const res = await this.post(
+      "/explain",
+      {
+        text: req.text,
+        mode: req.mode,
+        depth: (req as any).depth,
+      },
+      req.signal,
+    );
     return {
       content: res.explanation || res.data?.text || "",
       structuredData: {
@@ -173,7 +197,7 @@ export class BackendAIProvider implements AIProvider {
     };
     if (req.docId) body.docId = req.docId;
 
-    const res = await this.post("/quiz", body);
+    const res = await this.post("/quiz", body, req.signal);
     // res.data is the parsed JSON questions object or raw text envelope
     const structured =
       res?.data?.json ?? (res?.data && typeof res.data === "object" ? res.data : undefined);
@@ -188,8 +212,9 @@ export class BackendAIProvider implements AIProvider {
   private async post(
     path: string,
     body: Record<string, unknown>,
+    signal?: AbortSignal,
   ): Promise<any> {
-    return callBackend(this.baseUrl + path, body);
+    return callBackend(this.baseUrl + path, body, signal);
   }
 }
 
@@ -220,9 +245,21 @@ function pickStructured(
   return undefined;
 }
 
-async function callBackend(url: string, body: Record<string, unknown>) {
+async function callBackend(
+  url: string,
+  body: Record<string, unknown>,
+  externalSignal?: AbortSignal,
+) {
+  // Abort the request if EITHER the 60s timeout fires OR the caller cancels
+  // (e.g. the user pulls down on the spring activity overlay).
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 60_000);
+
+  const onExternalAbort = () => controller.abort();
+  if (externalSignal) {
+    if (externalSignal.aborted) controller.abort();
+    else externalSignal.addEventListener("abort", onExternalAbort);
+  }
 
   try {
     const response = await fetch(url, {
@@ -242,5 +279,6 @@ async function callBackend(url: string, body: Record<string, unknown>) {
     return await response.json();
   } finally {
     clearTimeout(timeout);
+    if (externalSignal) externalSignal.removeEventListener("abort", onExternalAbort);
   }
 }

@@ -92,16 +92,17 @@ export default function ProgressDashboard({ mode, t }: { mode: "light" | "dark";
       <View style={styles.grid}>
         {cards.map((c) => (
           <View key={c.label} style={[styles.card, { backgroundColor: surface, borderColor: border }]}>
-            <View style={[styles.cardIcon, { backgroundColor: `${c.color}1F` }]}>
-              <c.Icon size={16} color={c.color} />
+            <View style={[styles.cardAccent, { backgroundColor: c.color }]} />
+            <c.Icon size={22} color={c.color} strokeWidth={2.1} />
+            <View style={styles.cardText}>
+              <Text style={[styles.cardValue, { color: t.text }]} numberOfLines={1}>{c.value}</Text>
+              <Text style={[styles.cardLabel, { color: t.textTertiary }]} numberOfLines={1}>{c.label}</Text>
             </View>
-            <Text style={[styles.cardValue, { color: t.text }]}>{c.value}</Text>
-            <Text style={[styles.cardLabel, { color: t.textTertiary }]}>{c.label}</Text>
           </View>
         ))}
       </View>
 
-      <View style={[styles.weekStrip, { backgroundColor: `${ACCENT}12`, borderColor: `${ACCENT}33` }]}>
+      <View style={[styles.weekStrip, { backgroundColor: surface, borderColor: border }]}>
         <Zap size={14} color={ACCENT} />
         <Text style={[styles.weekText, { color: t.textSecondary }]}>
           {insights.aiInteractionsThisWeek} AI interaction{insights.aiInteractionsThisWeek === 1 ? "" : "s"} this week ·{" "}
@@ -175,22 +176,27 @@ export default function ProgressDashboard({ mode, t }: { mode: "light" | "dark";
 
 const styles = StyleSheet.create({
   center: { flex: 1, alignItems: "center", justifyContent: "center" },
-  body: { padding: 14 },
+  body: { paddingVertical: 14 },
   sectionTitle: { fontSize: 15, fontWeight: "800", marginBottom: 12, letterSpacing: -0.2 },
 
-  grid: { flexDirection: "row", flexWrap: "wrap", gap: 10 },
+  grid: { flexDirection: "row", flexWrap: "wrap", justifyContent: "space-between", rowGap: 10 },
   card: {
-    width: "31.5%",
+    width: "48.5%",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
     borderRadius: 14,
     borderWidth: 1,
-    paddingVertical: 14,
-    paddingHorizontal: 8,
-    alignItems: "center",
-    gap: 5,
+    paddingVertical: 16,
+    paddingLeft: 18,
+    paddingRight: 14,
+    overflow: "hidden",
   },
-  cardIcon: { width: 32, height: 32, borderRadius: 9, alignItems: "center", justifyContent: "center" },
-  cardValue: { fontSize: 18, fontWeight: "800", letterSpacing: -0.4 },
-  cardLabel: { fontSize: 10.5, fontWeight: "600", textAlign: "center" },
+  // Thin solid colour rail at the card's leading edge (no glow / tint).
+  cardAccent: { position: "absolute", left: 0, top: 0, bottom: 0, width: 4 },
+  cardText: { flex: 1, gap: 2 },
+  cardValue: { fontSize: 20, fontWeight: "800", letterSpacing: -0.4 },
+  cardLabel: { fontSize: 11.5, fontWeight: "600" },
 
   weekStrip: {
     flexDirection: "row",

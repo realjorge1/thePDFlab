@@ -693,7 +693,7 @@ ${body}
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, paddingHorizontal: 10, paddingTop: 8 },
+  container: { flex: 1, paddingHorizontal: 0, paddingTop: 8 },
   loadingWrap: { flex: 1, alignItems: "center", justifyContent: "center" },
 
   titleRow: { flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 6 },

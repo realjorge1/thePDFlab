@@ -17,7 +17,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import Svg, { Circle, G, Line, Text as SvgText } from "react-native-svg";
+import Svg, { Circle, G, Line, Rect, Text as SvgText } from "react-native-svg";
 import { BookMarked, Minus, Plus, RefreshCw, Sparkles, X } from "lucide-react-native";
 
 import type { UnifiedFileRecord } from "@/services/fileIndexService";
@@ -165,14 +165,14 @@ export default function KnowledgeGraph({
 
     conceptNodes.forEach((n, i) => {
       const a = conceptNodes.length ? (i / conceptNodes.length) * Math.PI * 2 : 0;
-      place(n, cx + rConcepts * Math.cos(a), cy + rConcepts * Math.sin(a), 9);
+      place(n, cx + rConcepts * Math.cos(a), cy + rConcepts * Math.sin(a), 11);
     });
 
     const bookAngle = new Map<string, number>();
     bookNodes.forEach((n, i) => {
       const a = (i / Math.max(1, bookNodes.length)) * Math.PI * 2 - Math.PI / 2;
       bookAngle.set(n.id, a);
-      place(n, cx + rBooks * Math.cos(a), cy + rBooks * Math.sin(a), 13);
+      place(n, cx + rBooks * Math.cos(a), cy + rBooks * Math.sin(a), 15);
     });
 
     noteNodes.forEach((n, i) => {
@@ -184,15 +184,20 @@ export default function KnowledgeGraph({
       } else {
         a = (i / Math.max(1, noteNodes.length)) * Math.PI * 2 + 0.3;
       }
-      place(n, cx + rNotes * Math.cos(a), cy + rNotes * Math.sin(a), 8);
+      place(n, cx + rNotes * Math.cos(a), cy + rNotes * Math.sin(a), 10);
     });
 
     return { positioned: out, posById: map, canvas: size };
   }, [graph]);
 
   const edgeColor = mode === "dark" ? "rgba(148,163,184,0.28)" : "rgba(100,116,139,0.25)";
-  const conceptEdgeColor = mode === "dark" ? "rgba(147,51,234,0.35)" : "rgba(147,51,234,0.25)";
-  const labelColor = mode === "dark" ? "#CBD5E1" : "#475569";
+  const conceptEdgeColor = mode === "dark" ? "rgba(147,51,234,0.40)" : "rgba(147,51,234,0.30)";
+  const labelColor = mode === "dark" ? "#E2E8F0" : "#334155";
+  const boardBg = mode === "dark" ? "#0B1220" : "#F1F5F9";
+  const boardBorder = mode === "dark" ? "#1E293B" : "#E2E8F0";
+  const chipFill = mode === "dark" ? "#0F172A" : "#FFFFFF";
+  // Node ring blends into the board so circles read crisply at any zoom.
+  const nodeRing = mode === "dark" ? "#0B1220" : "#FFFFFF";
 
   if (loading) {
     return (
@@ -236,7 +241,10 @@ export default function KnowledgeGraph({
           </Text>
         </View>
       ) : (
-        <View style={styles.canvasWrap} {...panResponder.panHandlers}>
+        <View
+          style={[styles.canvasWrap, { backgroundColor: boardBg, borderColor: boardBorder }]}
+          {...panResponder.panHandlers}
+        >
           <Animated.View
             style={{
               transform: [{ translateX: pan.x }, { translateY: pan.y }, { scale }],
@@ -248,6 +256,8 @@ export default function KnowledgeGraph({
                 const a = posById.get(e.from);
                 const b = posById.get(e.to);
                 if (!a || !b) return null;
+                const isConcept = e.kind === "concept";
+                const dim = selected ? selected.id !== e.from && selected.id !== e.to : false;
                 return (
                   <Line
                     key={`e${i}`}
@@ -255,35 +265,62 @@ export default function KnowledgeGraph({
                     y1={a.y}
                     x2={b.x}
                     y2={b.y}
-                    stroke={e.kind === "concept" ? conceptEdgeColor : edgeColor}
-                    strokeWidth={e.kind === "concept" ? 1 : 1.5}
+                    stroke={isConcept ? conceptEdgeColor : edgeColor}
+                    strokeWidth={isConcept ? 1.25 : 1.75}
+                    opacity={dim ? 0.25 : 1}
                   />
                 );
               })}
               {/* nodes */}
-              {positioned.map((n) => (
-                <G key={n.id} onPress={() => setSelected(n)}>
-                  <Circle
-                    cx={n.x}
-                    cy={n.y}
-                    r={n.r}
-                    fill={NODE_COLORS[n.type]}
-                    opacity={selected && selected.id === n.id ? 1 : 0.9}
-                    stroke={selected && selected.id === n.id ? "#FFFFFF" : "transparent"}
-                    strokeWidth={2}
-                  />
-                  <SvgText
-                    x={n.x}
-                    y={n.y + n.r + 11}
-                    fill={labelColor}
-                    fontSize={n.type === "book" ? 10 : 9}
-                    fontWeight={n.type === "concept" ? "700" : "500"}
-                    textAnchor="middle"
-                  >
-                    {clip(n.label, n.type === "book" ? 16 : 14)}
-                  </SvgText>
-                </G>
-              ))}
+              {positioned.map((n) => {
+                const isSel = !!selected && selected.id === n.id;
+                const dim = !!selected && !isSel;
+                const color = NODE_COLORS[n.type];
+                const label = clip(n.label, n.type === "book" ? 16 : 14);
+                const fontSize = n.type === "book" ? 10 : 9;
+                const chipH = fontSize + 9;
+                const chipW = Math.max(label.length * fontSize * 0.62 + 12, 24);
+                const chipY = n.y + n.r + 5;
+                return (
+                  <G key={n.id} onPress={() => setSelected(n)} opacity={dim ? 0.45 : 1}>
+                    {/* soft halo for depth */}
+                    <Circle cx={n.x} cy={n.y} r={n.r + (isSel ? 8 : 5)} fill={color} opacity={isSel ? 0.3 : 0.16} />
+                    {/* node */}
+                    <Circle
+                      cx={n.x}
+                      cy={n.y}
+                      r={n.r}
+                      fill={color}
+                      stroke={isSel ? "#FFFFFF" : nodeRing}
+                      strokeWidth={isSel ? 2.5 : 2}
+                    />
+                    {/* inner highlight for concepts */}
+                    {n.type === "concept" ? (
+                      <Circle cx={n.x} cy={n.y} r={n.r * 0.42} fill="#FFFFFF" opacity={0.92} />
+                    ) : null}
+                    {/* label chip for readability over edges */}
+                    <Rect
+                      x={n.x - chipW / 2}
+                      y={chipY}
+                      width={chipW}
+                      height={chipH}
+                      rx={chipH / 2}
+                      fill={chipFill}
+                      opacity={0.94}
+                    />
+                    <SvgText
+                      x={n.x}
+                      y={chipY + chipH / 2 + fontSize * 0.36}
+                      fill={labelColor}
+                      fontSize={fontSize}
+                      fontWeight={n.type === "concept" ? "700" : "600"}
+                      textAnchor="middle"
+                    >
+                      {label}
+                    </SvgText>
+                  </G>
+                );
+              })}
             </Svg>
           </Animated.View>
 
@@ -400,20 +437,32 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     paddingHorizontal: 14,
     paddingVertical: 10,
+    gap: 10,
   },
-  legend: { flexDirection: "row", gap: 12 },
-  legendItem: { flexDirection: "row", alignItems: "center", gap: 5 },
-  legendDot: { width: 9, height: 9, borderRadius: 5 },
-  legendLabel: { fontSize: 11, fontWeight: "600" },
-  rebuildBtn: { flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: 12, paddingVertical: 7, borderRadius: 12 },
+  legend: { flexDirection: "row", flexWrap: "wrap", gap: 14 },
+  legendItem: { flexDirection: "row", alignItems: "center", gap: 6 },
+  legendDot: { width: 10, height: 10, borderRadius: 5 },
+  legendLabel: { fontSize: 11.5, fontWeight: "600" },
+  rebuildBtn: { flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: 13, paddingVertical: 8, borderRadius: 12 },
   rebuildText: { color: ACCENT, fontWeight: "700", fontSize: 12.5 },
 
-  canvasWrap: { flex: 1, overflow: "hidden", alignItems: "center", justifyContent: "center" },
+  canvasWrap: {
+    flex: 1,
+    overflow: "hidden",
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: 18,
+    borderWidth: 1,
+    marginHorizontal: 0,
+    marginBottom: 6,
+  },
   zoomCol: { position: "absolute", right: 12, bottom: 12, gap: 8 },
   zoomBtn: {
     width: 38,
     height: 38,
     borderRadius: 10,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: "rgba(148,163,184,0.35)",
     alignItems: "center",
     justifyContent: "center",
     shadowColor: "#000",
@@ -423,7 +472,7 @@ const styles = StyleSheet.create({
     elevation: 3,
   },
 
-  detail: { borderTopWidth: 1, borderWidth: 1, borderRadius: 14, margin: 10, padding: 14 },
+  detail: { borderTopWidth: 1, borderWidth: 1, borderRadius: 14, marginVertical: 10, marginHorizontal: 0, padding: 14 },
   detailHeader: { flexDirection: "row", alignItems: "center", gap: 7, marginBottom: 8 },
   detailDot: { width: 10, height: 10, borderRadius: 5 },
   detailType: { fontSize: 10.5, fontWeight: "800", letterSpacing: 0.5 },

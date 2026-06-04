@@ -146,10 +146,17 @@ export async function askDocumentQuestion(
   docId: string,
   question: string,
   history?: AIChatMessage[],
+  externalSignal?: AbortSignal,
 ): Promise<DocumentChatResponse> {
   assertAIPremium();
+  // Abort on EITHER the 60s timeout OR an external cancel (spring overlay).
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 60_000);
+  const onExternalAbort = () => controller.abort();
+  if (externalSignal) {
+    if (externalSignal.aborted) controller.abort();
+    else externalSignal.addEventListener("abort", onExternalAbort);
+  }
 
   try {
     const response = await fetch(API_ENDPOINTS.AI.CHAT_DOCUMENT, {
@@ -191,6 +198,7 @@ export async function askDocumentQuestion(
     };
   } finally {
     clearTimeout(timeout);
+    if (externalSignal) externalSignal.removeEventListener("abort", onExternalAbort);
   }
 }
 

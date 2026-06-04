@@ -80,6 +80,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { PINGate } from "@/components/PINGate";
 import { ProgressRing } from "@/components/ProgressRing";
+import { PressableScale } from "@/components/ui/PressableScale";
 import { useReadingProgressFor } from "@/hooks/useReadingProgress";
 
 const { width: SCREEN_WIDTH } = Dimensions.get("window");
@@ -889,9 +890,10 @@ export default function FoldersScreen() {
       const subCount = folders.filter((f) => f.parentId === folder.id).length;
 
       return (
-        <Pressable
+        <PressableScale
           key={folder.id}
-          style={({ pressed }) => [s.flatFolderRow, pressed && { opacity: 0.7 }]}
+          scaleTo={0.98}
+          style={s.flatFolderRow}
           onPress={() => handleNavigateToFolder(folder.id)}
           onLongPress={() => setActionFolder(folder)}
           delayLongPress={500}
@@ -918,7 +920,7 @@ export default function FoldersScreen() {
             </Text>
           </View>
           <ChevronRight color={t.textTertiary} size={20} />
-        </Pressable>
+        </PressableScale>
       );
     },
     [t, folders, fileFolderMap, handleNavigateToFolder],
@@ -936,12 +938,10 @@ export default function FoldersScreen() {
       const isFav = favoriteIds.has(file.id);
 
       return (
-        <Pressable
+        <PressableScale
           key={file.id}
-          style={({ pressed }) => [
-            s.flatFileRow,
-            pressed && { opacity: 0.7 },
-          ]}
+          scaleTo={0.98}
+          style={s.flatFileRow}
           onPress={() => handleFilePress(file)}
           onLongPress={() => setActionFile(file)}
           delayLongPress={500}
@@ -989,7 +989,7 @@ export default function FoldersScreen() {
               <MaterialIcons name="more-vert" size={22} color={t.textTertiary} />
             </TouchableOpacity>
           </View>
-        </Pressable>
+        </PressableScale>
       );
     },
     [t, favoriteIds, handleFilePress],
@@ -1003,12 +1003,13 @@ export default function FoldersScreen() {
       const subCount = folders.filter((f) => f.parentId === folder.id).length;
 
       return (
-        <Pressable
+        <PressableScale
           key={folder.id}
-          style={({ pressed }) => [
+          scaleTo={0.97}
+          style={[
             s.gridCard,
             {
-              backgroundColor: pressed ? t.card + "CC" : t.card,
+              backgroundColor: t.card,
               borderColor: t.borderLight,
             },
           ]}
@@ -1044,7 +1045,7 @@ export default function FoldersScreen() {
           >
             <MaterialIcons name="more-horiz" size={20} color={t.textTertiary} />
           </TouchableOpacity>
-        </Pressable>
+        </PressableScale>
       );
     },
     [t, folders, fileFolderMap, handleNavigateToFolder],
@@ -1056,12 +1057,13 @@ export default function FoldersScreen() {
       const isFav = favoriteIds.has(file.id);
 
       return (
-        <Pressable
+        <PressableScale
           key={file.id}
-          style={({ pressed }) => [
+          scaleTo={0.97}
+          style={[
             s.gridCard,
             {
-              backgroundColor: pressed ? t.card + "CC" : t.card,
+              backgroundColor: t.card,
               borderColor: t.borderLight,
             },
           ]}
@@ -1109,7 +1111,7 @@ export default function FoldersScreen() {
           >
             <MaterialIcons name="more-horiz" size={20} color={t.textTertiary} />
           </TouchableOpacity>
-        </Pressable>
+        </PressableScale>
       );
     },
     [t, favoriteIds, handleFilePress],

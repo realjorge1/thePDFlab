@@ -1220,7 +1220,7 @@ const styles = StyleSheet.create({
 
   // ── Idle ──
   idleContent: {
-    paddingHorizontal: 20,
+    paddingHorizontal: 0,
     paddingTop: 32,
     paddingBottom: 24,
     alignItems: "center",
@@ -1290,7 +1290,7 @@ const styles = StyleSheet.create({
 
   // ── Setup ──
   setupContent: {
-    paddingHorizontal: 16,
+    paddingHorizontal: 0,
     paddingTop: 14,
     paddingBottom: 24,
   },
@@ -1437,7 +1437,7 @@ const styles = StyleSheet.create({
 
   // ── Active ──
   activeContent: {
-    paddingHorizontal: 16,
+    paddingHorizontal: 0,
     paddingTop: 12,
     paddingBottom: 24,
   },
@@ -1675,7 +1675,7 @@ const styles = StyleSheet.create({
 
   // ── Complete ──
   completeContent: {
-    paddingHorizontal: 16,
+    paddingHorizontal: 0,
     paddingTop: 14,
     paddingBottom: 24,
     gap: 12,

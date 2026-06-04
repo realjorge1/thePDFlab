@@ -28,8 +28,6 @@ import React, {
 import {
   ActivityIndicator,
   Alert,
-  Animated,
-  Easing,
   FlatList,
   Linking,
   RefreshControl,
@@ -46,6 +44,7 @@ import { AppHeaderContainer } from "@/components/AppHeaderContainer";
 import { GradientView } from "@/components/GradientView";
 import { PINGate } from "@/components/PINGate";
 import { PremiumGate } from "@/components/PremiumGate";
+import { PressableScale } from "@/components/ui/PressableScale";
 import { colors } from "@/constants/theme";
 import { useTheme } from "@/services/ThemeProvider";
 import { upsertFileRecord } from "@/services/fileIndexService";
@@ -78,6 +77,9 @@ const DEBOUNCE_DELAY = 500;
 const ARXIV_DEBOUNCE_DELAY = 3200; // arXiv: 1 req/3s
 const ZENODO_DEBOUNCE_DELAY = 1200; // Zenodo: 60 req/min
 const PMC_DEBOUNCE_DELAY = 800; // NCBI: 3 req/s without API key
+
+// Abort a search that hangs so the UI fails fast instead of spinning forever
+const SEARCH_TIMEOUT_MS = 20000;
 
 type TabType = "search" | "downloads";
 
@@ -187,27 +189,9 @@ export default function DownloadsScreen() {
 
   // Refs
   const searchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  // Rotating search-button animation while a search is in flight
-  const spinValue = useRef(new Animated.Value(0)).current;
-  useEffect(() => {
-    if (!isSearching) return;
-    spinValue.setValue(0);
-    const loop = Animated.loop(
-      Animated.timing(spinValue, {
-        toValue: 1,
-        duration: 800,
-        easing: Easing.linear,
-        useNativeDriver: true,
-      }),
-    );
-    loop.start();
-    return () => loop.stop();
-  }, [isSearching, spinValue]);
-  const spin = spinValue.interpolate({
-    inputRange: [0, 1],
-    outputRange: ["0deg", "360deg"],
-  });
+  // Monotonic id for the latest search; results from older ids are ignored so a
+  // slow/stale request can never overwrite newer results or a cleared screen.
+  const searchRequestIdRef = useRef(0);
 
   // Update active tab when navigating with tab param
   useEffect(() => {
@@ -256,71 +240,113 @@ export default function DownloadsScreen() {
   // ============================================================================
   // SEARCH
   // ============================================================================
-  const handleSearch = useCallback(async () => {
-    const trimmedQuery = query.trim();
-    if (!trimmedQuery) {
+  const handleSearch = useCallback(
+    async (overrideQuery?: string, overrideSource?: LibrarySource) => {
+      // Use explicit args when provided. The debounced/source-switch callers
+      // pass the live value directly because the closed-over state can be one
+      // render behind, which previously made auto-search run a stale (or empty)
+      // query and silently return nothing.
+      // Guard against event objects from onPress/onSubmitEditing handlers.
+      const trimmedQuery = (
+        typeof overrideQuery === "string" ? overrideQuery : query
+      ).trim();
+      const source = overrideSource ?? selectedSource;
+
+      // A new search supersedes anything in flight.
+      if (searchTimeoutRef.current) {
+        clearTimeout(searchTimeoutRef.current);
+        searchTimeoutRef.current = null;
+      }
+      const requestId = ++searchRequestIdRef.current;
+      const isCurrent = () => requestId === searchRequestIdRef.current;
+
+      if (!trimmedQuery) {
+        setSearchResults([]);
+        setIsSearching(false);
+        return;
+      }
+
+      setIsSearching(true);
+      setSearchError(null);
       setSearchResults([]);
-      return;
-    }
 
-    setIsSearching(true);
-    setSearchError(null);
-    setSearchResults([]);
+      try {
+        const runSearch = (): Promise<SearchResult[]> => {
+          switch (source) {
+            case "gutenberg":
+              return gutenbergAdapter.search(trimmedQuery);
+            case "openlibrary":
+              return openLibraryAdapter.search(trimmedQuery);
+            case "arxiv":
+              return arxivAdapter.search(trimmedQuery);
+            case "zenodo":
+              return zenodoAdapter.search(trimmedQuery);
+            case "pmc":
+              return pmcAdapter.search(trimmedQuery);
+            default:
+              return Promise.resolve([]);
+          }
+        };
 
-    try {
-      let results: SearchResult[] = [];
+        // Fail fast on a hung request instead of spinning indefinitely.
+        let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+        const timeout = new Promise<never>((_, reject) => {
+          timeoutHandle = setTimeout(
+            () => reject(new Error("timed out")),
+            SEARCH_TIMEOUT_MS,
+          );
+        });
 
-      switch (selectedSource) {
-        case "gutenberg":
-          results = await gutenbergAdapter.search(trimmedQuery);
-          break;
-        case "openlibrary":
-          results = await openLibraryAdapter.search(trimmedQuery);
-          break;
-        case "arxiv":
-          results = await arxivAdapter.search(trimmedQuery);
-          break;
-        case "zenodo":
-          results = await zenodoAdapter.search(trimmedQuery);
-          break;
-        case "pmc":
-          results = await pmcAdapter.search(trimmedQuery);
-          break;
+        let results: SearchResult[];
+        try {
+          results = await Promise.race([runSearch(), timeout]);
+        } finally {
+          if (timeoutHandle) clearTimeout(timeoutHandle);
+        }
+
+        // Ignore results from a superseded or cleared search.
+        if (!isCurrent()) return;
+
+        // Filter out URLs that recently failed
+        results = filterFailedResults(results);
+
+        // Rank by relevance and drop low-quality matches
+        results = filterByRelevance(trimmedQuery, results);
+
+        setSearchResults(results);
+
+        if (results.length === 0) {
+          setSearchError(
+            "No downloadable materials found. Try a different search term.",
+          );
+        }
+      } catch (error) {
+        console.error("Search error:", error);
+        if (!isCurrent()) return;
+        const msg = error instanceof Error ? error.message : String(error);
+        // Surface actionable messages from adapters; fall back to generic text
+        if (
+          msg.includes("requires a free API token") ||
+          msg.includes("API token is invalid") ||
+          msg.includes("rate limit") ||
+          msg.includes("API key")
+        ) {
+          setSearchError(msg);
+        } else if (msg.includes("timed out")) {
+          setSearchError(
+            "Search took too long. Please check your connection and try again.",
+          );
+        } else {
+          setSearchError(
+            "Search failed. Please check your connection and try again.",
+          );
+        }
+      } finally {
+        if (isCurrent()) setIsSearching(false);
       }
-
-      // Filter out URLs that recently failed
-      results = filterFailedResults(results);
-
-      // Rank by relevance and drop low-quality matches
-      results = filterByRelevance(trimmedQuery, results);
-
-      setSearchResults(results);
-
-      if (results.length === 0) {
-        setSearchError(
-          "No downloadable materials found. Try a different search term.",
-        );
-      }
-    } catch (error) {
-      console.error("Search error:", error);
-      const msg = error instanceof Error ? error.message : String(error);
-      // Surface actionable messages from adapters; fall back to generic text
-      if (
-        msg.includes("requires a free API token") ||
-        msg.includes("API token is invalid") ||
-        msg.includes("rate limit") ||
-        msg.includes("API key")
-      ) {
-        setSearchError(msg);
-      } else {
-        setSearchError(
-          "Search failed. Please check your connection and try again.",
-        );
-      }
-    } finally {
-      setIsSearching(false);
-    }
-  }, [query, selectedSource]);
+    },
+    [query, selectedSource],
+  );
 
   // Debounced search on query change
   const handleQueryChange = useCallback(
@@ -341,11 +367,14 @@ export default function DownloadsScreen() {
                 ? PMC_DEBOUNCE_DELAY
                 : DEBOUNCE_DELAY;
         searchTimeoutRef.current = setTimeout(() => {
-          handleSearch();
+          handleSearch(text);
         }, delay);
       } else {
+        // Too short to search — invalidate any in-flight request and reset.
+        searchRequestIdRef.current++;
         setSearchResults([]);
         setSearchError(null);
+        setIsSearching(false);
       }
     },
     [handleSearch, selectedSource],
@@ -353,11 +382,16 @@ export default function DownloadsScreen() {
 
   // Clear search
   const clearSearch = useCallback(() => {
+    // Invalidate any in-flight search so a late response can't repopulate
+    // results after the user has cleared the box.
+    searchRequestIdRef.current++;
     setQuery("");
     setSearchResults([]);
     setSearchError(null);
+    setIsSearching(false);
     if (searchTimeoutRef.current) {
       clearTimeout(searchTimeoutRef.current);
+      searchTimeoutRef.current = null;
     }
   }, []);
 
@@ -594,8 +628,10 @@ export default function DownloadsScreen() {
       const isActive = selectedSource === source;
 
       return (
-        <TouchableOpacity
+        <PressableScale
           key={source}
+          haptic="selection"
+          scaleTo={0.94}
           style={[
             styles.sourceChip,
             {
@@ -609,10 +645,10 @@ export default function DownloadsScreen() {
             setSearchResults([]);
             setSearchError(null);
             if (query.trim().length >= 3) {
-              handleSearch();
+              // Pass the new source explicitly; state hasn't committed yet.
+              handleSearch(query, source);
             }
           }}
-          activeOpacity={0.7}
         >
           <Text
             style={[
@@ -622,7 +658,7 @@ export default function DownloadsScreen() {
           >
             {info.label}
           </Text>
-        </TouchableOpacity>
+        </PressableScale>
       );
     },
     [selectedSource, query, handleSearch, t],
@@ -805,10 +841,9 @@ export default function DownloadsScreen() {
 
   const renderDownloadItem = useCallback(
     ({ item }: { item: DownloadItem }) => (
-      <TouchableOpacity
+      <PressableScale
         style={styles.downloadCard}
         onPress={() => handleOpen(item)}
-        activeOpacity={0.7}
       >
         <View style={styles.downloadInfo}>
           <View style={styles.downloadHeader}>
@@ -881,7 +916,7 @@ export default function DownloadsScreen() {
             <Trash2 size={16} color={t.error} />
           </TouchableOpacity>
         </View>
-      </TouchableOpacity>
+      </PressableScale>
     ),
     [handleOpen, handleShare, handleDelete],
   );
@@ -1039,7 +1074,7 @@ export default function DownloadsScreen() {
                   placeholderTextColor={t.textTertiary}
                   value={query}
                   onChangeText={handleQueryChange}
-                  onSubmitEditing={handleSearch}
+                  onSubmitEditing={() => handleSearch()}
                   returnKeyType="search"
                 />
                 {query.length > 0 && (
@@ -1053,14 +1088,12 @@ export default function DownloadsScreen() {
                   styles.searchButton,
                   isSearching && styles.searchButtonDisabled,
                 ]}
-                onPress={handleSearch}
+                onPress={() => handleSearch()}
                 disabled={isSearching || !query.trim()}
                 activeOpacity={0.7}
               >
                 {isSearching ? (
-                  <Animated.View style={{ transform: [{ rotate: spin }] }}>
-                    <Search size={20} color="#fff" />
-                  </Animated.View>
+                  <ActivityIndicator size="small" color="#fff" />
                 ) : (
                   <Search size={20} color="#fff" />
                 )}

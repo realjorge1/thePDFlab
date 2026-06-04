@@ -19,7 +19,8 @@ export type NotificationType =
   | "ai_complete"
   | "read_aloud_playing"
   | "read_aloud_stopped"
-  | "read_aloud_end_of_file";
+  | "read_aloud_end_of_file"
+  | "task_reminder";
 
 interface NotificationPayload {
   title: string;
@@ -28,6 +29,24 @@ interface NotificationPayload {
 }
 
 const ANDROID_CHANNEL_ID = "wordsinscribed-tasks";
+
+/**
+ * Stable notification identifiers per type. Posting a notification with an
+ * identifier that is already showing causes the OS to REPLACE the existing one
+ * (same Android tag/iOS identifier) instead of stacking a new entry. This stops
+ * notifications from piling up — the latest of each kind overwrites the last.
+ * All Read Aloud states share one id so the playback status updates in place.
+ * `task_reminder` is intentionally absent: scheduled reminders must each be
+ * distinct so multiple can coexist and be individually cancelled.
+ */
+const NOTIFICATION_IDS: Partial<Record<NotificationType, string>> = {
+  processing_complete: "wordsinscribed.processing",
+  download_complete: "wordsinscribed.download",
+  ai_complete: "wordsinscribed.ai",
+  read_aloud_playing: "wordsinscribed.read_aloud",
+  read_aloud_stopped: "wordsinscribed.read_aloud",
+  read_aloud_end_of_file: "wordsinscribed.read_aloud",
+};
 
 // ─── Setup ────────────────────────────────────────────────────────────────────
 
@@ -111,6 +130,9 @@ async function sendLocalNotification(payload: NotificationPayload) {
 
   try {
     await Notifications.scheduleNotificationAsync({
+      // Reuse a stable id per type so a new notification replaces the previous
+      // one of the same kind rather than stacking a separate entry.
+      identifier: NOTIFICATION_IDS[payload.type],
       content: {
         title: payload.title,
         body: payload.body,
@@ -129,6 +151,59 @@ async function sendLocalNotification(payload: NotificationPayload) {
 }
 
 // ─── Public API ───────────────────────────────────────────────────────────────
+
+// ─── Scheduled task reminders ───────────────────────────────────────────────
+
+/**
+ * Schedule a REAL device notification to fire at `when` for a workspace task.
+ * Requests notification permission on first use. Returns the OS notification
+ * identifier (so it can later be cancelled), or `null` if permission was
+ * denied or scheduling failed. The reminder survives app restarts because the
+ * OS owns the scheduled notification.
+ */
+export async function scheduleTaskReminder(
+  taskText: string,
+  when: Date,
+): Promise<string | null> {
+  const granted = await initNotifications();
+  if (!granted) return null;
+
+  // Guard against scheduling in the past (would fire immediately or be dropped).
+  if (when.getTime() <= Date.now() + 1000) return null;
+
+  try {
+    const trigger: Notifications.NotificationTriggerInput = {
+      type: Notifications.SchedulableTriggerInputTypes.DATE,
+      date: when,
+      ...(Platform.OS === "android" ? { channelId: ANDROID_CHANNEL_ID } : {}),
+    } as Notifications.NotificationTriggerInput;
+
+    const id = await Notifications.scheduleNotificationAsync({
+      content: {
+        title: "Task reminder",
+        body: taskText.trim() || "You have a task to do.",
+        data: { type: "task_reminder" },
+        sound: true,
+      },
+      trigger,
+    });
+    return id;
+  } catch (e) {
+    if (__DEV__) console.warn("[Notifications] Failed to schedule reminder:", e);
+    return null;
+  }
+}
+
+/** Cancel a previously scheduled notification by its identifier. Safe to call
+ * with an id that no longer exists. */
+export async function cancelScheduledNotification(id: string): Promise<void> {
+  if (!id) return;
+  try {
+    await Notifications.cancelScheduledNotificationAsync(id);
+  } catch (e) {
+    if (__DEV__) console.warn("[Notifications] Failed to cancel reminder:", e);
+  }
+}
 
 /**
  * Notify user that a file processing task completed.

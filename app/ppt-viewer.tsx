@@ -1,19 +1,24 @@
-import { useEffect } from "react";
-import { AppState } from "react-native";
+/**
+ * ppt-viewer.tsx
+ *
+ * PowerPoint viewing is temporarily disabled. This route now shows a
+ * "Not available now" screen instead of the online PPTX viewer. The route is
+ * preserved so taps on .pptx/.ppt files from the library, folders, browse,
+ * file-details and home land here gracefully. The underlying implementation in
+ * features/pptxViewerOnline is left intact for re-enabling.
+ */
 
-import { PptxViewerOnlineScreen } from "@/features/pptxViewerOnline";
-import { bumpReadingTime } from "@/services/workspaceInsightsService";
+import { FeatureUnavailableScreen } from "@/components/FeatureUnavailableScreen";
+import { Presentation } from "lucide-react-native";
+import React from "react";
 
 export default function PptViewer() {
-  // Reading-time heartbeat → WorkSpace Progress dashboard. Credits time only
-  // while mounted and the app is foregrounded.
-  useEffect(() => {
-    const BEAT_MS = 20000;
-    const id = setInterval(() => {
-      if (AppState.currentState === "active") bumpReadingTime(BEAT_MS);
-    }, BEAT_MS);
-    return () => clearInterval(id);
-  }, []);
-
-  return <PptxViewerOnlineScreen />;
+  return (
+    <FeatureUnavailableScreen
+      headerTitle="Presentation"
+      icon={Presentation}
+      accentColor="#D24726"
+      message="Viewing PowerPoint presentations isn't available right now. Check back in an upcoming update."
+    />
+  );
 }

@@ -3,6 +3,7 @@ import { AppHeaderContainer } from "@/components/AppHeaderContainer";
 import FileTypeOptionsDialog from "@/components/FileTypeOptionsDialog";
 import { GradientView } from "@/components/GradientView";
 import { PINGate } from "@/components/PINGate";
+import { PressableScale } from "@/components/ui/PressableScale";
 import { aiFeatures } from "@/constants/ai-features";
 import { GLOBAL_CONTAINER_HEADERS } from "@/constants/featureFlags";
 import { colors } from "@/constants/theme";
@@ -27,11 +28,11 @@ import { useFocusEffect, useRouter } from "expo-router";
 import {
   ChevronRight,
   Crown,
-  Download,
   File,
   FileText,
   Filter,
   FolderOpen,
+  LayoutDashboard,
   PencilLine,
   Presentation,
   Search,
@@ -83,6 +84,16 @@ function mapFileType(type: string): string {
   }
 }
 
+// Per-button accent colors carried over from the original Activity gradients.
+// Applied to the icon chips only (solid chip + white glyph) — the same icon
+// treatment used on the Tools screen.
+const ACTIVITY_ACCENTS = {
+  create: "#06B6D4",
+  folders: "#8B5E3C",
+  workspace: "#10B981",
+  premium: "#DAA520",
+} as const;
+
 // Combined file type for display - allows both FileInfo and UnifiedFileRecord
 interface DisplayFile {
   id: string;
@@ -98,7 +109,11 @@ interface DisplayFile {
   source?: string;
 }
 
-const AICyclingText = React.memo(function AICyclingText() {
+const AICyclingText = React.memo(function AICyclingText({
+  color,
+}: {
+  color?: string;
+}) {
   const aiFeatureIdx = useRef(0);
   const aiActiveSlot = useRef<0 | 1>(0);
   const [aiTextA, setAiTextA] = useState(aiFeatures[0].name);
@@ -160,13 +175,13 @@ const AICyclingText = React.memo(function AICyclingText() {
   return (
     <View style={styles.aiFeatureTextArea}>
       <RNAnimated.Text
-        style={[styles.aiFeatureLabel, { position: "absolute", opacity: aiOpacityA, transform: [{ translateX: aiTranslateXA }] }]}
+        style={[styles.aiFeatureLabel, color ? { color } : null, { position: "absolute", opacity: aiOpacityA, transform: [{ translateX: aiTranslateXA }] }]}
         numberOfLines={1}
       >
         {aiTextA}
       </RNAnimated.Text>
       <RNAnimated.Text
-        style={[styles.aiFeatureLabel, { position: "absolute", opacity: aiOpacityB, transform: [{ translateX: aiTranslateXB }] }]}
+        style={[styles.aiFeatureLabel, color ? { color } : null, { position: "absolute", opacity: aiOpacityB, transform: [{ translateX: aiTranslateXB }] }]}
         numberOfLines={1}
       >
         {aiTextB}
@@ -179,13 +194,22 @@ export default function HomeScreen() {
   const router = useRouter();
   const { colors: t, mode } = useTheme();
   const { settings } = useSettings();
-  const primaryColor = t.primary;
   const backgroundColor = t.background;
   const textColor = t.text;
-  const iconColor = "#000000";
   // Theme-aware container outline: light in dark mode, darker in light mode
   const containerBorderColor =
     mode === "dark" ? "rgba(255,255,255,0.18)" : "#B0B0B0";
+
+  // ── Experiment: monochrome home screen ──────────────────────────────────
+  // Everything below the screen header is rendered colorless. Surfaces follow
+  // the theme (near-black in dark mode, white/grey in light mode) instead of
+  // the brand gradients.
+  const neutralSurface: [string, string] =
+    mode === "dark" ? ["#1C1C1E", "#141414"] : ["#FFFFFF", "#F4F5F7"];
+  const neutralCardText = mode === "dark" ? "#FFFFFF" : "#111111";
+  const neutralCardSubtle =
+    mode === "dark" ? "rgba(255,255,255,0.65)" : "rgba(0,0,0,0.55)";
+  const iconColor = neutralCardText;
 
   // Use unified file index for recent files
   const {
@@ -627,78 +651,79 @@ export default function HomeScreen() {
                   {/* Row 1: Large Create + Stacked AI/Share */}
                   <View style={styles.bentoRow}>
                     {/* Large Create Card - spans 2 rows height */}
-                    <TouchableOpacity
+                    <PressableScale
                       style={styles.bentoCardLarge}
                       onPress={() => router.push("/create-file")}
-                      activeOpacity={0.85}
+                      scaleTo={0.97}
                     >
                       <GradientView
-                        colors={[
-                          "rgba(70,229,213,1.0)",
-                          "rgba(58,213,237,1.0)",
-                          "rgba(15,97,130,1.0)",
-                        ]}
+                        colors={neutralSurface}
                         start={{ x: 0, y: 0 }}
                         end={{ x: 1, y: 1 }}
                         style={styles.bentoCardLargeGradient}
                       >
-                        <View style={styles.bentoLargeIconContainer}>
+                        <View
+                          style={[
+                            styles.bentoLargeIconContainer,
+                            { backgroundColor: ACTIVITY_ACCENTS.create },
+                          ]}
+                        >
                           <PencilLine
-                            color={iconColor}
+                            color="#FFFFFF"
                             size={32}
                             strokeWidth={1.8}
                           />
                         </View>
                         <View style={styles.bentoLargeContent}>
-                          <Text style={styles.bentoLargeTitle}>Create</Text>
-                        </View>
-                        <View style={styles.bentoLargeDecor}>
-                          <View style={styles.bentoDecorCircle1} />
-                          <View style={styles.bentoDecorCircle2} />
+                          <Text
+                            style={[
+                              styles.bentoLargeTitle,
+                              { color: neutralCardText },
+                            ]}
+                          >
+                            Create
+                          </Text>
                         </View>
                       </GradientView>
-                    </TouchableOpacity>
+                    </PressableScale>
 
                     {/* Stacked Cards */}
                     <View style={styles.bentoStackedColumn}>
                       {/* AI Card */}
-                      <TouchableOpacity
+                      <PressableScale
                         style={styles.bentoCardMedium}
                         onPress={() => router.push("/gozlin")}
-                        activeOpacity={0.85}
+                        scaleTo={0.96}
                       >
                         <GradientView
-                          colors={[
-                            "rgba(204,165,243,1.0)",
-                            "rgba(146,57,229,1.0)",
-                            "rgba(27,37,168,1.0)",
-                          ]}
+                          colors={neutralSurface}
                           start={{ x: 0, y: 0 }}
                           end={{ x: 1, y: 1 }}
                           style={styles.bentoCardMediumGradient}
                         >
                           <View style={styles.aiTopRow}>
-                            <AILogoBadge size={30} />
-                            <Text style={styles.bentoMediumTitle}>
+                            <AILogoBadge size={38} />
+                            <Text
+                              style={[
+                                styles.bentoMediumTitle,
+                                { color: neutralCardText },
+                              ]}
+                            >
                               gozlin
                             </Text>
                           </View>
-                          <AICyclingText />
-                          <View style={styles.bentoMediumDecor} />
+                          <AICyclingText color={neutralCardSubtle} />
                         </GradientView>
-                      </TouchableOpacity>
+                      </PressableScale>
 
                       {/* Folders Card */}
-                      <TouchableOpacity
+                      <PressableScale
                         style={styles.bentoCardMedium}
                         onPress={() => router.push("/folders")}
-                        activeOpacity={0.85}
+                        scaleTo={0.96}
                       >
                         <GradientView
-                          colors={[
-                            "rgba(160,120,80,1.0)",
-                            "rgba(120,90,60,1.0)",
-                          ]}
+                          colors={neutralSurface}
                           start={{ x: 0, y: 0 }}
                           end={{ x: 1, y: 1 }}
                           style={styles.bentoCardMediumGradient}
@@ -707,41 +732,39 @@ export default function HomeScreen() {
                             <View
                               style={[
                                 styles.bentoMediumIconBg,
-                                { backgroundColor: "rgba(255,255,255,0.95)" },
+                                { backgroundColor: ACTIVITY_ACCENTS.folders },
                               ]}
                             >
                               <FolderOpen
-                                color={iconColor}
+                                color="#FFFFFF"
                                 size={18}
                                 strokeWidth={2.5}
                               />
                             </View>
-                            <Text style={styles.bentoMediumTitle}>Folders</Text>
+                            <Text
+                              style={[
+                                styles.bentoMediumTitle,
+                                { color: neutralCardText },
+                              ]}
+                            >
+                              Folders
+                            </Text>
                           </View>
-                          <View style={styles.bentoMediumDecorAlt} />
                         </GradientView>
-                      </TouchableOpacity>
+                      </PressableScale>
                     </View>
                   </View>
 
-                  {/* Row 2: Downloads (wide) + Settings */}
+                  {/* Row 2: Workspace (wide) + Premium */}
                   <View style={styles.bentoRowTwo}>
-                    {/* Downloads Card - Wide */}
-                    <TouchableOpacity
+                    {/* Workspace Card - Wide */}
+                    <PressableScale
                       style={styles.bentoCardWide}
-                      onPress={() =>
-                        router.push({
-                          pathname: "/(tabs)/download",
-                          params: { tab: "downloads" },
-                        })
-                      }
-                      activeOpacity={0.85}
+                      onPress={() => router.push("/gozlin-workspace" as any)}
+                      scaleTo={0.97}
                     >
                       <GradientView
-                        colors={[
-                          "rgba(10,117,56,1.0)",
-                          "rgba(142,244,156,1.0)",
-                        ]}
+                        colors={neutralSurface}
                         start={{ x: 0, y: 0 }}
                         end={{ x: 1, y: 0.5 }}
                         style={styles.bentoCardWideGradient}
@@ -750,45 +773,63 @@ export default function HomeScreen() {
                           <View
                             style={[
                               styles.bentoWideIconBg,
-                              { backgroundColor: "rgba(255,255,255,0.95)" },
+                              { backgroundColor: ACTIVITY_ACCENTS.workspace },
                             ]}
                           >
-                            <Download
-                              color={iconColor}
+                            <LayoutDashboard
+                              color="#FFFFFF"
                               size={18}
                               strokeWidth={2.5}
                             />
                           </View>
                           <View style={styles.bentoWideTextContainer}>
-                            <Text style={styles.bentoWideTitle}>Downloads</Text>
+                            <Text
+                              style={[
+                                styles.bentoWideTitle,
+                                { color: neutralCardText },
+                              ]}
+                            >
+                              Workspace
+                            </Text>
                           </View>
                         </View>
-                        <View style={styles.bentoWideDecor} />
                       </GradientView>
-                    </TouchableOpacity>
+                    </PressableScale>
 
                     {/* Premium Card */}
-                    <TouchableOpacity
+                    <PressableScale
                       style={styles.bentoCardSmall}
                       onPress={() => router.push("/premium" as any)}
-                      activeOpacity={0.85}
+                      scaleTo={0.95}
                     >
                       <GradientView
-                        colors={["rgba(255,215,0,1.0)", "rgba(218,165,32,1.0)"]}
+                        colors={neutralSurface}
                         start={{ x: 0, y: 0 }}
                         end={{ x: 1, y: 1 }}
                         style={styles.bentoCardSmallGradient}
                       >
-                        <View style={styles.bentoSmallIconBg}>
+                        <View
+                          style={[
+                            styles.bentoSmallIconBg,
+                            { backgroundColor: ACTIVITY_ACCENTS.premium },
+                          ]}
+                        >
                           <Crown
-                            color={iconColor}
+                            color="#FFFFFF"
                             size={18}
                             strokeWidth={2.5}
                           />
                         </View>
-                        <Text style={styles.bentoSmallTitle}>Premium</Text>
+                        <Text
+                          style={[
+                            styles.bentoSmallTitle,
+                            { color: neutralCardText },
+                          ]}
+                        >
+                          Premium
+                        </Text>
                       </GradientView>
-                    </TouchableOpacity>
+                    </PressableScale>
                   </View>
                 </View>
               </View>
@@ -841,7 +882,7 @@ export default function HomeScreen() {
                     ]}
                   >
                     <View style={styles.loadingContainer}>
-                      <ActivityIndicator size="large" color={primaryColor} />
+                      <ActivityIndicator size="large" color={textColor} />
                       <Text style={[styles.loadingText, { color: textColor }]}>
                         Loading files...
                       </Text>
@@ -879,14 +920,13 @@ export default function HomeScreen() {
                     ]}
                   >
                     <GradientView
-                      colors={["#EEF2FF", "#F8FAFC"]}
-                      style={styles.emptyIconBox}
+                      colors={neutralSurface}
+                      style={[
+                        styles.emptyIconBox,
+                        { borderWidth: 1, borderColor: containerBorderColor },
+                      ]}
                     >
-                      <File
-                        color={colors.primary}
-                        size={48}
-                        strokeWidth={1.5}
-                      />
+                      <File color={iconColor} size={48} strokeWidth={1.5} />
                     </GradientView>
                     <Text style={[styles.emptyTitle, { color: textColor }]}>
                       {searchQuery || selectedFilter !== "all"
@@ -901,17 +941,27 @@ export default function HomeScreen() {
                         : "Create or import documents to get started"}
                     </Text>
                     <TouchableOpacity
-                      style={styles.emptyButton}
+                      style={[
+                        styles.emptyButton,
+                        { borderWidth: 1, borderColor: containerBorderColor },
+                      ]}
                       onPress={() => router.push("/(tabs)/library" as any)}
                     >
                       <GradientView
-                        colors={[colors.gradientStart, colors.gradientMid]}
+                        colors={neutralSurface}
                         start={{ x: 0, y: 0 }}
                         end={{ x: 1, y: 0 }}
                         style={styles.emptyButtonGradient}
                       >
-                        <FolderOpen color="white" size={20} strokeWidth={2} />
-                        <Text style={styles.emptyButtonText}>Document Library</Text>
+                        <FolderOpen color={iconColor} size={20} strokeWidth={2} />
+                        <Text
+                          style={[
+                            styles.emptyButtonText,
+                            { color: neutralCardText },
+                          ]}
+                        >
+                          Document Library
+                        </Text>
                       </GradientView>
                     </TouchableOpacity>
                   </View>
@@ -1079,10 +1129,10 @@ const FileCard = React.memo(function FileCard({
 
   return (
     <View style={styles.fileCardWrapper}>
-      <TouchableOpacity
+      <PressableScale
         style={styles.flatFileRow}
         onPress={handlePress}
-        activeOpacity={0.7}
+        scaleTo={0.98}
       >
         <View style={[styles.fileIconBox, { backgroundColor: bgColor }]}>
           <Icon color={color} size={20} strokeWidth={2} />
@@ -1115,7 +1165,7 @@ const FileCard = React.memo(function FileCard({
             strokeWidth={2.5}
           />
         </View>
-      </TouchableOpacity>
+      </PressableScale>
       {showProgress && (
         <View
           style={[
@@ -1129,7 +1179,7 @@ const FileCard = React.memo(function FileCard({
               styles.fileProgressFill,
               {
                 width: `${Math.max(2, Math.min(100, progress * 100))}%`,
-                backgroundColor: theme.primary,
+                backgroundColor: textColor,
               },
             ]}
           />
@@ -1370,7 +1420,7 @@ const styles = StyleSheet.create({
     flex: 0.9,
     borderRadius: 15,
     overflow: "hidden",
-    shadowColor: "#4F46E5",
+    shadowColor: "#000",
     shadowOffset: { width: 0, height: 8 },
     shadowOpacity: 0.35,
     shadowRadius: 16,
@@ -1456,11 +1506,17 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
+    // Nudge the badge + "gozlin" label up a touch. The badge ring is centred in
+    // its 38px box (≈6px transparent slack on top), so this lifts the row
+    // without clipping the ring — freeing room below for the cycling text.
+    marginTop: -6,
   },
   aiFeatureTextArea: {
     height: 20,
     overflow: "hidden",
-    marginTop: -4,
+    // Raise the cycling ("slide") text so it sits fully inside the card instead
+    // of being pushed against / past the bottom edge.
+    marginTop: -10,
   },
   aiFeatureLabel: {
     fontSize: 13,
@@ -1496,7 +1552,7 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(255,255,255,0.12)",
   },
 
-  // Small Cards (Downloads, Settings)
+  // Small Card (Premium)
   bentoCardSmall: {
     flex: 0.8,
     borderRadius: 15,
@@ -1538,12 +1594,12 @@ const styles = StyleSheet.create({
     borderColor: colors.borderLight,
   },
 
-  // Wide Card (Downloads)
+  // Wide Card (Workspace)
   bentoCardWide: {
     flex: 2.0,
     borderRadius: 10,
     overflow: "hidden",
-    shadowColor: "#8B5CF6",
+    shadowColor: "#000",
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.25,
     shadowRadius: 12,

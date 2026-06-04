@@ -322,13 +322,21 @@ export async function reflowPDF(
 <!-- Reader content populated by JS -->
 <article class="reader-content" id="reader-content" style="display:none"></article>
 
-<script id="pdf-worker-src" type="text/plain">${pdfWorkerMinJs}<\/script>
+<!-- Worker UMD loaded as a real main-thread script (not a Blob worker).
+     This defines globalThis.pdfjsWorker so pdf.js can parse in-thread, which
+     is the only reliable mode inside older / low-end Android WebViews. -->
+<script>${pdfWorkerMinJs}<\/script>
 <script>
 (function(){
   var BASE64_DATA = ${JSON.stringify(base64)};
 
+  var rc = document.getElementById('reader-content');
+  var loading = document.getElementById('loading-indicator');
+  var renderedAny = false;
+  var fullTextParts = [];
+
   function showError(title, msg) {
-    document.getElementById('loading-indicator').style.display = 'none';
+    if (loading) loading.style.display = 'none';
     var ec = document.getElementById('error-container');
     ec.style.display = 'flex';
     document.getElementById('error-title').textContent = title;
@@ -354,75 +362,161 @@ export async function reflowPDF(
     return t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
   }
 
-  function renderText(allText) {
-    if (!allText || allText.trim().length < 50) {
-      showError('Scanned Document', 'This PDF appears to be scanned or image-based. Please use Original view.');
-      return;
+  // Rebuild real lines + paragraphs from pdf.js text items using end-of-line
+  // markers and glyph positions. Without this, items get joined with a single
+  // space and every page collapses into one run-on block — the cause of the
+  // "scattered / disarranged" layout. Returns an array of paragraph strings.
+  function reconstructPage(content) {
+    var items = (content && content.items) || [];
+    var lines = [];
+    var cur = null;
+    for (var i = 0; i < items.length; i++) {
+      var it = items[i];
+      var s = (it && typeof it.str === 'string') ? it.str : '';
+      var tr = (it && it.transform) ? it.transform : [1,0,0,1,0,0];
+      var x = tr[4], y = tr[5];
+      var h = (it && it.height) ? it.height : (Math.abs(tr[3]) || 12);
+      if (cur === null) {
+        cur = { y: y, x: x, h: h, text: s };
+      } else if (Math.abs(y - cur.y) <= Math.max(2, cur.h * 0.5)) {
+        // Same visual line — append, inserting a space only when needed.
+        if (s) {
+          var needSpace = cur.text.length > 0 && !/\\s$/.test(cur.text) && !/^\\s/.test(s);
+          cur.text += (needSpace ? ' ' : '') + s;
+        }
+        if (x < cur.x) cur.x = x;
+      } else {
+        lines.push(cur);
+        cur = { y: y, x: x, h: h, text: s };
+      }
+      if (it && it.hasEOL && cur) {
+        lines.push(cur);
+        cur = null;
+      }
+    }
+    if (cur) lines.push(cur);
+
+    for (var j = 0; j < lines.length; j++) {
+      lines[j].text = lines[j].text.replace(/\\s+/g, ' ').trim();
     }
 
-    var blocks = allText.split(/\\n\\s*\\n/).map(function(p){ return p.trim(); }).filter(function(p){ return p.length > 0; });
-    var html = '';
-    blocks.forEach(function(block) {
-      var clean = block.replace(/\\n/g, ' ').replace(/\\s+/g, ' ');
-      var tag = detectBlockType(clean);
-      html += '<' + tag + '>' + escapeHtml(clean) + '</' + tag + '>\\n';
-    });
+    // Median line spacing → baseline for detecting paragraph gaps.
+    var gaps = [];
+    for (var k = 1; k < lines.length; k++) {
+      var g = Math.abs(lines[k-1].y - lines[k].y);
+      if (g > 0.1) gaps.push(g);
+    }
+    gaps.sort(function(a,b){ return a - b; });
+    var medGap = gaps.length ? gaps[Math.floor(gaps.length/2)] : 0;
 
-    document.getElementById('loading-indicator').style.display = 'none';
-    var rc = document.getElementById('reader-content');
-    rc.innerHTML = html;
-    rc.style.display = 'block';
+    var paras = [];
+    var buf = [];
+    for (var m = 0; m < lines.length; m++) {
+      var ln = lines[m];
+      if (ln.text === '') {
+        if (buf.length) { paras.push(buf); buf = []; }
+        continue;
+      }
+      if (buf.length) {
+        var prev = buf[buf.length - 1];
+        var gap = Math.abs(prev.y - ln.y);
+        var bigGap = medGap > 0 && gap > medGap * 1.6;
+        var prevEnds = /[.!?]["'\\)\\]]?$/.test(prev.text);
+        var startsCap = /^[A-Z0-9"\\u201c(\\[]/.test(ln.text);
+        if (bigGap || (prevEnds && startsCap && medGap > 0 && gap > medGap * 1.25)) {
+          paras.push(buf); buf = [];
+        }
+      }
+      buf.push(ln);
+    }
+    if (buf.length) paras.push(buf);
 
-    // Post extracted text for Read Aloud (fixes race with 'ready' signal)
-    window.ReactNativeWebView && window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'read-aloud-text', text: allText }));
+    var out = [];
+    for (var p2 = 0; p2 < paras.length; p2++) {
+      var pl = paras[p2];
+      var txt = '';
+      for (var q = 0; q < pl.length; q++) {
+        var t = pl[q].text;
+        if (!t) continue;
+        if (txt === '') { txt = t; continue; }
+        if (/[A-Za-z]-$/.test(txt)) {
+          txt = txt.replace(/-$/, '') + t;  // de-hyphenate wrapped word
+        } else {
+          txt += ' ' + t;
+        }
+      }
+      txt = txt.replace(/\\s+/g, ' ').trim();
+      if (txt) out.push(txt);
+    }
+    return out;
   }
 
-  // Attempt extraction with pdf.js (bundled, offline)
+  // Append a page's paragraphs as they arrive (progressive render).
+  function appendParagraphs(paras) {
+    if (!paras || !paras.length) return;
+    var html = '';
+    for (var i = 0; i < paras.length; i++) {
+      var clean = paras[i];
+      if (!clean) continue;
+      var tag = detectBlockType(clean);
+      html += '<' + tag + '>' + escapeHtml(clean) + '</' + tag + '>';
+      fullTextParts.push(clean);
+    }
+    if (!html) return;
+    if (!renderedAny) {
+      renderedAny = true;
+      if (loading) loading.style.display = 'none';
+      rc.style.display = 'block';
+    }
+    rc.insertAdjacentHTML('beforeend', html);
+  }
+
   if (typeof pdfjsLib === 'undefined') {
     showError('Library not loaded', 'Mobile View library failed to initialize. Please reopen the document.');
     return;
   }
 
-  try {
-    var workerSrcEl = document.getElementById('pdf-worker-src');
-    var workerBlob = new Blob([workerSrcEl.textContent], { type: 'application/javascript' });
-    pdfjsLib.GlobalWorkerOptions.workerSrc = URL.createObjectURL(workerBlob);
-  } catch (wErr) {
-    showError('Worker Error', 'Failed to initialize PDF worker.');
-    return;
-  }
+  // Force in-thread parsing. A Blob-URL worker often initialises but never
+  // responds inside an Android WebView, so getDocument() would hang forever.
+  try { pdfjsLib.GlobalWorkerOptions.workerSrc = ''; } catch (_) {}
+  try { pdfjsLib.disableWorker = true; } catch (_) {}
 
   try {
     var raw = atob(BASE64_DATA);
     var uint8 = new Uint8Array(raw.length);
     for (var i = 0; i < raw.length; i++) uint8[i] = raw.charCodeAt(i);
 
-    var loadingTask = pdfjsLib.getDocument({ data: uint8 });
-    loadingTask.promise.then(function(pdf) {
+    pdfjsLib.getDocument({ data: uint8, disableWorker: true }).promise.then(function(pdf) {
       var total = pdf.numPages;
-      var pages = [];
-      var done = 0;
 
-      for (var p = 1; p <= total; p++) {
-        (function(pageNum) {
-          pdf.getPage(pageNum).then(function(page) {
-            page.getTextContent().then(function(content) {
-              var pageText = content.items.map(function(item) { return item.str; }).join(' ');
-              pages[pageNum - 1] = pageText;
-              done++;
-              if (done === total) {
-                var allText = pages.join('\\n\\n');
-                renderText(allText);
-              }
-            });
-          });
-        })(p);
+      // Extract page-by-page IN ORDER and render each page the moment it is
+      // ready. The first page appears almost immediately instead of waiting
+      // for the whole document to parse — and large PDFs no longer block.
+      function processPage(pageNum) {
+        return pdf.getPage(pageNum)
+          .then(function(page) { return page.getTextContent(); })
+          .then(function(content) { appendParagraphs(reconstructPage(content)); })
+          .catch(function() { /* skip an unreadable page */ });
       }
+
+      var chain = Promise.resolve();
+      for (var p = 1; p <= total; p++) {
+        (function(n) { chain = chain.then(function() { return processPage(n); }); })(p);
+      }
+      chain.then(function() {
+        if (!renderedAny) {
+          showError('Scanned Document', 'This PDF appears to be scanned or image-based. Please use Original view.');
+          return;
+        }
+        // Post the full extracted text for Read Aloud.
+        var allText = fullTextParts.join('\\n\\n');
+        window.ReactNativeWebView && window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'read-aloud-text', text: allText }));
+      });
     }).catch(function(err) {
-      showError('PDF Error', err.message || 'Failed to parse PDF');
+      showError('PDF Error', (err && err.message) || 'Failed to parse PDF');
     });
   } catch (e) {
-    showError('PDF Error', e.message || 'Failed to decode PDF data');
+    showError('PDF Error', (e && e.message) || 'Failed to decode PDF data');
   }
 })();
 <\/script>

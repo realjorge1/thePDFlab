@@ -13,7 +13,8 @@ import {
   MessageSquare,
 } from "lucide-react-native";
 import React, { useCallback } from "react";
-import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { StyleSheet, Text, View } from "react-native";
+import { PressableScale } from "@/components/ui/PressableScale";
 
 interface AIFeature {
   id: string;
@@ -52,10 +53,9 @@ export const AIFeatureCard = React.memo(function AIFeatureCard({
   );
 
   return (
-    <TouchableOpacity
+    <PressableScale
       onPress={onPress}
       style={[styles.card, { backgroundColor: t.card }]}
-      activeOpacity={0.75}
     >
       <View style={iconBg()}>
         <IconComponent color="white" size={ICON_SIZE} />
@@ -64,7 +64,7 @@ export const AIFeatureCard = React.memo(function AIFeatureCard({
       <Text style={[styles.description, { color: t.textSecondary }]}>
         {feature.description}
       </Text>
-    </TouchableOpacity>
+    </PressableScale>
   );
 });
 

@@ -1,4 +1,5 @@
 import '../shim';
+import "react-native-gesture-handler";
 import { LogBox } from "react-native";
 import { enableScreens } from "react-native-screens";
 
@@ -55,8 +56,11 @@ import { Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import * as SplashScreen from "expo-splash-screen";
 import { useCallback, useEffect, useState } from "react";
-import { StyleSheet, View } from "react-native";
-import "react-native-reanimated";
+import { StyleSheet } from "react-native";
+import Animated, { FadeIn } from "react-native-reanimated";
+import { GestureHandlerRootView } from "react-native-gesture-handler";
+import { ActivityOverlay } from "@/components/activity/ActivityOverlay";
+import { SafeBoundary } from "@/components/ui/SafeBoundary";
 
 // Prevent the splash screen from hiding until fonts are loaded.
 SplashScreen.preventAutoHideAsync().catch(() => {});
@@ -153,7 +157,10 @@ export default function RootLayout() {
   return (
     <ThemeProvider>
       <SubscriptionProvider>
-      <View style={styles.container} onLayout={onLayoutReady}>
+      <GestureHandlerRootView style={styles.container} onLayout={onLayoutReady}>
+      {/* Cold-start fade-in: RootLayout only mounts on a fresh process launch
+          ("first open after being closed"), so this entrance plays exactly once. */}
+      <Animated.View style={styles.container} entering={FadeIn.duration(450)}>
         {/* Edge-to-edge is mandatory on Android (SDK 54): the app draws behind a
             transparent status bar. This only controls icon contrast app-wide —
             "auto" = dark icons in light mode, light icons in dark mode. Screens
@@ -164,6 +171,11 @@ export default function RootLayout() {
             headerShown: false,
             // PERF: Freeze inactive screens to prevent background re-renders
             freezeOnBlur: true,
+            // Consistent, smooth push/pop transition across the whole app.
+            // Individual screens can still override (e.g. the editor screens
+            // below opt into `animation: "none"` for instant open).
+            animation: "slide_from_right",
+            animationDuration: 260,
           }}
         >
           <Stack.Screen name="(tabs)" />
@@ -217,7 +229,13 @@ export default function RootLayout() {
         {!onboardingDone && (
           <OnboardingScreen onFinish={() => setOnboardingDone(true)} />
         )}
-      </View>
+      </Animated.View>
+      {/* Global spring "pull-to-cancel" overlay — renders null when idle, so it
+          never affects screens that don't register a cancelable task. */}
+      <SafeBoundary label="activity">
+        <ActivityOverlay />
+      </SafeBoundary>
+      </GestureHandlerRootView>
       </SubscriptionProvider>
     </ThemeProvider>
   );

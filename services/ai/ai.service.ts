@@ -218,6 +218,7 @@ export async function sendChat(
   history: AIChatMessage[],
   documentText?: string,
   documentName?: string,
+  signal?: AbortSignal,
 ): Promise<AIResponse> {
   assertAIPremium();
   await initAIProvider();
@@ -226,22 +227,25 @@ export async function sendChat(
     history,
     documentText: documentText ? prepareText(documentText) : undefined,
     documentName,
+    signal,
   });
 }
 
 export async function summarize(
   text: string,
   documentName?: string,
+  signal?: AbortSignal,
 ): Promise<AIResponse> {
   assertAIPremium();
   await initAIProvider();
-  return _provider.summarize({ text: prepareText(text), documentName });
+  return _provider.summarize({ text: prepareText(text), documentName, signal });
 }
 
 export async function translate(
   text: string,
   targetLanguage: string,
   documentName?: string,
+  signal?: AbortSignal,
 ): Promise<AIResponse> {
   assertAIPremium();
   await initAIProvider();
@@ -249,6 +253,7 @@ export async function translate(
     text: prepareText(text),
     targetLanguage,
     documentName,
+    signal,
   });
 }
 
@@ -256,6 +261,7 @@ export async function analyze(
   text: string,
   analysisType?: string,
   documentName?: string,
+  signal?: AbortSignal,
 ): Promise<AIResponse> {
   assertAIPremium();
   await initAIProvider();
@@ -263,16 +269,18 @@ export async function analyze(
     text: prepareText(text),
     analysisType,
     documentName,
+    signal,
   });
 }
 
 export async function extractTasks(
   text: string,
   documentName?: string,
+  signal?: AbortSignal,
 ): Promise<AIResponse> {
   assertAIPremium();
   await initAIProvider();
-  return _provider.extractTasks({ text: prepareText(text), documentName });
+  return _provider.extractTasks({ text: prepareText(text), documentName, signal });
 }
 
 export async function generateDocument(
@@ -282,6 +290,7 @@ export async function generateDocument(
   tone?: string,
   wordCount?: number,
   audience?: string,
+  signal?: AbortSignal,
 ): Promise<AIResponse> {
   assertAIPremium();
   await initAIProvider();
@@ -292,25 +301,28 @@ export async function generateDocument(
     tone,
     wordCount,
     audience,
+    signal,
   });
 }
 
 export async function classifyDocument(
   text: string,
   filename?: string,
+  signal?: AbortSignal,
 ): Promise<AIResponse> {
   assertAIPremium();
   await initAIProvider();
-  return _provider.classify({ text: prepareText(text), filename });
+  return _provider.classify({ text: prepareText(text), filename, signal });
 }
 
 export async function highlightKeyPoints(
   text: string,
   documentName?: string,
+  signal?: AbortSignal,
 ): Promise<AIResponse> {
   assertAIPremium();
   await initAIProvider();
-  return _provider.highlight({ text: prepareText(text), documentName });
+  return _provider.highlight({ text: prepareText(text), documentName, signal });
 }
 
 /**
@@ -411,10 +423,11 @@ export async function explainText(
     | "technical"
     | "bullet",
   depth?: "short" | "medium" | "deep",
+  signal?: AbortSignal,
 ): Promise<AIResponse> {
   assertAIPremium();
   await initAIProvider();
-  return _provider.explain({ text: prepareText(text), mode, depth });
+  return _provider.explain({ text: prepareText(text), mode, depth, signal });
 }
 
 export async function generateQuiz(
@@ -426,6 +439,7 @@ export async function generateQuiz(
   weakTopics?: string[],
   /** Document reference to look up the backend extraction docId for true RAG grounding. */
   docRef?: AIDocumentRef,
+  signal?: AbortSignal,
 ): Promise<AIResponse> {
   assertAIPremium();
   // Re-probe the backend every time (no-op if already switched).
@@ -441,6 +455,7 @@ export async function generateQuiz(
     difficulty,
     documentName,
     weakTopics,
+    signal,
   });
 }
 

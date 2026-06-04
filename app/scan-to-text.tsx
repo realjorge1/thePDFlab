@@ -13,6 +13,7 @@
  */
 
 import { PremiumGate } from "@/components/PremiumGate";
+import { usePermissionPrimer } from "@/components/PermissionPrimer";
 import { API_ENDPOINTS } from "@/config/api";
 import { markFileAsCreated } from "@/services/fileService";
 import {
@@ -72,6 +73,7 @@ export default function ScanToTextScreen() {
   const insets = useSafeAreaInsets();
   const params = useLocalSearchParams<{ fileType?: string }>();
   const titleInputRef = useRef<TextInput>(null);
+  const { requestPrime, primer } = usePermissionPrimer();
 
   const [imageUris, setImageUris] = useState<string[]>([]);
   const [mode, setMode] = useState<ScanMode>("fast");
@@ -113,6 +115,8 @@ export default function ScanToTextScreen() {
       );
       return;
     }
+    const primed = await requestPrime("gallery");
+    if (!primed) return;
     const result = await pickImagesFromLibrary();
     if (result.success && result.uris?.length) {
       const toAdd = result.uris.slice(0, remaining);
@@ -127,7 +131,7 @@ export default function ScanToTextScreen() {
     } else if (result.error) {
       Alert.alert("Error", result.error);
     }
-  }, [imageUris, mode, imageLimit]);
+  }, [imageUris, mode, imageLimit, requestPrime]);
 
   const handlePickCamera = useCallback(async () => {
     if (imageUris.length >= imageLimit) {
@@ -137,6 +141,8 @@ export default function ScanToTextScreen() {
       );
       return;
     }
+    const primed = await requestPrime("camera");
+    if (!primed) return;
     const result = await pickImageFromCamera();
     if (result.success && result.uris?.[0]) {
       setImageUris((prev) => [...prev, result.uris![0]]);
@@ -144,7 +150,7 @@ export default function ScanToTextScreen() {
     } else if (result.error) {
       Alert.alert("Error", result.error);
     }
-  }, [imageUris, mode, imageLimit]);
+  }, [imageUris, mode, imageLimit, requestPrime]);
 
   // ── OCR extraction (sequential queue) ─────────────────────────────────────
 
@@ -719,6 +725,9 @@ export default function ScanToTextScreen() {
           </View>
         )}
       </KeyboardAvoidingView>
+
+      {/* Pre-permission priming sheet for camera / gallery */}
+      {primer}
     </SafeAreaView>
     </PremiumGate>
   );

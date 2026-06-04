@@ -10,6 +10,7 @@ import {
   isToolSupported,
   processWithTool,
 } from "@/services/pdfToolsService";
+import { useActivityStore } from "@/services/activity/activityStore";
 import { useTheme } from "@/services/ThemeProvider";
 import * as Clipboard from "expo-clipboard";
 import { useLocalSearchParams, useRouter } from "expo-router";
@@ -618,6 +619,8 @@ export default function ToolProcessorScreen() {
     (progressValue: number, message: string) => {
       setProgress(progressValue);
       setProgressMessage(message);
+      // Mirror progress into the global spring overlay (determinate bar).
+      useActivityStore.getState().update({ progress: progressValue / 100 });
     },
     [],
   );
@@ -832,6 +835,8 @@ export default function ToolProcessorScreen() {
     setProgressMessage("Starting...");
     setResult(null);
 
+    const activityId = `tool_${Date.now()}`;
+
     try {
       // Check if tool is supported
       if (!isToolSupported(tool as string)) {
@@ -842,6 +847,18 @@ export default function ToolProcessorScreen() {
         setIsProcessing(false);
         return;
       }
+
+      // Show the global spring overlay (pull down to cancel) with live progress.
+      // Cancel bridges to the existing abort path so behavior is unchanged.
+      useActivityStore.getState().start({
+        id: activityId,
+        label: getTitle(tool as string),
+        kind: "tool",
+        startedAt: Date.now(),
+        progress: 0,
+        cancelable: true,
+        abort: () => handleCancel(),
+      });
 
       // Build parameters based on tool
       const params: Record<string, any> = {};
@@ -1097,6 +1114,7 @@ export default function ToolProcessorScreen() {
         `An error occurred: ${errorMessage}\n\nPlease check your internet connection and try again.`,
       );
     } finally {
+      useActivityStore.getState().end(activityId);
       if (isMountedRef.current && !controller.signal.aborted)
         setIsProcessing(false);
       abortControllerRef.current = null;

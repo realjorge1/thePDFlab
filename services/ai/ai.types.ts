@@ -54,23 +54,28 @@ export interface AISession {
 export interface AISummarizeRequest {
   text: string;
   documentName?: string;
+  /** Optional abort signal for cancellation (see runCancelable). */
+  signal?: AbortSignal;
 }
 
 export interface AITranslateRequest {
   text: string;
   targetLanguage: string;
   documentName?: string;
+  signal?: AbortSignal;
 }
 
 export interface AIAnalyzeRequest {
   text: string;
   analysisType?: string; // "sentiment" | "readability" | "structure" | "full"
   documentName?: string;
+  signal?: AbortSignal;
 }
 
 export interface AITasksRequest {
   text: string;
   documentName?: string;
+  signal?: AbortSignal;
 }
 
 export interface AIGenerateDocumentRequest {
@@ -80,6 +85,7 @@ export interface AIGenerateDocumentRequest {
   tone?: string;
   wordCount?: number;
   audience?: string;
+  signal?: AbortSignal;
 }
 
 export interface AIChatRequest {
@@ -87,16 +93,19 @@ export interface AIChatRequest {
   history: AIChatMessage[];
   documentText?: string;
   documentName?: string;
+  signal?: AbortSignal;
 }
 
 export interface AIClassifyRequest {
   text: string;
   filename?: string;
+  signal?: AbortSignal;
 }
 
 export interface AIHighlightRequest {
   text: string;
   documentName?: string;
+  signal?: AbortSignal;
 }
 
 // ─── Highlight-specific types ────────────────────────────────────────────────
@@ -152,6 +161,7 @@ export interface AIExplainRequest {
   text: string;
   mode?: ExplainMode;
   depth?: ExplainDepth;
+  signal?: AbortSignal;
 }
 
 // ─── Quiz-specific types ──────────────────────────────────────────────────────
@@ -195,6 +205,7 @@ export interface AIQuizRequest {
   documentName?: string;
   /** Topics the user struggled with (for Practice Weak Areas). */
   weakTopics?: string[];
+  signal?: AbortSignal;
 }
 
 export interface AIResponse {

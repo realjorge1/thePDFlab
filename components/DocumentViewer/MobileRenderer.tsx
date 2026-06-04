@@ -23,7 +23,8 @@ import React, {
   useRef,
   useState,
 } from "react";
-import { ActivityIndicator, StyleSheet, Text, View } from "react-native";
+import * as FileSystem from "expo-file-system/legacy";
+import { ActivityIndicator, Platform, StyleSheet, Text, View } from "react-native";
 import { WebView } from "react-native-webview";
 
 // ============================================================================
@@ -98,6 +99,13 @@ export const MobileRenderer = forwardRef<MobileRendererHandle, Props>(
     const webViewRef = useRef<WebView>(null);
     const [webViewReady, setWebViewReady] = useState(false);
     const pendingQueue = useRef<string[]>([]);
+    // What we hand to the WebView: a staged file:// URI on Android, inline HTML
+    // elsewhere (or as a disk-write fallback). Null while the file is staging.
+    const [htmlSource, setHtmlSource] = useState<
+      { uri: string } | { html: string } | null
+    >(null);
+    const filePathRef = useRef<string | null>(null);
+    const writeSeqRef = useRef(0);
 
     // Flush any JS that was queued before WebView was ready
     useEffect(() => {
@@ -293,6 +301,73 @@ export const MobileRenderer = forwardRef<MobileRendererHandle, Props>(
       [html],
     );
 
+    // Stage the document for the WebView. On Android, multi-MB inline HTML
+    // (bundled pdf.js/Mammoth + the base64 file) is passed via
+    // loadDataWithBaseURL, which older System WebViews truncate or choke on —
+    // causing the "doesn't load / takes forever" symptom. Writing it to a cache
+    // file and loading it via file:// sidesteps that limit entirely. iOS WebKit
+    // handles large inline HTML fine, so it keeps the inline path.
+    useEffect(() => {
+      // New document → wait for its fresh 'ready' signal before flushing JS.
+      setWebViewReady(false);
+
+      if (!enhancedHtml) {
+        setHtmlSource(null);
+        return;
+      }
+
+      if (Platform.OS !== "android") {
+        setHtmlSource({ html: enhancedHtml });
+        return;
+      }
+
+      let cancelled = false;
+      const seq = ++writeSeqRef.current;
+      (async () => {
+        try {
+          const dir = FileSystem.cacheDirectory + "mobileview/";
+          try {
+            await FileSystem.makeDirectoryAsync(dir, { intermediates: true });
+          } catch {
+            // Directory already exists — fine.
+          }
+          const path = `${dir}reflow-${seq}.html`;
+          await FileSystem.writeAsStringAsync(path, enhancedHtml);
+          if (cancelled || seq !== writeSeqRef.current) {
+            FileSystem.deleteAsync(path, { idempotent: true }).catch(() => {});
+            return;
+          }
+          const prev = filePathRef.current;
+          filePathRef.current = path;
+          setHtmlSource({ uri: path });
+          if (prev && prev !== path) {
+            FileSystem.deleteAsync(prev, { idempotent: true }).catch(() => {});
+          }
+        } catch {
+          // Disk write failed — fall back to inline HTML so the feature still
+          // works (just without the large-payload optimisation).
+          if (!cancelled && seq === writeSeqRef.current) {
+            setHtmlSource({ html: enhancedHtml });
+          }
+        }
+      })();
+
+      return () => {
+        cancelled = true;
+      };
+    }, [enhancedHtml]);
+
+    // Remove the staged file when the renderer unmounts.
+    useEffect(() => {
+      return () => {
+        if (filePathRef.current) {
+          FileSystem.deleteAsync(filePathRef.current, {
+            idempotent: true,
+          }).catch(() => {});
+        }
+      };
+    }, []);
+
     // Loading state
     if (loading) {
       return (
@@ -317,12 +392,26 @@ export const MobileRenderer = forwardRef<MobileRendererHandle, Props>(
 
     if (!html) return null;
 
+    // Staging the cache file (Android) — brief; show a spinner so we never
+    // flash a blank WebView.
+    if (!htmlSource) {
+      return (
+        <View style={styles.center}>
+          <ActivityIndicator size="large" color="#2196F3" />
+          <Text style={styles.loadingText}>Please wait…</Text>
+        </View>
+      );
+    }
+
     return (
       <WebView
         ref={webViewRef}
-        source={{ html: enhancedHtml }}
+        source={htmlSource}
         style={styles.webview}
         originWhitelist={["*"]}
+        // Required so the WebView can load the staged file:// document (Android).
+        allowFileAccess
+        allowingReadAccessToURL={FileSystem.cacheDirectory ?? undefined}
         javaScriptEnabled
         domStorageEnabled
         onMessage={handleMessage}
@@ -337,11 +426,17 @@ export const MobileRenderer = forwardRef<MobileRendererHandle, Props>(
           onMessage?.({ type: "ready" } as any);
         }}
         // All vendor scripts are inlined into the HTML, so we never need
-        // network access. Allow only the initial data: / about:blank load
-        // and block every other navigation — this enforces fully offline
-        // operation even if some future edit reintroduces a CDN URL.
+        // network access. This enforces fully offline operation even if some
+        // future edit reintroduces a CDN URL.
         onShouldStartLoadWithRequest={(req) => {
-          if (req.url === "about:blank" || req.url.startsWith("data:"))
+          // Allow the initial local document (data: inline, file:// staged, or
+          // about:blank) and block every other top-frame navigation so the
+          // viewer stays fully offline.
+          if (
+            req.url === "about:blank" ||
+            req.url.startsWith("data:") ||
+            req.url.startsWith("file:")
+          )
             return true;
           return !req.isTopFrame;
         }}

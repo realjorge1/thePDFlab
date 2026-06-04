@@ -14,7 +14,8 @@ import {
   Zap,
 } from "lucide-react-native";
 import React from "react";
-import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { StyleSheet, Text, View } from "react-native";
+import { PressableScale } from "@/components/ui/PressableScale";
 
 interface Tool {
   id: string;
@@ -71,8 +72,8 @@ export const ToolCategory = React.memo(function ToolCategory({
         },
       ]}
     >
-      <TouchableOpacity
-        activeOpacity={0.7}
+      <PressableScale
+        scaleTo={0.98}
         onPress={onToggle}
         style={styles.header}
       >
@@ -91,13 +92,14 @@ export const ToolCategory = React.memo(function ToolCategory({
         ) : (
           <ChevronDown size={18} color={colors.textTertiary} />
         )}
-      </TouchableOpacity>
+      </PressableScale>
       {expanded && (
         <View style={styles.subGroupContainer}>
           <View style={styles.body}>
             {category.tools.map((tool: Tool, index: number) => (
-              <TouchableOpacity
+              <PressableScale
                 key={tool.id}
+                scaleTo={0.98}
                 onPress={() => onToolPress(tool.id)}
                 style={styles.toolRow}
               >
@@ -113,7 +115,7 @@ export const ToolCategory = React.memo(function ToolCategory({
                   </Text>
                 </View>
                 <ChevronRight color={colors.textTertiary} size={16} />
-              </TouchableOpacity>
+              </PressableScale>
             ))}
           </View>
         </View>

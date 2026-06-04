@@ -32,7 +32,9 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { PINGate } from "@/components/PINGate";
+import { usePermissionPrimer } from "@/components/PermissionPrimer";
 import { ProgressRing } from "@/components/ProgressRing";
+import { PressableScale } from "@/components/ui/PressableScale";
 import { colors } from "@/constants/theme";
 import { useFileIndex } from "@/hooks/useFileIndex";
 import { useReadingProgressFor } from "@/hooks/useReadingProgress";
@@ -151,6 +153,9 @@ export default function LibraryScreen() {
   // ── Sort by ───────────────────────────────────────────────────────────────
   const [sortBy, setSortBy] = useState<SortBy>("size");
   const [showSortMenu, setShowSortMenu] = useState(false);
+
+  // ── Pre-permission primer (folder access) ────────────────────────────────
+  const { requestPrime, primer } = usePermissionPrimer();
 
   // ── Folder picker for "Move to Folder" ────────────────────────────────────
   const [showFolderPicker, setShowFolderPicker] = useState(false);
@@ -383,6 +388,9 @@ export default function LibraryScreen() {
   }, [addFile]);
 
   const handleAccessFolder = useCallback(async () => {
+    // Prime the user before opening the device folder picker (first time only).
+    const ok = await requestPrime("folder");
+    if (!ok) return;
     try {
       const result = await addDoclibFolder();
       if (result) {
@@ -397,7 +405,7 @@ export default function LibraryScreen() {
         e?.message ?? "Could not access the selected folder.",
       );
     }
-  }, [addDoclibFolder, refetchDoclib]);
+  }, [addDoclibFolder, refetchDoclib, requestPrime]);
 
   const handleRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -947,11 +955,11 @@ export default function LibraryScreen() {
       const isPinned = pinnedIds.includes(item.id);
 
       return (
-        <Pressable
-          style={({ pressed }) => [
+        <PressableScale
+          scaleTo={0.98}
+          style={[
             styles.flatFileRow,
             isSelected && { backgroundColor: t.primary + "18" },
-            pressed && !isSelected && { opacity: 0.7 },
           ]}
           onPress={() =>
             markMode ? handleToggleSelect(item.id) : handleFilePress(item)
@@ -1049,7 +1057,7 @@ export default function LibraryScreen() {
               </TouchableOpacity>
             </View>
           )}
-        </Pressable>
+        </PressableScale>
       );
     },
     [
@@ -1072,15 +1080,12 @@ export default function LibraryScreen() {
       const isFav = favoriteIds.has(item.id);
 
       return (
-        <Pressable
-          style={({ pressed }) => [
+        <PressableScale
+          scaleTo={0.97}
+          style={[
             styles.gridCard,
             {
-              backgroundColor: isSelected
-                ? t.primary + "18"
-                : pressed
-                  ? t.card + "CC"
-                  : t.card,
+              backgroundColor: isSelected ? t.primary + "18" : t.card,
               borderColor: isSelected ? t.primary : t.borderLight,
               borderWidth: isSelected ? 2 : 1,
             },
@@ -1155,7 +1160,7 @@ export default function LibraryScreen() {
               />
             </TouchableOpacity>
           )}
-        </Pressable>
+        </PressableScale>
       );
     },
     [
@@ -1401,7 +1406,9 @@ export default function LibraryScreen() {
               contentContainerStyle={styles.filterChipsContainer}
             >
               {/* All Types */}
-              <TouchableOpacity
+              <PressableScale
+                haptic="selection"
+                scaleTo={0.94}
                 style={[
                   styles.filterChip,
                   typeFilter === "all" && styles.filterChipActive,
@@ -1431,10 +1438,12 @@ export default function LibraryScreen() {
                 >
                   All
                 </Text>
-              </TouchableOpacity>
+              </PressableScale>
 
               {/* PDF */}
-              <TouchableOpacity
+              <PressableScale
+                haptic="selection"
+                scaleTo={0.94}
                 style={[
                   styles.filterChip,
                   typeFilter === "pdf" && styles.filterChipActive,
@@ -1467,10 +1476,12 @@ export default function LibraryScreen() {
                 >
                   PDF
                 </Text>
-              </TouchableOpacity>
+              </PressableScale>
 
               {/* DOCX */}
-              <TouchableOpacity
+              <PressableScale
+                haptic="selection"
+                scaleTo={0.94}
                 style={[
                   styles.filterChip,
                   typeFilter === "docx" && styles.filterChipActive,
@@ -1503,10 +1514,12 @@ export default function LibraryScreen() {
                 >
                   DOCX
                 </Text>
-              </TouchableOpacity>
+              </PressableScale>
 
               {/* PPT */}
-              <TouchableOpacity
+              <PressableScale
+                haptic="selection"
+                scaleTo={0.94}
                 style={[
                   styles.filterChip,
                   typeFilter === "ppt" && styles.filterChipActive,
@@ -1539,10 +1552,12 @@ export default function LibraryScreen() {
                 >
                   PPT
                 </Text>
-              </TouchableOpacity>
+              </PressableScale>
 
               {/* EPUB */}
-              <TouchableOpacity
+              <PressableScale
+                haptic="selection"
+                scaleTo={0.94}
                 style={[
                   styles.filterChip,
                   typeFilter === "epub" && styles.filterChipActive,
@@ -1575,10 +1590,12 @@ export default function LibraryScreen() {
                 >
                   EPUB
                 </Text>
-              </TouchableOpacity>
+              </PressableScale>
 
               {/* Favorites */}
-              <TouchableOpacity
+              <PressableScale
+                haptic="selection"
+                scaleTo={0.94}
                 style={[
                   styles.filterChip,
                   sourceFilter === "favorites" && styles.filterChipActive,
@@ -1616,10 +1633,12 @@ export default function LibraryScreen() {
                 >
                   Favorites
                 </Text>
-              </TouchableOpacity>
+              </PressableScale>
 
               {/* Source: Created */}
-              <TouchableOpacity
+              <PressableScale
+                haptic="selection"
+                scaleTo={0.94}
                 style={[
                   styles.filterChip,
                   sourceFilter === "created" && styles.filterChipActive,
@@ -1656,10 +1675,12 @@ export default function LibraryScreen() {
                 >
                   Created
                 </Text>
-              </TouchableOpacity>
+              </PressableScale>
 
               {/* Source: Downloaded */}
-              <TouchableOpacity
+              <PressableScale
+                haptic="selection"
+                scaleTo={0.94}
                 style={[
                   styles.filterChip,
                   sourceFilter === "downloaded" && styles.filterChipActive,
@@ -1697,10 +1718,12 @@ export default function LibraryScreen() {
                 >
                   Downloaded
                 </Text>
-              </TouchableOpacity>
+              </PressableScale>
 
               {/* Source: Shared */}
-              <TouchableOpacity
+              <PressableScale
+                haptic="selection"
+                scaleTo={0.94}
                 style={[
                   styles.filterChip,
                   sourceFilter === "shared" && styles.filterChipActive,
@@ -1735,7 +1758,7 @@ export default function LibraryScreen() {
                 >
                   Shared
                 </Text>
-              </TouchableOpacity>
+              </PressableScale>
             </ScrollView>
           </View>
 
@@ -2094,6 +2117,9 @@ export default function LibraryScreen() {
             <Text style={styles.toastText}>{toastMsg}</Text>
           </View>
         ) : null}
+
+        {/* Pre-permission primer for device folder access */}
+        {primer}
       </SafeAreaView>
     </PINGate>
   );

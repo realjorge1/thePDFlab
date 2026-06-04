@@ -66,6 +66,7 @@ import {
   GraduationCap,
   Highlighter,
   Languages,
+  LayoutDashboard,
   Lightbulb,
   ListChecks,
   MessageSquare,
@@ -99,9 +100,33 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import Animated from "react-native-reanimated";
+import { useIsFocused } from "@react-navigation/native";
+import { AISkyBackground } from "@/components/ai/AISkyBackground";
+import { SuggestionStrip } from "@/components/ai/SuggestionStrip";
+import { PressableScale } from "@/components/ui/PressableScale";
+import { useTypingGlow } from "@/hooks/useTypingGlow";
+import { isCancelError, runCancelable } from "@/services/activity/activityStore";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 const ACCENT = "#9333EA";
+
+// Animated TextInput so the composer can softly glow while the user types.
+const AnimatedTextInput = Animated.createAnimatedComponent(TextInput);
+
+// Short verbs shown in the spring activity overlay per AI mode.
+const AI_SEND_LABELS: Partial<Record<AIAction, string>> = {
+  chat: "Thinking",
+  summarize: "Summarizing",
+  translate: "Translating",
+  "extract-text": "Extracting text",
+  analyze: "Analyzing",
+  tasks: "Finding tasks",
+  classify: "Classifying",
+  highlight: "Finding highlights",
+  explain: "Explaining",
+  "chat-with-document": "Reading the document",
+};
 const GRID_GAP = 6;
 const GRID_COLUMNS = 3;
 const GRID_H_PADDING = 8;
@@ -138,7 +163,7 @@ const FEATURE_ICONS: Record<string, React.ComponentType<any>> = {
   highlight: Highlighter,
   explain: Lightbulb,
   quiz: GraduationCap,
-  workspace: Wand2,
+  workspace: LayoutDashboard,
 };
 
 // ── Title inference for generated documents ──────────────────────────────────
@@ -200,6 +225,9 @@ function extractTextForPages(fullText: string, pageNums: number[], totalPages: n
 export default function AIScreen() {
   const { colors: t, mode } = useTheme();
   const router = useRouter();
+  const isFocused = useIsFocused();
+  // Composer glow: the input softly lights up with the accent while typing.
+  const { glowStyle, onType } = useTypingGlow(ACCENT);
   // "Ask gozlin" deep-link: viewers pass selected text (and optionally a target
   // action, e.g. from Voice to Document) as route params.
   const { initialText, initialAction } = useLocalSearchParams<{
@@ -507,7 +535,11 @@ export default function AIScreen() {
         setIsTranslating(true);
         setTranslateProgress("Translating…");
         try {
-          const response = await translate(textToTranslate, targetLang, translateDoc.name);
+          const response = await runCancelable(
+            (signal) =>
+              translate(textToTranslate, targetLang, translateDoc.name, signal),
+            { kind: "ai", label: "Translating" },
+          );
           setTranslateProgress("Creating document…");
           const baseName = translateDoc.name.replace(/\.[^.]+$/, "");
           const docTitle = `${baseName}_Translated_${currentLangLabel}`;
@@ -521,11 +553,13 @@ export default function AIScreen() {
             wordCount: response.content.split(/\s+/).length,
           });
           router.push("/gozlin-generated-preview" as any);
-        } catch {
-          setTranslateMessages((prev) => [
-            ...prev,
-            { id: `${msgId}_e`, type: "error", label: "Error", content: "Translation or document creation failed. Please try again.", timestamp: Date.now() },
-          ]);
+        } catch (e) {
+          if (!isCancelError(e)) {
+            setTranslateMessages((prev) => [
+              ...prev,
+              { id: `${msgId}_e`, type: "error", label: "Error", content: "Translation or document creation failed. Please try again.", timestamp: Date.now() },
+            ]);
+          }
         } finally {
           setIsTranslating(false);
           setTranslateProgress(null);
@@ -541,18 +575,24 @@ export default function AIScreen() {
       setIsTranslating(true);
       try {
         const beforeY = translateContentHeightRef.current;
-        const response = await translate(textToTranslate, targetLang, translateDoc.name);
+        const response = await runCancelable(
+            (signal) =>
+              translate(textToTranslate, targetLang, translateDoc.name, signal),
+            { kind: "ai", label: "Translating" },
+          );
         setTranslateMessages((prev) => [
           ...prev,
           { id: `${msgId}_r`, type: "response", label: currentLangLabel, content: response.content, timestamp: Date.now() },
         ]);
         // Anchor the start of the new response at the top of the viewport
         translatePendingTopRef.current = beforeY;
-      } catch {
-        setTranslateMessages((prev) => [
-          ...prev,
-          { id: `${msgId}_e`, type: "error", label: "Error", content: "Translation failed. Please try again.", timestamp: Date.now() },
-        ]);
+      } catch (e) {
+        if (!isCancelError(e)) {
+          setTranslateMessages((prev) => [
+            ...prev,
+            { id: `${msgId}_e`, type: "error", label: "Error", content: "Translation failed. Please try again.", timestamp: Date.now() },
+          ]);
+        }
       } finally {
         setIsTranslating(false);
       }
@@ -566,7 +606,10 @@ export default function AIScreen() {
         setIsTranslating(true);
         setTranslateProgress("Translating…");
         try {
-          const response = await translate(text, targetLang, "text");
+          const response = await runCancelable(
+            (signal) => translate(text, targetLang, "text", signal),
+            { kind: "ai", label: "Translating" },
+          );
           setTranslateProgress("Creating document…");
           const docTitle = `Translated_Text_${currentLangLabel}`;
           const { setPendingGeneration } = await import("@/services/generatedDocStore");
@@ -580,11 +623,13 @@ export default function AIScreen() {
           });
           setTranslateFreeText("");
           router.push("/gozlin-generated-preview" as any);
-        } catch {
-          setTranslateMessages((prev) => [
-            ...prev,
-            { id: `${msgId}_e`, type: "error", label: "Error", content: "Translation or document creation failed. Please try again.", timestamp: Date.now() },
-          ]);
+        } catch (e) {
+          if (!isCancelError(e)) {
+            setTranslateMessages((prev) => [
+              ...prev,
+              { id: `${msgId}_e`, type: "error", label: "Error", content: "Translation or document creation failed. Please try again.", timestamp: Date.now() },
+            ]);
+          }
         } finally {
           setIsTranslating(false);
           setTranslateProgress(null);
@@ -601,18 +646,23 @@ export default function AIScreen() {
       setIsTranslating(true);
       try {
         const beforeY = translateContentHeightRef.current;
-        const response = await translate(text, targetLang, "text");
+        const response = await runCancelable(
+            (signal) => translate(text, targetLang, "text", signal),
+            { kind: "ai", label: "Translating" },
+          );
         setTranslateMessages((prev) => [
           ...prev,
           { id: `${msgId}_r`, type: "response", label: currentLangLabel, content: response.content, timestamp: Date.now() },
         ]);
         // Anchor the start of the new response at the top of the viewport
         translatePendingTopRef.current = beforeY;
-      } catch {
-        setTranslateMessages((prev) => [
-          ...prev,
-          { id: `${msgId}_e`, type: "error", label: "Error", content: "Translation failed. Please try again.", timestamp: Date.now() },
-        ]);
+      } catch (e) {
+        if (!isCancelError(e)) {
+          setTranslateMessages((prev) => [
+            ...prev,
+            { id: `${msgId}_e`, type: "error", label: "Error", content: "Translation failed. Please try again.", timestamp: Date.now() },
+          ]);
+        }
       } finally {
         setIsTranslating(false);
       }
@@ -848,8 +898,8 @@ export default function AIScreen() {
   }, [isLoading, inputText, attachedDoc, activeAction]);
 
   // ── Main send handler ─────────────────────────────────────────────────────
-  const handleSend = useCallback(async () => {
-    const text = inputText.trim();
+  const handleSend = useCallback(async (override?: string) => {
+    const text = (override ?? inputText).trim();
     const hasText = text.length > 0;
     const hasFile = !!attachedDoc;
 
@@ -881,6 +931,7 @@ export default function AIScreen() {
     // Build user-visible message
     const displayText = hasText ? text : `📎 Process "${attachedDoc!.name}"`;
     const userMsg = createMessage("user", displayText);
+    const userMsgId = userMsg.id;
     setSession((prev) => ({
       ...prev,
       messages: [...prev.messages, userMsg],
@@ -890,104 +941,121 @@ export default function AIScreen() {
     setIsLoading(true);
 
     try {
-      let response;
+      // Run the AI call through the global spring overlay so the user can pull
+      // down to cancel. The signal is wired into fetch for a true abort.
+      const response = await runCancelable<any>(
+        async (signal) => {
+          let response: any;
 
-      // Build the effective text for the AI:
-      // - If docText exists (extracted from file), use it, optionally prepended by user text
-      // - If only user text, use that directly
-      // - If file attached but no extracted text, send user text (backend will use file)
-      let effectiveText: string;
-      if (docText && hasText) {
-        effectiveText = `${docText}\n\n---\nUser input: ${text}`;
-      } else if (docText) {
-        effectiveText = docText;
-      } else if (hasText) {
-        effectiveText = text;
-      } else {
-        effectiveText = "";
-      }
-
-      switch (activeAction) {
-        case "chat":
-          response = await sendChat(
-            text,
-            session.messages,
-            docText,
-            attachedDoc?.name,
-          );
-          break;
-        case "summarize":
-          response = await summarize(effectiveText, attachedDoc?.name);
-          break;
-        case "translate":
-          response = await translate(
-            effectiveText,
-            targetLang,
-            attachedDoc?.name,
-          );
-          break;
-        case "extract-text": {
-          // Text Extraction: return the raw extracted text from the document
-          // (already extracted during attachment via extractDocumentText)
-          let extracted = docText;
-          if (!extracted && attachedDoc) {
-            extracted = await extractDocumentText(attachedDoc);
-            setDocText(extracted);
-            setExtractionStatus("extracted");
-          }
-          if (extracted && (extracted.startsWith("[Page ") || !extracted.startsWith("["))) {
-            const wordCount = extracted.split(/\s+/).length;
-            const pageMatches = extracted.match(/\[Page \d+\]/g);
-            const pageCount = pageMatches ? pageMatches.length : 1;
-            response = {
-              content:
-                `📄 **Extracted Text from "${attachedDoc?.name || "document"}"**\n\n` +
-                `**Stats:** ${wordCount.toLocaleString()} words · ${pageCount} page${pageCount !== 1 ? "s" : ""}`,
-              structuredData: {
-                __kind: "document",
-                fullText: extracted,
-              },
-            };
+          // Build the effective text for the AI:
+          // - If docText exists (extracted from file), use it, optionally prepended by user text
+          // - If only user text, use that directly
+          // - If file attached but no extracted text, send user text (backend will use file)
+          let effectiveText: string;
+          if (docText && hasText) {
+            effectiveText = `${docText}\n\n---\nUser input: ${text}`;
+          } else if (docText) {
+            effectiveText = docText;
+          } else if (hasText) {
+            effectiveText = text;
           } else {
-            response = {
-              content:
-                extracted ||
-                "❌ Could not extract text from this document. Please try a different PDF.",
-            };
+            effectiveText = "";
           }
-          break;
-        }
-        case "analyze":
-          response = await analyze(effectiveText, undefined, attachedDoc?.name);
-          break;
-        case "tasks":
-          response = await extractTasks(effectiveText, attachedDoc?.name);
-          break;
-        case "classify":
-          response = await classifyDocument(effectiveText, attachedDoc?.name);
-          break;
-        case "highlight":
-          response = await highlightKeyPoints(effectiveText, attachedDoc?.name);
-          break;
-        case "explain":
-          response = await explainText(effectiveText);
-          break;
-        case "quiz":
-          // Quiz is handled entirely by QuizPanel; the input row is hidden
-          // in quiz mode so this branch should never execute.
-          response = { content: "" };
-          break;
-        case "chat-with-document":
-          response = await sendChat(
-            text,
-            session.messages,
-            docText,
-            attachedDoc?.name,
-          );
-          break;
-        default:
-          response = await sendChat(text, session.messages);
-      }
+
+          switch (activeAction) {
+            case "chat":
+              response = await sendChat(
+                text,
+                session.messages,
+                docText,
+                attachedDoc?.name,
+                signal,
+              );
+              break;
+            case "summarize":
+              response = await summarize(effectiveText, attachedDoc?.name, signal);
+              break;
+            case "translate":
+              response = await translate(
+                effectiveText,
+                targetLang,
+                attachedDoc?.name,
+                signal,
+              );
+              break;
+            case "extract-text": {
+              // Text Extraction: return the raw extracted text from the document
+              // (already extracted during attachment via extractDocumentText)
+              let extracted = docText;
+              if (!extracted && attachedDoc) {
+                extracted = await extractDocumentText(attachedDoc);
+                setDocText(extracted);
+                setExtractionStatus("extracted");
+              }
+              if (extracted && (extracted.startsWith("[Page ") || !extracted.startsWith("["))) {
+                const wordCount = extracted.split(/\s+/).length;
+                const pageMatches = extracted.match(/\[Page \d+\]/g);
+                const pageCount = pageMatches ? pageMatches.length : 1;
+                response = {
+                  content:
+                    `📄 **Extracted Text from "${attachedDoc?.name || "document"}"**\n\n` +
+                    `**Stats:** ${wordCount.toLocaleString()} words · ${pageCount} page${pageCount !== 1 ? "s" : ""}`,
+                  structuredData: {
+                    __kind: "document",
+                    fullText: extracted,
+                  },
+                };
+              } else {
+                response = {
+                  content:
+                    extracted ||
+                    "❌ Could not extract text from this document. Please try a different PDF.",
+                };
+              }
+              break;
+            }
+            case "analyze":
+              response = await analyze(effectiveText, undefined, attachedDoc?.name, signal);
+              break;
+            case "tasks":
+              response = await extractTasks(effectiveText, attachedDoc?.name, signal);
+              break;
+            case "classify":
+              response = await classifyDocument(effectiveText, attachedDoc?.name, signal);
+              break;
+            case "highlight":
+              response = await highlightKeyPoints(effectiveText, attachedDoc?.name, signal);
+              break;
+            case "explain":
+              response = await explainText(effectiveText, undefined, undefined, signal);
+              break;
+            case "quiz":
+              // Quiz is handled entirely by QuizPanel; the input row is hidden
+              // in quiz mode so this branch should never execute.
+              response = { content: "" };
+              break;
+            case "chat-with-document":
+              response = await sendChat(
+                text,
+                session.messages,
+                docText,
+                attachedDoc?.name,
+                signal,
+              );
+              break;
+            default:
+              response = await sendChat(
+                text,
+                session.messages,
+                undefined,
+                undefined,
+                signal,
+              );
+          }
+          return response;
+        },
+        { kind: "ai", label: AI_SEND_LABELS[activeAction] ?? "Working" },
+      );
 
       const assistantMsg = createMessage(
         "assistant",
@@ -1000,6 +1068,15 @@ export default function AIScreen() {
         updatedAt: Date.now(),
       }));
     } catch (e) {
+      // User pulled down to cancel — restore to the pre-send state.
+      if (isCancelError(e)) {
+        setSession((prev) => ({
+          ...prev,
+          messages: prev.messages.filter((m) => m.id !== userMsgId),
+        }));
+        if (hasText) setInputText(text);
+        return;
+      }
       const errorMsg = createMessage(
         "assistant",
         `❌ Something went wrong: ${e instanceof Error ? e.message : "Unknown error"}. Please try again.`,
@@ -1103,13 +1180,18 @@ export default function AIScreen() {
     }) => {
       setIsGenerating(true);
       try {
-        const response = await generateDocument(
-          params.prompt,
-          params.fileType,
-          params.category,
-          params.tone,
-          params.wordCount,
-          params.audience,
+        const response = await runCancelable(
+          (signal) =>
+            generateDocument(
+              params.prompt,
+              params.fileType,
+              params.category,
+              params.tone,
+              params.wordCount,
+              params.audience,
+              signal,
+            ),
+          { kind: "ai", label: "Generating document" },
         );
 
         if (!response.content?.trim()) {
@@ -1129,6 +1211,7 @@ export default function AIScreen() {
         setShowGenerateDocumentModal(false);
         router.push("/gozlin-generated-preview" as any);
       } catch (e) {
+        if (isCancelError(e)) return; // user cancelled — leave the modal as-is
         Alert.alert(
           "Generation Failed",
           e instanceof Error ? e.message : "Something went wrong. Please try again.",
@@ -1612,22 +1695,8 @@ export default function AIScreen() {
     ],
   );
   const chatKeyExtractor = useCallback((item: AIChatMessage) => item.id, []);
-  const chatListFooter = useMemo(() => {
-    if (!isLoading) return null;
-    return (
-      <View
-        style={[
-          styles.loadingBubble,
-          { backgroundColor: mode === "dark" ? "#1E293B" : "#F1F5F9" },
-        ]}
-      >
-        <ActivityIndicator size="small" color={ACCENT} />
-        <Text style={[styles.loadingText, { color: t.textSecondary }]}>
-          Thinking...
-        </Text>
-      </View>
-    );
-  }, [isLoading, mode, t.textSecondary]);
+  // While a request is in flight the root ActivityOverlay shows the floating
+  // "Thinking…" status (with pull-to-cancel), so no inline loading bubble here.
   const chatListEmpty = useMemo(
     () => <AIEmptyState action={activeAction} />,
     [activeAction],
@@ -2081,6 +2150,9 @@ export default function AIScreen() {
               },
             ]}
           >
+            {/* Ambient backdrop: shooting stars (dark) / gliding birds (light).
+                Behind the message list; paused when the screen isn't focused. */}
+            <AISkyBackground active={isFocused} />
             <FlatList
               ref={scrollRef}
               data={session.messages}
@@ -2090,7 +2162,6 @@ export default function AIScreen() {
               contentContainerStyle={styles.chatContent}
               keyboardShouldPersistTaps="handled"
               ListEmptyComponent={chatListEmpty}
-              ListFooterComponent={chatListFooter}
               initialNumToRender={15}
               maxToRenderPerBatch={10}
               windowSize={7}
@@ -2104,11 +2175,22 @@ export default function AIScreen() {
               }}
             />
 
+            {/* ─── Suggestions (modern starter prompts, empty chat) ── */}
+            {session.messages.length === 0 && !isLoading && (
+              <SuggestionStrip
+                action={activeAction}
+                onPick={(suggestion) => handleSend(suggestion)}
+              />
+            )}
+
             {/* ─── Input area ──────────────────────────────────────── */}
             <View style={[styles.inputRow, { borderTopColor: t.border }]}>
-              <TextInput
+              <AnimatedTextInput
                 value={inputText}
-                onChangeText={setInputText}
+                onChangeText={(v) => {
+                  setInputText(v);
+                  onType();
+                }}
                 placeholder={placeholder}
                 placeholderTextColor={t.textTertiary}
                 style={[
@@ -2119,23 +2201,23 @@ export default function AIScreen() {
                       (mode === "dark" ? "#1E293B" : "#F1F5F9"),
                     color: t.text,
                   },
+                  glowStyle,
                 ]}
                 multiline
                 maxLength={5000}
                 editable={!isLoading}
                 blurOnSubmit={false}
               />
-              <TouchableOpacity
+              <PressableScale
                 onPress={handleAttachDocument}
                 hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
                 style={styles.attachIconBtn}
-                activeOpacity={0.7}
               >
                 <Paperclip
                   size={18}
                   color={attachedDoc ? ACCENT : t.textSecondary}
                 />
-              </TouchableOpacity>
+              </PressableScale>
               <VoiceInputButton
                 disabled={isLoading}
                 onTranscribed={(text) =>
@@ -2144,19 +2226,19 @@ export default function AIScreen() {
                 onError={(msg) => setSmartFolderToast(msg)}
                 style={styles.attachIconBtn}
               />
-              <TouchableOpacity
-                onPress={handleSend}
+              <PressableScale
+                onPress={() => handleSend()}
                 disabled={!canSend}
+                haptic="medium"
                 style={[
                   styles.sendBtn,
                   {
                     backgroundColor: canSend ? ACCENT : t.border,
                   },
                 ]}
-                activeOpacity={0.7}
               >
                 <Send color={canSend ? "#FFF" : t.textTertiary} size={18} />
-              </TouchableOpacity>
+              </PressableScale>
             </View>
           </View>
           ))}
@@ -2438,7 +2520,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
-    marginHorizontal: spacing.md,
+    marginHorizontal: 0,
     marginTop: 8,
     marginBottom: 6,
     paddingHorizontal: spacing.sm + 4,
@@ -2455,7 +2537,7 @@ const styles = StyleSheet.create({
   // ─── Chat Area ───
   chatContainer: {
     flex: 1,
-    marginHorizontal: spacing.md,
+    marginHorizontal: 0,
     marginBottom: spacing.sm,
     borderRadius: 16,
     borderWidth: 0,
@@ -2464,20 +2546,6 @@ const styles = StyleSheet.create({
   chatContent: {
     padding: 8,
     flexGrow: 1,
-  },
-  loadingBubble: {
-    alignSelf: "flex-start",
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    borderRadius: 16,
-    marginTop: spacing.sm,
-  },
-  loadingText: {
-    fontSize: 13,
-    fontWeight: "500",
   },
   inputRow: {
     flexDirection: "row",
@@ -2512,7 +2580,7 @@ const styles = StyleSheet.create({
   // ─── Translate UI (document-based) ───
   translateContainer: {
     flex: 1,
-    marginHorizontal: spacing.md,
+    marginHorizontal: 0,
     marginBottom: spacing.sm,
     marginTop: 6,
     gap: 8,

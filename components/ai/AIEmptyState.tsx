@@ -3,6 +3,7 @@
 // ============================================
 
 import AILogoBadge from "@/components/AIButton/AILogoBadge";
+import { pickGreeting } from "@/constants/ai-greetings";
 import { spacing } from "@/constants/theme";
 import { useTheme } from "@/services/ThemeProvider";
 import type { AIAction } from "@/services/ai/ai.types";
@@ -22,7 +23,7 @@ import {
   ScanSearch,
   Sparkles,
 } from "lucide-react-native";
-import React from "react";
+import React, { useState } from "react";
 import { StyleSheet, Text, View } from "react-native";
 
 const ICON_MAP: Record<string, React.ComponentType<any>> = {
@@ -51,74 +52,9 @@ export const AIEmptyState = React.memo(function AIEmptyState({
   const feature = AI_FEATURES.find((f) => f.id === action);
   const Icon = feature ? ICON_MAP[feature.icon] || Sparkles : Sparkles;
   const color = feature?.color || "#9333EA";
-
-  const hints: Record<AIAction, string[]> = {
-    chat: [
-      "Ask me any question",
-      'Try "Help me write a document"',
-      "I can help with writing, editing, and analysis",
-    ],
-    summarize: [
-      "Paste text or attach a document",
-      "I'll extract the key points",
-      "Works with PDF, DOCX, EPUB, and plain text",
-    ],
-    translate: [
-      "Enter text and pick a target language",
-      "Supports 60+ languages",
-      "Attach a document for full translation",
-    ],
-    "extract-text": [
-      "Attach a PDF document",
-      "I'll extract all readable text page by page",
-      "Copy the result to use anywhere",
-    ],
-    analyze: [
-      "Get sentiment, readability, and structure analysis",
-      "Paste text or attach a document",
-      "Detailed insights and recommendations",
-    ],
-    tasks: [
-      "I'll find action items and to-dos",
-      "Extracts assignees, priorities, and due dates",
-      "Works with meeting notes, emails, and reports",
-    ],
-    "fill-form": [
-      "Attach a PDF form",
-      "Describe the data or paste source text",
-      "AI will suggest field values",
-    ],
-    "generate-document": [
-      "Describe the document you need — from business reports to creative writing",
-      "Choose your format: Word, PDF, or PowerPoint",
-      "Get a professionally formatted document in seconds",
-    ],
-    "chat-with-document": [
-      "Attach a document first",
-      "Then ask questions about its content",
-      "Works with PDF, DOCX, EPUB, and TXT files",
-    ],
-    classify: [
-      "Attach a document to classify",
-      "Detects type: invoice, contract, report, etc.",
-      "Suggests a clean, descriptive filename",
-    ],
-    highlight: [
-      "Paste text or attach a document",
-      "Finds the most critical sentences",
-      "Ranks by importance: critical, high, medium",
-    ],
-    explain: [
-      "Paste complex text to simplify",
-      "Supports plain, legal, medical, and technical modes",
-      "Makes jargon-heavy text accessible to anyone",
-    ],
-    quiz: [
-      "Paste text or attach a document",
-      "Generate quizzes, comprehension Q&A, or flashcards",
-      "Great for studying and review",
-    ],
-  };
+  // Pick a fresh time-based greeting once per mount (i.e. each time the empty
+  // screen opens / the feature changes). Never repeats twice in a row.
+  const [greeting] = useState(() => pickGreeting());
 
   return (
     <View style={styles.container}>
@@ -136,30 +72,10 @@ export const AIEmptyState = React.memo(function AIEmptyState({
           <Icon color={color} size={44} strokeWidth={1.8} />
         )}
       </View>
-      <Text style={[styles.title, { color: t.text }]}>
-        {feature?.name || "gozlin"}
-      </Text>
+      <Text style={[styles.title, { color: t.text }]}>{greeting}</Text>
       <Text style={[styles.subtitle, { color: t.textSecondary }]}>
         {feature?.description || "Select a mode to get started"}
       </Text>
-      <View style={styles.hints}>
-        {(hints[action] || []).map((hint, i) => (
-          <View
-            key={i}
-            style={[
-              styles.hintRow,
-              {
-                backgroundColor: mode === "dark" ? "#1E293B" : "#F8FAFC",
-              },
-            ]}
-          >
-            <Text style={[styles.hintBullet, { color }]}>•</Text>
-            <Text style={[styles.hintText, { color: t.textSecondary }]}>
-              {hint}
-            </Text>
-          </View>
-        ))}
-      </View>
     </View>
   );
 });
@@ -182,6 +98,7 @@ const styles = StyleSheet.create({
     fontSize: 20,
     fontWeight: "700",
     marginBottom: 4,
+    textAlign: "center",
   },
   subtitle: {
     fontSize: 14,

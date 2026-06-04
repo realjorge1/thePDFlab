@@ -12,6 +12,8 @@ import { spacing } from "@/constants/theme";
 import { colors as appColors } from "@/constants/theme";
 import { sendChat, summarize, extractTasks } from "@/services/ai/ai.service";
 import { recordAIInteraction } from "@/services/workspaceInsightsService";
+import { computeFormula, computeConversion, quickConvert } from "@/services/scientiaCompute";
+import { scheduleTaskReminder, cancelScheduledNotification } from "@/services/notificationService";
 import { getFileByUri, type UnifiedFileRecord } from "@/services/fileIndexService";
 import { runNoteAction, type NoteAction } from "@/components/workspace/aiActions";
 import DocumentStudio from "@/components/workspace/DocumentStudio";
@@ -435,6 +437,10 @@ interface TaskBlock extends BaseBlock {
   text: string;
   completed?: boolean;
   reminder?: boolean;
+  /** When the reminder should fire (epoch ms) and the OS notification id, so it
+   * can be rescheduled or cancelled. Present only once a reminder is set. */
+  reminderAt?: number;
+  reminderId?: string;
   sourceLabel?: string;
 }
 
@@ -468,7 +474,7 @@ type Block = NoteBlock | ComputeBlock | ChartBlock | AIBlock | TaskBlock | Scien
 type WorkspaceView = "notebook" | "studio" | "graph" | "progress";
 
 const WORKSPACE_VIEWS: Array<{ id: WorkspaceView; label: string; Icon: any }> = [
-  { id: "notebook", label: "Notebook", Icon: BookOpen },
+  { id: "notebook", label: "Notes", Icon: BookOpen },
   { id: "studio", label: "Studio", Icon: PenLine },
   { id: "graph", label: "Graph", Icon: Network },
   { id: "progress", label: "Progress", Icon: BarChart3 },
@@ -559,14 +565,7 @@ function recomputeComputeBlocks(blocks: Block[]): { blocks: Block[]; changed: bo
   return { blocks: changed ? next : blocks, changed };
 }
 
-const DEFAULT_BLOCKS = (): Block[] => [
-  {
-    id: newId(),
-    kind: "note",
-    text:
-      "Welcome to Gozlin WorkSpace.\n\nMix notes, math, charts, AI prompts, and scientific calculations in one persistent document. Tap + to add a block.",
-  },
-];
+const DEFAULT_BLOCKS = (): Block[] => [];
 
 // ─── Screen ──────────────────────────────────────────────────────────────────
 
@@ -589,6 +588,7 @@ export default function GozlinWorkspaceScreen() {
 
   // ── WorkSpace view switcher + Smart Notes ───────────────────────────────────
   const [view, setView] = useState<WorkspaceView>("notebook");
+  const [activeCreator, setActiveCreator] = useState<BlockKind | null>(null);
   const [noteAIBusyId, setNoteAIBusyId] = useState<string | null>(null);
   const [linkTargetId, setLinkTargetId] = useState<string | null>(null);
 
@@ -969,14 +969,14 @@ export default function GozlinWorkspaceScreen() {
     [blocks],
   );
 
-  const saveScientiaNote = useCallback((blockId: string, noteText: string) => {
+  const saveScientiaNote = useCallback((blockId: string, noteText: string, label?: string) => {
     const randomColor = STICKY_COLORS[Math.floor(Math.random() * STICKY_COLORS.length)];
     const noteBlock: NoteBlock = {
       id: newId(),
       kind: "note",
       text: noteText,
       color: randomColor,
-      sourceLabel: "⚠ GozlinScientia Safety Note",
+      sourceLabel: label ?? "⚠ GozlinScientia Safety Note",
     };
     setBlocks((prev) => {
       const idx = prev.findIndex((b) => b.id === blockId);
@@ -1154,30 +1154,17 @@ export default function GozlinWorkspaceScreen() {
         </GradientView>
       </AppHeaderContainer>
 
-      {/* ── View switcher: Notebook · Studio · Graph · Progress ── */}
-      <View
-        style={[
-          styles.viewSwitcher,
-          { backgroundColor: mode === "dark" ? "#0F172A" : "#FFFFFF", borderBottomColor: t.border },
-        ]}
-      >
-        {WORKSPACE_VIEWS.map((v) => {
-          const activeV = view === v.id;
-          return (
-            <TouchableOpacity
-              key={v.id}
-              onPress={() => setView(v.id)}
-              style={[styles.viewTab, activeV && { backgroundColor: `${ACCENT}14` }]}
-              activeOpacity={0.7}
-            >
-              <v.Icon size={15} color={activeV ? ACCENT : t.textTertiary} strokeWidth={2.2} />
-              <Text style={[styles.viewTabText, { color: activeV ? ACCENT : t.textTertiary }]}>
-                {v.label}
-              </Text>
-            </TouchableOpacity>
-          );
-        })}
-      </View>
+      {/* ── One unified tab menu: views + block creators in a single bar ── */}
+      <WorkspaceTabBar
+        view={view}
+        activeCreator={activeCreator}
+        onSelectView={(v) => { setActiveCreator(null); setView(v); }}
+        onAddNote={() => { setActiveCreator(null); setView("notebook"); addBlock("note"); }}
+        onAddBlock={(kind) => { setActiveCreator(kind); setView("notebook"); addBlock(kind); }}
+        onVoiceNote={(text) => { setActiveCreator(null); setView("notebook"); addVoiceNote(text); }}
+        t={t}
+        mode={mode}
+      />
 
       {restoredHint && view === "notebook" ? (
         <View
@@ -1263,15 +1250,30 @@ export default function GozlinWorkspaceScreen() {
                 Empty workspace
               </Text>
               <Text style={[styles.emptyHint, { color: t.textTertiary }]}>
-                Tap + below to add your first block.
+                Add a note below, or pick Task · Chart · gozlin · Scientia from the tabs above.
               </Text>
+              <TouchableOpacity
+                onPress={() => addBlock("note")}
+                style={[styles.newNoteBtn, styles.newNoteBtnSolid]}
+                activeOpacity={0.85}
+              >
+                <Plus size={15} color="#FFFFFF" strokeWidth={2.6} />
+                <Text style={styles.newNoteBtnSolidText}>New note</Text>
+              </TouchableOpacity>
             </View>
-          ) : null}
+          ) : (
+            <TouchableOpacity
+              onPress={() => addBlock("note")}
+              style={[styles.newNoteBtn, { borderColor: `${ACCENT}55`, backgroundColor: `${ACCENT}10` }]}
+              activeOpacity={0.7}
+            >
+              <Plus size={15} color={ACCENT} strokeWidth={2.6} />
+              <Text style={[styles.newNoteBtnText, { color: ACCENT }]}>New note</Text>
+            </TouchableOpacity>
+          )}
 
           <View style={{ height: spacing.xl }} />
         </ScrollView>
-
-        <AddBar onAdd={addBlock} onVoiceNote={addVoiceNote} t={t} mode={mode} />
         </>
         )}
       </KeyboardAvoidingView>
@@ -1398,7 +1400,7 @@ interface BlockCardProps {
   onRunAI: (id: string) => void;
   onRunChartAI: (id: string) => void;
   onRunScientia: (id: string, queryOverride?: string) => void;
-  onSaveScientiaNote: (blockId: string, noteText: string) => void;
+  onSaveScientiaNote: (blockId: string, noteText: string, label?: string) => void;
   onAskAboutBlock: (b: Block) => void;
   onConvert: (id: string, mode: "summary" | "tasks") => void;
   onPinNote: (id: string) => void;
@@ -1637,7 +1639,7 @@ function BlockCard({
           block={block as ScientiaBlock}
           onUpdate={onUpdate}
           onRun={onRunScientia}
-          onSaveNote={(text) => onSaveScientiaNote(block.id, text)}
+          onSaveNote={(text, label) => onSaveScientiaNote(block.id, text, label)}
           t={t}
           mode={mode}
         />
@@ -2584,6 +2586,44 @@ function AIBody({
 
 // ─── Task body ───────────────────────────────────────────────────────────────
 
+// ─── Task reminder helpers ───────────────────────────────────────────────────
+
+// Human-friendly label for a scheduled reminder time.
+function formatReminder(ts: number): string {
+  const d = new Date(ts);
+  const now = new Date();
+  const time = d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  const tomorrow = new Date(now);
+  tomorrow.setDate(now.getDate() + 1);
+  if (d.toDateString() === now.toDateString()) return `Today, ${time}`;
+  if (d.toDateString() === tomorrow.toDateString()) return `Tomorrow, ${time}`;
+  return `${d.toLocaleDateString([], { month: "short", day: "numeric" })}, ${time}`;
+}
+
+// Quick-pick reminder times. No native date picker dependency — these cover the
+// common cases and each maps to a concrete Date used to schedule a real OS
+// notification.
+function reminderPresets(): Array<{ key: string; label: string; date: Date }> {
+  const now = Date.now();
+  const evening = new Date();
+  evening.setHours(18, 0, 0, 0);
+  if (evening.getTime() <= now + 5 * 60000) evening.setDate(evening.getDate() + 1);
+  const tomorrow9 = new Date();
+  tomorrow9.setDate(tomorrow9.getDate() + 1);
+  tomorrow9.setHours(9, 0, 0, 0);
+  const nextWeek = new Date();
+  nextWeek.setDate(nextWeek.getDate() + 7);
+  nextWeek.setHours(9, 0, 0, 0);
+  return [
+    { key: "30m", label: "In 30 minutes", date: new Date(now + 30 * 60000) },
+    { key: "1h", label: "In 1 hour", date: new Date(now + 60 * 60000) },
+    { key: "3h", label: "In 3 hours", date: new Date(now + 3 * 60 * 60000) },
+    { key: "eve", label: "This evening (6 PM)", date: evening },
+    { key: "tom", label: "Tomorrow (9 AM)", date: tomorrow9 },
+    { key: "wk", label: "Next week", date: nextWeek },
+  ];
+}
+
 function TaskBody({
   block, onUpdate, t, mode,
 }: {
@@ -2594,7 +2634,50 @@ function TaskBody({
 }) {
   const bg = mode === "dark" ? "#1E293B" : "#F8FAFC";
   const isDone = !!block.completed;
-  const hasReminder = !!block.reminder;
+  const reminderAt = block.reminderAt;
+  const hasReminder = typeof reminderAt === "number" && reminderAt > Date.now();
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [busyKey, setBusyKey] = useState<string | null>(null);
+
+  const applyReminder = useCallback(
+    async (key: string, when: Date) => {
+      setBusyKey(key);
+      try {
+        // Replace any earlier reminder for this task.
+        if (block.reminderId) await cancelScheduledNotification(block.reminderId);
+        const id = await scheduleTaskReminder(block.text, when);
+        if (!id) {
+          onUpdate(block.id, {
+            reminder: false, reminderAt: undefined, reminderId: undefined,
+          } as Partial<Block>);
+          setPickerOpen(false);
+          Alert.alert(
+            "Notifications are off",
+            "Allow notifications for this app in your device settings to get task reminders.",
+          );
+          return;
+        }
+        onUpdate(block.id, {
+          reminder: true, reminderAt: when.getTime(), reminderId: id,
+        } as Partial<Block>);
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+        setPickerOpen(false);
+      } catch (e: any) {
+        Alert.alert("Reminder", e?.message || "Couldn't set the reminder.");
+      } finally {
+        setBusyKey(null);
+      }
+    },
+    [block.id, block.text, block.reminderId, onUpdate],
+  );
+
+  const clearReminder = useCallback(async () => {
+    if (block.reminderId) await cancelScheduledNotification(block.reminderId);
+    onUpdate(block.id, {
+      reminder: false, reminderAt: undefined, reminderId: undefined,
+    } as Partial<Block>);
+    setPickerOpen(false);
+  }, [block.id, block.reminderId, onUpdate]);
 
   return (
     <View style={{ gap: 8 }}>
@@ -2633,7 +2716,7 @@ function TaskBody({
         />
       </View>
       <TouchableOpacity
-        onPress={() => onUpdate(block.id, { reminder: !hasReminder } as Partial<Block>)}
+        onPress={() => setPickerOpen(true)}
         activeOpacity={0.7}
         style={[
           styles.taskReminderBtn,
@@ -2649,7 +2732,7 @@ function TaskBody({
           <BellOff size={12} color={t.textTertiary} />
         )}
         <Text style={{ fontSize: 11, fontWeight: "600", color: hasReminder ? "#06B6D4" : t.textSecondary }}>
-          {hasReminder ? "Reminder set" : "Set reminder"}
+          {hasReminder ? `Reminder · ${formatReminder(reminderAt!)}` : "Set reminder"}
         </Text>
       </TouchableOpacity>
       {block.sourceLabel ? (
@@ -2657,6 +2740,94 @@ function TaskBody({
           {block.sourceLabel}
         </Text>
       ) : null}
+
+      {/* ── Reminder time picker ── */}
+      <Modal
+        visible={pickerOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setPickerOpen(false)}
+      >
+        <TouchableOpacity
+          activeOpacity={1}
+          style={styles.modalBackdrop}
+          onPress={() => (busyKey ? null : setPickerOpen(false))}
+        >
+          <View
+            style={[
+              styles.askModal,
+              {
+                backgroundColor: mode === "dark" ? "#0F172A" : "#FFFFFF",
+                borderColor: mode === "dark" ? "#334155" : "#E2E8F0",
+              },
+            ]}
+            onStartShouldSetResponder={() => true}
+          >
+            <View style={styles.reminderHeader}>
+              <AlarmClock size={16} color="#06B6D4" />
+              <Text style={[styles.askTitle, { color: t.text }]}>Remind me</Text>
+            </View>
+            <Text style={[styles.askSub, { color: t.textTertiary }]}>
+              {block.text.trim()
+                ? "You'll get a device notification at:"
+                : "Add a task description so the reminder is useful."}
+            </Text>
+
+            <View style={styles.reminderOptions}>
+              {reminderPresets().map((p) => {
+                const busy = busyKey === p.key;
+                return (
+                  <TouchableOpacity
+                    key={p.key}
+                    onPress={() => applyReminder(p.key, p.date)}
+                    disabled={!!busyKey}
+                    activeOpacity={0.75}
+                    style={[
+                      styles.reminderOption,
+                      {
+                        backgroundColor: mode === "dark" ? "#1E293B" : "#F8FAFC",
+                        borderColor: mode === "dark" ? "#334155" : "#E2E8F0",
+                        opacity: busyKey && !busy ? 0.5 : 1,
+                      },
+                    ]}
+                  >
+                    <View style={{ flex: 1 }}>
+                      <Text style={[styles.reminderOptionLabel, { color: t.text }]}>{p.label}</Text>
+                      <Text style={[styles.reminderOptionTime, { color: t.textTertiary }]}>
+                        {formatReminder(p.date.getTime())}
+                      </Text>
+                    </View>
+                    {busy ? (
+                      <ActivityIndicator size="small" color="#06B6D4" />
+                    ) : (
+                      <Bell size={14} color="#06B6D4" />
+                    )}
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+
+            <View style={styles.askActions}>
+              {hasReminder ? (
+                <TouchableOpacity
+                  onPress={clearReminder}
+                  disabled={!!busyKey}
+                  style={[styles.askBtn, { backgroundColor: "#EF444418" }]}
+                >
+                  <Text style={[styles.askBtnText, { color: "#EF4444" }]}>Remove</Text>
+                </TouchableOpacity>
+              ) : null}
+              <TouchableOpacity
+                onPress={() => setPickerOpen(false)}
+                disabled={!!busyKey}
+                style={[styles.askBtn, { backgroundColor: mode === "dark" ? "#1E293B" : "#F1F5F9" }]}
+              >
+                <Text style={[styles.askBtnText, { color: t.text }]}>Close</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </TouchableOpacity>
+      </Modal>
     </View>
   );
 }
@@ -2805,7 +2976,7 @@ function ScientiaBody({
   block: ScientiaBlock;
   onUpdate: (id: string, patch: Partial<Block>) => void;
   onRun: (id: string, queryOverride?: string) => void;
-  onSaveNote?: (text: string) => void;
+  onSaveNote?: (text: string, label?: string) => void;
   t: any;
   mode: "light" | "dark";
 }) {
@@ -2867,7 +3038,7 @@ function AskScientiaBody({
   block: ScientiaBlock;
   onUpdate: (id: string, patch: Partial<Block>) => void;
   onRun: (id: string, queryOverride?: string) => void;
-  onSaveNote?: (text: string) => void;
+  onSaveNote?: (text: string, label?: string) => void;
   t: any;
   mode: "light" | "dark";
 }) {
@@ -2901,7 +3072,7 @@ function AskScientiaBody({
       </TouchableOpacity>
       {block.error ? <Text style={[styles.errorText, { color: "#EF4444" }]}>⚠ {block.error}</Text> : null}
       {block.result && !block.loading ? (
-        <ScientiaResultPanel result={block.result} catColor={accent} mode={mode} t={t} onSaveNote={onSaveNote} />
+        <ScientiaResultPanel result={block.result} query={block.query} catColor={accent} mode={mode} t={t} onSaveNote={onSaveNote} />
       ) : null}
     </View>
   );
@@ -3066,7 +3237,7 @@ function ConversionBody({
   block: ScientiaBlock;
   onUpdate: (id: string, patch: Partial<Block>) => void;
   onRun: (id: string, queryOverride?: string) => void;
-  onSaveNote?: (text: string) => void;
+  onSaveNote?: (text: string, label?: string) => void;
   t: any;
   mode: "light" | "dark";
 }) {
@@ -3086,11 +3257,21 @@ function ConversionBody({
     else { setToUnit(u); setTarget("from"); }
   };
 
+  // Instant on-device conversion — no network. Falls back to AI only if local
+  // compute can't handle it (unknown units / unparseable value).
   const handleConvert = () => {
     const q = `Convert ${value || "1"} ${fromUnit} to ${toUnit}`;
+    const local = computeConversion(convType.id, value, fromUnit, toUnit);
+    if (local) {
+      onUpdate(block.id, { query: q, result: local, error: undefined, loading: false } as Partial<Block>);
+      return;
+    }
     onUpdate(block.id, { query: q, result: undefined, error: undefined } as Partial<Block>);
     onRun(block.id, q);
   };
+
+  // Live answer shown right on the calculator screen as units/value change.
+  const livePreview = quickConvert(convType.id, value, fromUnit, toUnit);
 
   return (
     <View style={{ gap: 10 }}>
@@ -3122,6 +3303,11 @@ function ConversionBody({
         <Text style={[scStyles.calcDisplayValue, { color: value ? t.text : t.textTertiary }]} numberOfLines={1} adjustsFontSizeToFit>
           {value || "0"}
         </Text>
+        {livePreview != null ? (
+          <Text style={[scStyles.convLive, { color: accent }]} numberOfLines={1} adjustsFontSizeToFit>
+            = {livePreview} {toUnit}
+          </Text>
+        ) : null}
         <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
           <TouchableOpacity
             onPress={() => setTarget("from")}
@@ -3187,7 +3373,7 @@ function ConversionBody({
 
       {block.error ? <Text style={[styles.errorText, { color: "#EF4444" }]}>⚠ {block.error}</Text> : null}
       {block.result && !block.loading ? (
-        <ScientiaResultPanel result={block.result} catColor={accent} mode={mode} t={t} onSaveNote={onSaveNote} />
+        <ScientiaResultPanel result={block.result} query={block.query} catColor={accent} mode={mode} t={t} onSaveNote={onSaveNote} />
       ) : null}
     </View>
   );
@@ -3204,7 +3390,7 @@ function ScienceCalcBody({
   block: ScientiaBlock;
   onUpdate: (id: string, patch: Partial<Block>) => void;
   onRun: (id: string, queryOverride?: string) => void;
-  onSaveNote?: (text: string) => void;
+  onSaveNote?: (text: string, label?: string) => void;
   t: any;
   mode: "light" | "dark";
 }) {
@@ -3241,6 +3427,14 @@ function ScienceCalcBody({
     if (customMode) { onRun(block.id); return; }
     if (!selectedFormula) return;
     const builtQuery = selectedFormula.buildQuery(varValues);
+    // Try the on-device engine first for an instant, exact answer. Symbolic or
+    // open-ended formulas (derivatives, molar mass of a typed compound, …)
+    // return null and fall through to the AI backend.
+    const local = computeFormula(block.category, selectedFormula.id, varValues);
+    if (local) {
+      onUpdate(block.id, { query: builtQuery, result: local, error: undefined, loading: false } as Partial<Block>);
+      return;
+    }
     onUpdate(block.id, { query: builtQuery, result: undefined, error: undefined } as Partial<Block>);
     onRun(block.id, builtQuery);
   };
@@ -3393,7 +3587,7 @@ function ScienceCalcBody({
 
       {block.error ? <Text style={[styles.errorText, { color: "#EF4444" }]}>⚠ {block.error}</Text> : null}
       {block.result && !block.loading ? (
-        <ScientiaResultPanel result={block.result} catColor={accent} mode={mode} t={t} onSaveNote={onSaveNote} />
+        <ScientiaResultPanel result={block.result} query={block.query} catColor={accent} mode={mode} t={t} onSaveNote={onSaveNote} />
       ) : null}
     </View>
   );
@@ -3407,17 +3601,103 @@ function confidenceConfig(level?: string) {
   return { bg: "rgba(251,191,36,0.12)", border: "#fbbf2460", text: "#fbbf24" };
 }
 
+// ─── "More on it?" — concise scientific background for a Scientia result ──────
+interface MoreSection { heading: string; points: string[] }
+
+// Parse the model reply into titled sections. Prefers strict JSON, but tolerates
+// a markdown-ish reply so a stray fence or heading never blanks the panel.
+function parseMoreSections(raw: string): MoreSection[] {
+  const clean = (raw || "")
+    .replace(/```[a-z]*\n?/gi, "")
+    .replace(/```/g, "")
+    .trim();
+  if (!clean) return [];
+
+  // 1) Strict JSON array (or { sections: [...] }).
+  try {
+    const lb = clean.indexOf("[");
+    const ob = clean.indexOf("{");
+    const jsonStr =
+      lb >= 0 && (ob < 0 || lb < ob)
+        ? clean.slice(lb, clean.lastIndexOf("]") + 1)
+        : clean;
+    const parsed = JSON.parse(jsonStr);
+    const arr: any[] = Array.isArray(parsed)
+      ? parsed
+      : Array.isArray(parsed?.sections)
+        ? parsed.sections
+        : [];
+    const out: MoreSection[] = [];
+    for (const s of arr) {
+      const heading = String(s?.heading ?? s?.title ?? "").trim();
+      const rawPts = Array.isArray(s?.points)
+        ? s.points
+        : Array.isArray(s?.bullets)
+          ? s.bullets
+          : typeof s?.points === "string"
+            ? [s.points]
+            : typeof s === "string"
+              ? [s]
+              : [];
+      const points = rawPts.map((p: any) => String(p).trim()).filter(Boolean);
+      if (heading || points.length) out.push({ heading: heading || "Overview", points });
+    }
+    if (out.length) return out;
+  } catch {
+    // fall through to text parsing
+  }
+
+  // 2) Markdown / plain-text fallback: headings + bullet lines.
+  const sections: MoreSection[] = [];
+  let cur: MoreSection | null = null;
+  const ensure = () => {
+    if (!cur) { cur = { heading: "Overview", points: [] }; sections.push(cur); }
+    return cur;
+  };
+  for (const lineRaw of clean.split("\n")) {
+    const line = lineRaw.trim();
+    if (!line) continue;
+    const head =
+      line.match(/^#{1,4}\s+(.*)$/) ||
+      line.match(/^\*\*(.+?)\*\*:?$/) ||
+      line.match(/^([A-Z][^.:]{2,40}):$/);
+    const bullet = line.match(/^[-•*]\s+(.*)$/) || line.match(/^\d+[.)]\s+(.*)$/);
+    if (head) {
+      cur = { heading: head[1].trim(), points: [] };
+      sections.push(cur);
+    } else if (bullet) {
+      ensure().points.push(bullet[1].trim());
+    } else {
+      ensure().points.push(line);
+    }
+  }
+  if (sections.length) return sections;
+
+  // 3) Last resort: a single block of text.
+  return [{ heading: "Overview", points: [clean] }];
+}
+
 function ScientiaResultPanel({
-  result, catColor, mode, t, onSaveNote,
+  result, query, catColor, mode, t, onSaveNote,
 }: {
   result: ScientiaResult;
+  query?: string;
   catColor: string;
   mode: "light" | "dark";
   t: any;
-  onSaveNote?: (text: string) => void;
+  onSaveNote?: (text: string, label?: string) => void;
 }) {
   const conf = confidenceConfig(result.confidence);
   const [noteSaved, setNoteSaved] = React.useState(false);
+
+  // ── "More on it?" — deeper scientific background, fetched on demand ──
+  const [moreOpen, setMoreOpen] = React.useState(false);
+  const [moreLoading, setMoreLoading] = React.useState(false);
+  const [moreError, setMoreError] = React.useState<string | null>(null);
+  const [moreSections, setMoreSections] = React.useState<MoreSection[] | null>(null);
+  const [savedSection, setSavedSection] = React.useState<number | null>(null);
+  const mountedRef = React.useRef(true);
+  React.useEffect(() => () => { mountedRef.current = false; }, []);
 
   const handleSaveNote = () => {
     if (!result.warnings?.filter(Boolean).length) return;
@@ -3425,6 +3705,46 @@ function ScientiaResultPanel({
     onSaveNote?.(text);
     setNoteSaved(true);
     setTimeout(() => setNoteSaved(false), 2500);
+  };
+
+  const loadMore = async () => {
+    // Toggle, or reopen what we already fetched — never refetch the same result.
+    if (moreSections || moreLoading) { setMoreOpen((v) => !v); return; }
+    setMoreOpen(true);
+    setMoreLoading(true);
+    setMoreError(null);
+    Haptics.selectionAsync().catch(() => {});
+    try {
+      const topic = (result.title || query || "").trim() || "this result";
+      const prompt =
+        `You are a precise scientific reference. Give concise background on this ` +
+        `${result.category || "scientific"} topic so a curious learner grasps the essentials.\n\n` +
+        `Topic: "${topic}"` +
+        (query && query.trim() && query.trim() !== topic ? `\nOriginal question: "${query.trim()}"` : "") +
+        (result.result?.formatted ? `\nComputed result: ${result.result.formatted}` : "") +
+        `\n\nReturn ONLY a JSON array (no prose, no markdown fences). Each element is ` +
+        `{ "heading": string, "points": string[] }. Choose 3–6 sections from only what is ` +
+        `genuinely relevant: Key Facts, Evidence & Studies, Hypotheses, Assumptions, ` +
+        `Innovations, Breakthroughs, Real-world Use, Caveats. Each section has 2–4 short ` +
+        `factual points, one sentence each. Keep it basic and clear — no jargon dumps.`;
+      const res = await sendChat(prompt, []);
+      const sections = parseMoreSections(res.content);
+      if (!mountedRef.current) return;
+      if (!sections.length) throw new Error("No background available.");
+      setMoreSections(sections);
+    } catch (e: any) {
+      if (mountedRef.current) setMoreError(e?.message || "Couldn't load more right now.");
+    } finally {
+      if (mountedRef.current) setMoreLoading(false);
+    }
+  };
+
+  const saveSection = (s: MoreSection, idx: number) => {
+    const text = `${s.heading} — ${result.title}\n\n${s.points.map((p) => `• ${p}`).join("\n")}`;
+    onSaveNote?.(text, `🔬 GozlinScientia · ${s.heading}`);
+    setSavedSection(idx);
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+    setTimeout(() => { if (mountedRef.current) setSavedSection((c) => (c === idx ? null : c)); }, 2000);
   };
 
   return (
@@ -3546,73 +3866,200 @@ function ScientiaResultPanel({
           ))}
         </View>
       ) : null}
+
+      {/* ── "More on it?" — deeper scientific context, on demand ── */}
+      <View style={[scStyles.moreDivider, { backgroundColor: `${catColor}22` }]} />
+      <TouchableOpacity
+        onPress={loadMore}
+        activeOpacity={0.75}
+        style={[scStyles.moreToggle, { borderColor: `${catColor}40`, backgroundColor: `${catColor}10` }]}
+      >
+        <Atom size={13} color={catColor} strokeWidth={2.2} />
+        <Text style={[scStyles.moreToggleText, { color: catColor }]}>
+          {moreOpen ? "Less on it" : "More on it?"}
+        </Text>
+        <View style={{ flex: 1 }} />
+        {moreLoading ? (
+          <ActivityIndicator size="small" color={catColor} />
+        ) : moreOpen ? (
+          <ChevronUp size={16} color={catColor} strokeWidth={2.4} />
+        ) : (
+          <ChevronDown size={16} color={catColor} strokeWidth={2.4} />
+        )}
+      </TouchableOpacity>
+
+      {moreOpen ? (
+        <View style={scStyles.moreBody}>
+          {moreLoading ? (
+            <Text style={[scStyles.moreLoadingText, { color: t.textTertiary }]}>
+              Gathering facts, studies & breakthroughs…
+            </Text>
+          ) : moreError ? (
+            <View style={scStyles.moreErrorRow}>
+              <Text style={{ color: "#EF4444", fontSize: 12, flex: 1 }}>⚠ {moreError}</Text>
+              <TouchableOpacity
+                onPress={() => { setMoreSections(null); setMoreError(null); loadMore(); }}
+                style={[scStyles.moreRetry, { borderColor: `${catColor}40` }]}
+              >
+                <Text style={{ color: catColor, fontSize: 11, fontWeight: "700" }}>Retry</Text>
+              </TouchableOpacity>
+            </View>
+          ) : moreSections ? (
+            <>
+              {moreSections.map((s, i) => (
+                <View
+                  key={i}
+                  style={[
+                    scStyles.moreSection,
+                    {
+                      backgroundColor: mode === "dark" ? "#0B1220" : "#FFFFFF",
+                      borderColor: `${catColor}26`,
+                    },
+                  ]}
+                >
+                  <View style={[scStyles.moreSectionAccent, { backgroundColor: catColor }]} />
+                  <View style={scStyles.moreSectionHead}>
+                    <Text style={[scStyles.moreSectionIndex, { color: catColor }]}>
+                      {String(i + 1).padStart(2, "0")}
+                    </Text>
+                    <Text style={[scStyles.moreSectionHeading, { color: t.text }]} numberOfLines={2}>
+                      {s.heading}
+                    </Text>
+                    <TouchableOpacity
+                      onPress={() => saveSection(s, i)}
+                      style={[
+                        scStyles.moreSaveBtn,
+                        {
+                          backgroundColor: savedSection === i ? "#10B981" : `${catColor}14`,
+                          borderColor: savedSection === i ? "#10B981" : `${catColor}40`,
+                        },
+                      ]}
+                      activeOpacity={0.75}
+                    >
+                      <Text style={{ color: savedSection === i ? "#fff" : catColor, fontSize: 10, fontWeight: "700" }}>
+                        {savedSection === i ? "✓ Saved" : "Save"}
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+                  {s.points.map((p, j) => (
+                    <View key={j} style={scStyles.morePointRow}>
+                      <View style={[scStyles.moreBullet, { backgroundColor: catColor }]} />
+                      <Text style={[scStyles.morePointText, { color: t.textSecondary }]}>{p}</Text>
+                    </View>
+                  ))}
+                </View>
+              ))}
+              <Text style={[scStyles.moreFootnote, { color: t.textTertiary }]}>
+                AI-assembled overview · verify before citing
+              </Text>
+            </>
+          ) : null}
+        </View>
+      ) : null}
     </View>
   );
 }
 
 // ─── Add bar ─────────────────────────────────────────────────────────────────
 
-function AddBar({
-  onAdd, onVoiceNote, t, mode,
+// ─── Unified tab bar ─────────────────────────────────────────────────────────
+// One menu that replaces the old top "view switcher" AND the bottom add-bar.
+// View tabs (Notebook · Studio · Graph · Progress) switch the active view and
+// hold a highlighted state. Creator tabs (Task · Chart · gozlin · Scientia)
+// add a block to the notebook and jump there. Notebook absorbs the old "Note":
+// tapping Notebook while it's already active adds a fresh note. Every tab keeps
+// the same pill style, size and accent colour as the original top tabs.
+function WorkspaceTabBar({
+  view, activeCreator, onSelectView, onAddNote, onAddBlock, onVoiceNote, t, mode,
 }: {
-  onAdd: (kind: BlockKind) => void;
+  view: WorkspaceView;
+  activeCreator: BlockKind | null;
+  onSelectView: (v: WorkspaceView) => void;
+  onAddNote: () => void;
+  onAddBlock: (kind: BlockKind) => void;
   onVoiceNote: (text: string) => void;
   t: any;
   mode: "light" | "dark";
 }) {
-  // Compute is replaced by the Document Studio view (top switcher), so it's no
-  // longer offered here. Existing compute blocks still render for backward-compat.
-  const items: Array<{ kind: BlockKind; label: string; color: string; Icon: any }> = [
-    { kind: "note",     label: "Note",     color: "#6366F1", Icon: FileText },
-    { kind: "task",     label: "Task",     color: "#06B6D4", Icon: ListChecks },
-    { kind: "chart",    label: "Chart",    color: "#F59E0B", Icon: BarChart3 },
-    { kind: "ai",       label: "gozlin",   color: "#9333EA", Icon: Wand2 },
-    { kind: "scientia", label: "GozlinScientia", color: "#0EA5E9", Icon: Atom },
+  // One ordered menu. Each tab is either a top-level view (highlighted while
+  // active) or a block creator (adds a block to the notebook). Fixed order:
+  // Notes · Studio · Scientia · Progress · Graph · Task · Chart · gozlin.
+  // (Compute is intentionally absent — handled by the Studio view; existing
+  // compute blocks still render for backward-compat.)
+  type TabItem =
+    | { type: "view"; id: WorkspaceView; label: string; Icon: any }
+    | { type: "creator"; kind: BlockKind; label: string; Icon: any };
+
+  const viewMeta = (id: WorkspaceView) => WORKSPACE_VIEWS.find((v) => v.id === id)!;
+
+  const tabs: TabItem[] = [
+    { type: "view", ...viewMeta("notebook") },
+    { type: "view", ...viewMeta("studio") },
+    { type: "creator", kind: "scientia", label: "Scientia", Icon: Atom },
+    { type: "view", ...viewMeta("progress") },
+    { type: "view", ...viewMeta("graph") },
+    { type: "creator", kind: "task", label: "Task", Icon: ListChecks },
+    { type: "creator", kind: "chart", label: "Chart", Icon: ChartColumn },
+    { type: "creator", kind: "ai", label: "gozlin", Icon: Wand2 },
   ];
+
   return (
     <View
       style={[
-        styles.addBar,
-        {
-          backgroundColor: mode === "dark" ? "#0F172A" : "#FFFFFF",
-          borderTopColor: t.border,
-        },
+        styles.tabBar,
+        { backgroundColor: mode === "dark" ? "#0F172A" : "#FFFFFF", borderBottomColor: t.border },
       ]}
     >
-      <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-        <View style={styles.addBarInner}>
-          {/* Voice → instant note (only shown when on-device voice is available) */}
-          {isVoiceAvailable() ? (
-            <View
-              style={[
-                styles.addBtn,
-                { backgroundColor: `${ACCENT}15`, borderColor: `${ACCENT}55` },
-              ]}
-            >
-              <VoiceInputButton
-                size={13}
-                color={ACCENT}
-                onTranscribed={onVoiceNote}
-                onError={(msg) => Alert.alert("Voice", msg)}
-                style={styles.voiceChipMic}
-              />
-              <Text style={[styles.addBtnText, { color: ACCENT }]}>Voice</Text>
-            </View>
-          ) : null}
-          {items.map((it) => (
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={styles.tabBarInner}
+      >
+        {tabs.map((tab) => {
+          if (tab.type === "view") {
+            const activeV = view === tab.id;
+            const isNotebook = tab.id === "notebook";
+            return (
+              <TouchableOpacity
+                key={`v:${tab.id}`}
+                onPress={() => (isNotebook && activeV ? onAddNote() : onSelectView(tab.id))}
+                style={[styles.tabPill, activeV && { backgroundColor: `${ACCENT}14` }]}
+                activeOpacity={0.7}
+              >
+                <tab.Icon size={15} color={activeV ? ACCENT : t.textTertiary} strokeWidth={2.2} />
+                <Text style={[styles.tabPillText, { color: activeV ? ACCENT : t.textTertiary }]}>
+                  {tab.label}
+                </Text>
+              </TouchableOpacity>
+            );
+          }
+          const activeC = activeCreator === tab.kind;
+          return (
             <TouchableOpacity
-              key={it.kind}
-              onPress={() => onAdd(it.kind)}
-              style={[
-                styles.addBtn,
-                { backgroundColor: `${it.color}15`, borderColor: `${it.color}55` },
-              ]}
+              key={`c:${tab.kind}`}
+              onPress={() => onAddBlock(tab.kind)}
+              style={[styles.tabPill, activeC && { backgroundColor: `${ACCENT}14` }]}
+              activeOpacity={0.7}
             >
-              <it.Icon color={it.color} size={13} strokeWidth={2.4} />
-              <Text style={[styles.addBtnText, { color: it.color }]}>{it.label}</Text>
+              <tab.Icon size={15} color={activeC ? ACCENT : t.textTertiary} strokeWidth={2.2} />
+              <Text style={[styles.tabPillText, { color: activeC ? ACCENT : t.textTertiary }]}>{tab.label}</Text>
             </TouchableOpacity>
-          ))}
-        </View>
+          );
+        })}
+
+        {/* Voice → note (only when on-device voice is available) */}
+        {isVoiceAvailable() ? (
+          <View style={styles.tabPill}>
+            <VoiceInputButton
+              size={14}
+              color={t.textTertiary}
+              onTranscribed={onVoiceNote}
+              onError={(msg) => Alert.alert("Voice", msg)}
+              style={styles.voiceChipMic}
+            />
+            <Text style={[styles.tabPillText, { color: t.textTertiary }]}>Voice</Text>
+          </View>
+        ) : null}
       </ScrollView>
     </View>
   );
@@ -3664,24 +4111,48 @@ const styles = StyleSheet.create({
   },
   restoredStripText: { fontSize: 11.5, fontWeight: "600" },
 
-  // ── View switcher ──
-  viewSwitcher: {
-    flexDirection: "row",
-    gap: 4,
-    paddingHorizontal: 8,
-    paddingVertical: 7,
+  // ── Unified tab bar (views + creators in one horizontal menu) ──
+  tabBar: {
     borderBottomWidth: StyleSheet.hairlineWidth,
+    paddingVertical: 7,
   },
-  viewTab: {
-    flex: 1,
+  tabBarInner: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 3,
+    paddingHorizontal: 8,
+  },
+  tabPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    paddingVertical: 7,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+  },
+  tabPillText: { fontSize: 12, fontWeight: "700" },
+  tabDivider: {
+    width: StyleSheet.hairlineWidth,
+    alignSelf: "stretch",
+    marginVertical: 5,
+    marginHorizontal: 5,
+  },
+  // ── Inline "New note" action (replaces the old bottom add-bar note button) ──
+  newNoteBtn: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    gap: 5,
-    paddingVertical: 7,
-    borderRadius: 10,
+    gap: 6,
+    alignSelf: "center",
+    marginTop: 14,
+    paddingVertical: 11,
+    paddingHorizontal: 22,
+    borderRadius: 12,
+    borderWidth: 1,
   },
-  viewTabText: { fontSize: 12, fontWeight: "700" },
+  newNoteBtnText: { fontSize: 13.5, fontWeight: "700" },
+  newNoteBtnSolid: { backgroundColor: ACCENT, borderWidth: 0 },
+  newNoteBtnSolidText: { color: "#FFFFFF", fontSize: 13.5, fontWeight: "700" },
 
   // ── Smart Notes bar ──
   smartWrap: { gap: 7, marginTop: 2 },
@@ -3720,7 +4191,7 @@ const styles = StyleSheet.create({
   },
   linkSourceText: { fontSize: 11.5, fontWeight: "600" },
 
-  body: { paddingHorizontal: 10, paddingVertical: spacing.sm, gap: 0 },
+  body: { paddingHorizontal: 0, paddingVertical: spacing.sm, gap: 0 },
   emptyWrap: { alignItems: "center", paddingVertical: 40, gap: 6 },
   emptyTitle: { fontSize: 15, fontWeight: "600" },
   emptyHint: { fontSize: 12 },
@@ -3952,18 +4423,20 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     borderWidth: 1,
   },
-  addBar: {
-    borderTopWidth: StyleSheet.hairlineWidth,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-  },
-  addBarInner: { flexDirection: "row", alignItems: "center", gap: 6 },
-  addBtn: {
-    flexDirection: "row", alignItems: "center", gap: 5,
-    paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8,
+  // ── Reminder picker ──
+  reminderHeader: { flexDirection: "row", alignItems: "center", gap: 8 },
+  reminderOptions: { gap: 8, marginTop: 2 },
+  reminderOption: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    paddingHorizontal: 13,
+    paddingVertical: 11,
+    borderRadius: 11,
     borderWidth: 1,
   },
-  addBtnText: { fontSize: 12.5, fontWeight: "700" },
+  reminderOptionLabel: { fontSize: 13.5, fontWeight: "700" },
+  reminderOptionTime: { fontSize: 11.5, fontWeight: "500", marginTop: 1 },
   modalBackdrop: {
     flex: 1,
     backgroundColor: "rgba(0,0,0,0.45)",
@@ -4109,6 +4582,62 @@ const scStyles = StyleSheet.create({
     borderRadius: 8,
     borderWidth: 1,
   },
+  // ── "More on it?" expandable scientific context ──
+  moreDivider: {
+    height: 1,
+    marginTop: 12,
+    marginBottom: 10,
+    borderRadius: 1,
+  },
+  moreToggle: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 7,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 11,
+    borderWidth: 1,
+  },
+  moreToggleText: { fontSize: 12.5, fontWeight: "700", letterSpacing: 0.3 },
+  moreBody: { marginTop: 10, gap: 9 },
+  moreLoadingText: { fontSize: 12, fontStyle: "italic", paddingVertical: 6 },
+  moreErrorRow: { flexDirection: "row", alignItems: "center", gap: 10, paddingVertical: 4 },
+  moreRetry: { paddingHorizontal: 10, paddingVertical: 5, borderRadius: 8, borderWidth: 1 },
+  moreSection: {
+    borderRadius: 11,
+    borderWidth: 1,
+    paddingVertical: 11,
+    paddingLeft: 15,
+    paddingRight: 11,
+    position: "relative",
+    overflow: "hidden",
+  },
+  moreSectionAccent: { position: "absolute", left: 0, top: 0, bottom: 0, width: 3 },
+  moreSectionHead: { flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 7 },
+  moreSectionIndex: {
+    fontSize: 11,
+    fontWeight: "800",
+    letterSpacing: 0.5,
+    fontFamily: Platform.select({ ios: "Menlo", android: "monospace" }),
+  },
+  moreSectionHeading: {
+    flex: 1,
+    fontSize: 12.5,
+    fontWeight: "700",
+    letterSpacing: 0.3,
+    textTransform: "uppercase",
+  },
+  moreSaveBtn: { paddingHorizontal: 9, paddingVertical: 4, borderRadius: 8, borderWidth: 1 },
+  morePointRow: { flexDirection: "row", alignItems: "flex-start", gap: 8, marginTop: 5 },
+  moreBullet: { width: 5, height: 5, borderRadius: 3, marginTop: 6, flexShrink: 0 },
+  morePointText: { flex: 1, fontSize: 12.5, lineHeight: 18 },
+  moreFootnote: {
+    fontSize: 10,
+    fontStyle: "italic",
+    textAlign: "center",
+    marginTop: 2,
+    letterSpacing: 0.2,
+  },
   // ── Scientific calculator keypad ──
   calcRow: { flexDirection: "row", gap: 8 },
   calcSciRow: { flexDirection: "row", gap: 8 },
@@ -4170,6 +4699,13 @@ const scStyles = StyleSheet.create({
     fontFamily: Platform.select({ ios: "Menlo", android: "monospace" }),
   },
   // ── Conversion calculator ──
+  convLive: {
+    fontSize: 20,
+    fontWeight: "800",
+    letterSpacing: -0.3,
+    fontFamily: Platform.select({ ios: "Menlo", android: "monospace" }),
+    marginTop: -2,
+  },
   convPill: {
     flex: 1,
     borderRadius: 12,

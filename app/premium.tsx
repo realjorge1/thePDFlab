@@ -1,5 +1,6 @@
 import { AppHeaderContainer } from "@/components/AppHeaderContainer";
 import { GradientView } from "@/components/GradientView";
+import { PressableScale } from "@/components/ui/PressableScale";
 import { colors } from "@/constants/theme";
 import { useSubscription } from "@/context/SubscriptionContext";
 import { useTheme } from "@/services/ThemeProvider";
@@ -17,23 +18,25 @@ import {
   ActivityIndicator,
   Alert,
   Platform,
-  ScrollView,
   StyleSheet,
   Text,
   TouchableOpacity,
   View,
 } from "react-native";
 import type { PurchasesPackage } from "react-native-purchases";
+import Animated, { FadeIn, FadeInDown } from "react-native-reanimated";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 // Pricing — single source of truth
-const MONTHLY_PRICE = 3.49;
-const ANNUAL_PRICE = 31.88;
-const ANNUAL_IF_MONTHLY = parseFloat((MONTHLY_PRICE * 12).toFixed(2)); // 59.88
-const ANNUAL_SAVINGS = parseFloat(
-  (ANNUAL_IF_MONTHLY - ANNUAL_PRICE).toFixed(2),
-); // 13.89
-const ANNUAL_MONTHLY_EQUIV = parseFloat((ANNUAL_PRICE / 12).toFixed(2)); // 3.83
+const MONTHLY_PRICE = 4;
+const ANNUAL_PRICE = 35;
+const ANNUAL_IF_MONTHLY = MONTHLY_PRICE * 12; // 48
+const ANNUAL_SAVINGS = ANNUAL_IF_MONTHLY - ANNUAL_PRICE; // 13
+const ANNUAL_MONTHLY_EQUIV = ANNUAL_PRICE / 12; // 2.92
+
+// Whole dollars render without trailing zeros; fractions keep two decimals.
+const money = (n: number) =>
+  Number.isInteger(n) ? `$${n}` : `$${n.toFixed(2)}`;
 
 // Premium features — the complete, curated list shown on this screen
 const PREMIUM_FEATURES = [
@@ -86,9 +89,13 @@ export default function PremiumScreen() {
   }, [getOfferings]);
 
   const handleUpgradePress = async () => {
-    const pkg = selectedPlan === "yearly" ? annualPkg.current : monthlyPkg.current;
+    const pkg =
+      selectedPlan === "yearly" ? annualPkg.current : monthlyPkg.current;
     if (!pkg) {
-      Alert.alert("Not available", "This plan is not available right now. Please try again later.");
+      Alert.alert(
+        "Not available",
+        "This plan is not available right now. Please try again later.",
+      );
       return;
     }
     setIsLoading(true);
@@ -117,7 +124,10 @@ export default function PremiumScreen() {
           { text: "Continue", onPress: () => router.back() },
         ]);
       } else {
-        Alert.alert("Nothing to restore", "No active subscription was found for this account.");
+        Alert.alert(
+          "Nothing to restore",
+          "No active subscription was found for this account.",
+        );
       }
     } catch (error: any) {
       Alert.alert("Restore failed", error.message ?? "Please try again.");
@@ -126,13 +136,10 @@ export default function PremiumScreen() {
     }
   };
 
+  const sheetBg = themeColors.backgroundSecondary;
+
   return (
-    <SafeAreaView
-      style={[
-        styles.safe,
-        { backgroundColor: themeColors.backgroundSecondary },
-      ]}
-    >
+    <SafeAreaView style={[styles.safe, { backgroundColor: sheetBg }]}>
       <AppHeaderContainer>
         <View style={styles.headerContainer}>
           <GradientView
@@ -168,321 +175,321 @@ export default function PremiumScreen() {
         </View>
       </AppHeaderContainer>
 
-      <ScrollView
+      <Animated.ScrollView
+        style={styles.scroll}
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
       >
-        {/* ── Hero ── */}
-        <View style={styles.hero}>
-          {/* PRO MEMBERSHIP badge — gold bullet */}
-          <View
-            style={[
-              styles.proBadge,
-              {
-                backgroundColor: themeColors.primary + "18",
-                borderColor: themeColors.primary + "40",
-              },
-            ]}
-          >
-            <View style={styles.goldDot} />
-            <Text style={[styles.proBadgeText, { color: themeColors.primary }]}>
-              PRO MEMBERSHIP
-            </Text>
-          </View>
-
-          <Text style={[styles.heroTitle, { color: themeColors.text }]}>
-            Work smarter,{"\n"}
-            <Text style={{ color: themeColors.primary }}>
-              get better results.
-            </Text>
-          </Text>
-          <Text style={[styles.heroSub, { color: themeColors.textSecondary }]}>
-            Chat, translate, research and the full suite of premium AI — all in
-            one place.
-          </Text>
-        </View>
-
-        {/* ── Plans ── */}
-        <View style={styles.plansContainer}>
-          {/* Annual */}
-          <TouchableOpacity
-            activeOpacity={0.9}
-            onPress={() => setSelectedPlan("yearly")}
-            style={[
-              styles.planCard,
-              {
-                backgroundColor: themeColors.card,
-                borderColor:
-                  selectedPlan === "yearly"
-                    ? themeColors.primary
-                    : themeColors.border,
-                borderWidth: selectedPlan === "yearly" ? 2 : 1,
-              },
-            ]}
+        <View style={[styles.sheet, { backgroundColor: sheetBg }]}>
+          {/* ── Hero copy ── */}
+          <Animated.View
+            entering={FadeInDown.duration(550).delay(80)}
+            style={styles.hero}
           >
             <View
               style={[
-                styles.popularRibbon,
-                { backgroundColor: themeColors.primary },
+                styles.proBadge,
+                {
+                  backgroundColor: themeColors.primary + "18",
+                  borderColor: themeColors.primary + "40",
+                },
               ]}
             >
-              <Text style={styles.popularRibbonText}>BEST VALUE</Text>
+              <View style={styles.goldDot} />
+              <Text
+                style={[styles.proBadgeText, { color: themeColors.primary }]}
+              >
+                PRO MEMBERSHIP
+              </Text>
             </View>
 
-            <View style={styles.planHead}>
-              <View style={styles.planHeadLeft}>
+            <Text style={[styles.heroTitle, { color: themeColors.text }]}>
+              Work smarter,{" "}
+              <Text style={{ color: themeColors.primary }}>
+                get better results.
+              </Text>
+            </Text>
+          </Animated.View>
+
+          {/* ── Plans ── */}
+          <View style={styles.plansContainer}>
+            {/* Annual */}
+            <Animated.View entering={FadeInDown.duration(550).delay(170)}>
+              <PressableScale
+                haptic="selection"
+                scaleTo={0.98}
+                onPress={() => setSelectedPlan("yearly")}
+                style={[
+                  styles.planCard,
+                  {
+                    backgroundColor: themeColors.card,
+                    borderColor:
+                      selectedPlan === "yearly"
+                        ? themeColors.primary
+                        : themeColors.border,
+                    borderWidth: selectedPlan === "yearly" ? 2 : 1,
+                  },
+                ]}
+              >
+                <View style={styles.planHead}>
+                  <View style={styles.planHeadLeft}>
+                    <View
+                      style={[
+                        styles.radio,
+                        {
+                          borderColor:
+                            selectedPlan === "yearly"
+                              ? themeColors.primary
+                              : themeColors.border,
+                          backgroundColor:
+                            selectedPlan === "yearly"
+                              ? themeColors.primary
+                              : "transparent",
+                        },
+                      ]}
+                    >
+                      {selectedPlan === "yearly" && (
+                        <Animated.View
+                          entering={FadeIn.duration(200)}
+                          style={styles.radioInner}
+                        />
+                      )}
+                    </View>
+                    <View>
+                      <Text
+                        style={[styles.planName, { color: themeColors.text }]}
+                      >
+                        Annual Plan
+                      </Text>
+                      <Text
+                        style={[
+                          styles.planSub,
+                          { color: themeColors.textSecondary },
+                        ]}
+                      >
+                        Billed once a year
+                      </Text>
+                    </View>
+                  </View>
+
+                  <View style={styles.planPriceBlock}>
+                    <Text
+                      style={[styles.planPrice, { color: themeColors.text }]}
+                    >
+                      {money(ANNUAL_PRICE)}
+                      <Text
+                        style={[
+                          styles.planPeriod,
+                          { color: themeColors.textSecondary },
+                        ]}
+                      >
+                        {" "}
+                        /yr
+                      </Text>
+                    </Text>
+                    <Text
+                      style={[
+                        styles.planOriginal,
+                        { color: themeColors.textTertiary },
+                      ]}
+                    >
+                      {money(ANNUAL_IF_MONTHLY)} if monthly
+                    </Text>
+                  </View>
+                </View>
+
                 <View
                   style={[
-                    styles.radio,
-                    {
-                      borderColor:
-                        selectedPlan === "yearly"
-                          ? themeColors.primary
-                          : themeColors.border,
-                      backgroundColor:
-                        selectedPlan === "yearly"
-                          ? themeColors.primary
-                          : "transparent",
-                    },
+                    styles.planDivider,
+                    { backgroundColor: themeColors.border },
                   ]}
-                >
-                  {selectedPlan === "yearly" && (
-                    <View style={styles.radioInner} />
-                  )}
-                </View>
-                <View>
-                  <Text style={[styles.planName, { color: themeColors.text }]}>
-                    Annual Plan
-                  </Text>
-                  <Text
-                    style={[
-                      styles.planSub,
-                      { color: themeColors.textSecondary },
-                    ]}
-                  >
-                    Billed once a year
-                  </Text>
-                </View>
-              </View>
+                />
 
-              <View style={styles.planPriceBlock}>
-                <Text style={[styles.planPrice, { color: themeColors.text }]}>
-                  ${ANNUAL_PRICE.toFixed(2)}
+                <View style={styles.planFooter}>
+                  <View
+                    style={[
+                      styles.savePill,
+                      { backgroundColor: "#F5C842" + "22" },
+                    ]}
+                  >
+                    <Text style={styles.savePillText}>
+                      💰 You save {money(ANNUAL_SAVINGS)}/yr
+                    </Text>
+                  </View>
                   <Text
                     style={[
-                      styles.planPeriod,
+                      styles.planMonthly,
                       { color: themeColors.textSecondary },
                     ]}
                   >
-                    {" "}
-                    /yr
+                    ~${ANNUAL_MONTHLY_EQUIV.toFixed(2)} / mo
                   </Text>
-                </Text>
-                <Text
-                  style={[
-                    styles.planOriginal,
-                    { color: themeColors.textTertiary },
-                  ]}
-                >
-                  ${ANNUAL_IF_MONTHLY.toFixed(2)} if monthly
-                </Text>
-              </View>
-            </View>
+                </View>
+              </PressableScale>
+            </Animated.View>
+
+            {/* Monthly */}
+            <Animated.View entering={FadeInDown.duration(550).delay(230)}>
+              <PressableScale
+                haptic="selection"
+                scaleTo={0.98}
+                onPress={() => setSelectedPlan("monthly")}
+                style={[
+                  styles.planCard,
+                  {
+                    backgroundColor: themeColors.card,
+                    borderColor:
+                      selectedPlan === "monthly"
+                        ? themeColors.primary
+                        : themeColors.border,
+                    borderWidth: selectedPlan === "monthly" ? 2 : 1,
+                  },
+                ]}
+              >
+                <View style={styles.planHead}>
+                  <View style={styles.planHeadLeft}>
+                    <View
+                      style={[
+                        styles.radio,
+                        {
+                          borderColor:
+                            selectedPlan === "monthly"
+                              ? themeColors.primary
+                              : themeColors.border,
+                          backgroundColor:
+                            selectedPlan === "monthly"
+                              ? themeColors.primary
+                              : "transparent",
+                        },
+                      ]}
+                    >
+                      {selectedPlan === "monthly" && (
+                        <Animated.View
+                          entering={FadeIn.duration(200)}
+                          style={styles.radioInner}
+                        />
+                      )}
+                    </View>
+                    <View>
+                      <Text
+                        style={[styles.planName, { color: themeColors.text }]}
+                      >
+                        Monthly Plan
+                      </Text>
+                      <Text
+                        style={[
+                          styles.planSub,
+                          { color: themeColors.textSecondary },
+                        ]}
+                      >
+                        Flexible · Cancel anytime
+                      </Text>
+                    </View>
+                  </View>
+
+                  <View style={styles.planPriceBlock}>
+                    <Text
+                      style={[styles.planPrice, { color: themeColors.text }]}
+                    >
+                      {money(MONTHLY_PRICE)}
+                      <Text
+                        style={[
+                          styles.planPeriod,
+                          { color: themeColors.textSecondary },
+                        ]}
+                      >
+                        {" "}
+                        /mo
+                      </Text>
+                    </Text>
+                  </View>
+                </View>
+              </PressableScale>
+            </Animated.View>
+          </View>
+
+          {/* ── Features ── */}
+          <View style={styles.featuresSection}>
+            <Animated.Text
+              entering={FadeInDown.duration(550).delay(300)}
+              style={[styles.sectionLabel, { color: themeColors.text }]}
+            >
+              Premium Features
+            </Animated.Text>
 
             <View
               style={[
-                styles.planDivider,
-                { backgroundColor: themeColors.border },
+                styles.featCard,
+                {
+                  backgroundColor: themeColors.card,
+                  borderColor: themeColors.border,
+                },
               ]}
-            />
-
-            <View style={styles.planFooter}>
-              <View
-                style={[styles.savePill, { backgroundColor: "#F5C842" + "22" }]}
-              >
-                <Text style={styles.savePillText}>
-                  💰 You save ${ANNUAL_SAVINGS.toFixed(2)}/yr
-                </Text>
-              </View>
-              <Text
-                style={[
-                  styles.planMonthly,
-                  { color: themeColors.textSecondary },
-                ]}
-              >
-                ~${ANNUAL_MONTHLY_EQUIV.toFixed(2)} / mo
-              </Text>
-            </View>
-          </TouchableOpacity>
-
-          {/* Monthly */}
-          <TouchableOpacity
-            activeOpacity={0.9}
-            onPress={() => setSelectedPlan("monthly")}
-            style={[
-              styles.planCard,
-              {
-                backgroundColor: themeColors.card,
-                borderColor:
-                  selectedPlan === "monthly"
-                    ? themeColors.primary
-                    : themeColors.border,
-                borderWidth: selectedPlan === "monthly" ? 2 : 1,
-              },
-            ]}
-          >
-            <View style={styles.planHead}>
-              <View style={styles.planHeadLeft}>
-                <View
-                  style={[
-                    styles.radio,
-                    {
-                      borderColor:
-                        selectedPlan === "monthly"
-                          ? themeColors.primary
-                          : themeColors.border,
-                      backgroundColor:
-                        selectedPlan === "monthly"
-                          ? themeColors.primary
-                          : "transparent",
-                    },
-                  ]}
+            >
+              {PREMIUM_FEATURES.map((feat, idx) => (
+                <Animated.View
+                  key={idx}
+                  entering={FadeInDown.duration(450).delay(360 + idx * 70)}
                 >
-                  {selectedPlan === "monthly" && (
-                    <View style={styles.radioInner} />
-                  )}
-                </View>
-                <View>
-                  <Text style={[styles.planName, { color: themeColors.text }]}>
-                    Monthly Plan
-                  </Text>
-                  <Text
-                    style={[
-                      styles.planSub,
-                      { color: themeColors.textSecondary },
-                    ]}
-                  >
-                    Flexible · Cancel anytime
-                  </Text>
-                </View>
-              </View>
-
-              <View style={styles.planPriceBlock}>
-                <Text style={[styles.planPrice, { color: themeColors.text }]}>
-                  ${MONTHLY_PRICE.toFixed(2)}
-                  <Text
-                    style={[
-                      styles.planPeriod,
-                      { color: themeColors.textSecondary },
-                    ]}
-                  >
-                    {" "}
-                    /mo
-                  </Text>
-                </Text>
-                <Text
-                  style={[
-                    styles.planOriginal,
-                    { color: themeColors.textTertiary },
-                  ]}
-                >
-                  ${ANNUAL_IF_MONTHLY.toFixed(2)} / yr
-                </Text>
-              </View>
-            </View>
-          </TouchableOpacity>
-        </View>
-
-        {/* ── Features ── */}
-        <View style={styles.featuresSection}>
-          <Text
-            style={[styles.sectionLabel, { color: themeColors.textTertiary }]}
-          >
-            WHAT YOU GET
-          </Text>
-
-          <View
-            style={[
-              styles.featCard,
-              {
-                backgroundColor: themeColors.card,
-                borderColor: themeColors.border,
-              },
-            ]}
-          >
-            <View style={styles.featCardHeader}>
-              <View
-                style={[
-                  styles.featCardIconWrap,
-                  { backgroundColor: themeColors.primary + "18" },
-                ]}
-              >
-                <Sparkles size={14} color={themeColors.primary} />
-              </View>
-              <Text style={[styles.featCardTitle, { color: themeColors.text }]}>
-                Premium Features
-              </Text>
-            </View>
-
-            {PREMIUM_FEATURES.map((feat, idx) => (
-              <View key={idx}>
-                {idx > 0 && (
-                  <View
-                    style={[
-                      styles.featDivider,
-                      { backgroundColor: themeColors.border },
-                    ]}
-                  />
-                )}
-                <View style={styles.featRow}>
-                  <View
-                    style={[
-                      styles.featIconWrap,
-                      { backgroundColor: themeColors.primary + "12" },
-                    ]}
-                  >
-                    <feat.icon size={15} color={themeColors.primary} />
-                  </View>
-                  <View style={styles.featText}>
-                    <Text
-                      style={[styles.featName, { color: themeColors.text }]}
-                    >
-                      {feat.label}
-                    </Text>
-                    <Text
-                      style={[
-                        styles.featDetail,
-                        { color: themeColors.textSecondary },
-                      ]}
-                    >
-                      {feat.detail}
-                    </Text>
-                  </View>
-                  <View
-                    style={[
-                      styles.checkDot,
-                      { backgroundColor: "#22C55E" + "20" },
-                    ]}
-                  >
+                  {idx > 0 && (
                     <View
                       style={[
-                        styles.checkDotInner,
-                        { backgroundColor: "#22C55E" },
+                        styles.featDivider,
+                        { backgroundColor: themeColors.border },
                       ]}
                     />
+                  )}
+                  <View style={styles.featRow}>
+                    <View
+                      style={[
+                        styles.featIconWrap,
+                        { backgroundColor: themeColors.primary + "12" },
+                      ]}
+                    >
+                      <feat.icon size={15} color={themeColors.primary} />
+                    </View>
+                    <View style={styles.featText}>
+                      <Text
+                        style={[styles.featName, { color: themeColors.text }]}
+                      >
+                        {feat.label}
+                      </Text>
+                      <Text
+                        style={[
+                          styles.featDetail,
+                          { color: themeColors.textSecondary },
+                        ]}
+                      >
+                        {feat.detail}
+                      </Text>
+                    </View>
+                    <View
+                      style={[
+                        styles.checkDot,
+                        { backgroundColor: "#22C55E" + "20" },
+                      ]}
+                    >
+                      <View
+                        style={[
+                          styles.checkDotInner,
+                          { backgroundColor: "#22C55E" },
+                        ]}
+                      />
+                    </View>
                   </View>
-                </View>
-              </View>
-            ))}
+                </Animated.View>
+              ))}
+            </View>
           </View>
-        </View>
 
-        {/* Spacing for sticky CTA */}
-        <View style={{ height: 150 }} />
-      </ScrollView>
+          {/* Spacing for sticky CTA */}
+          <View style={{ height: 160 }} />
+        </View>
+      </Animated.ScrollView>
 
       {/* ── Sticky CTA ── */}
-      <View
+      <Animated.View
+        entering={FadeIn.duration(500).delay(260)}
         style={[
           styles.ctaWrap,
           {
@@ -493,8 +500,8 @@ export default function PremiumScreen() {
           },
         ]}
       >
-        <TouchableOpacity
-          activeOpacity={0.82}
+        <PressableScale
+          scaleTo={0.98}
           onPress={handleUpgradePress}
           disabled={isLoading}
           style={[
@@ -508,7 +515,13 @@ export default function PremiumScreen() {
           {isLoading ? (
             <ActivityIndicator color="#fff" size="small" />
           ) : (
-            <View style={styles.ctaBtnInner}>
+            // Keyed on the plan so the label/price crossfades smoothly when the
+            // user switches between the monthly and yearly plan.
+            <Animated.View
+              key={selectedPlan}
+              entering={FadeIn.duration(220)}
+              style={styles.ctaBtnInner}
+            >
               <Text style={styles.ctaBtnText}>
                 {selectedPlan === "yearly"
                   ? "Start Annual Plan"
@@ -516,12 +529,12 @@ export default function PremiumScreen() {
               </Text>
               <Text style={styles.ctaBtnSub}>
                 {selectedPlan === "yearly"
-                  ? `$${ANNUAL_PRICE.toFixed(2)} / year  ·  Save $${ANNUAL_SAVINGS.toFixed(2)}`
-                  : `$${MONTHLY_PRICE.toFixed(2)} / month`}
+                  ? `${money(ANNUAL_PRICE)} / year  ·  Save ${money(ANNUAL_SAVINGS)}`
+                  : `${money(MONTHLY_PRICE)} / month`}
               </Text>
-            </View>
+            </Animated.View>
           )}
-        </TouchableOpacity>
+        </PressableScale>
 
         <View style={styles.ctaMeta}>
           <Text
@@ -550,7 +563,7 @@ export default function PremiumScreen() {
             No hidden fees
           </Text>
         </View>
-      </View>
+      </Animated.View>
     </SafeAreaView>
   );
 }
@@ -565,6 +578,7 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.12,
     shadowRadius: 16,
     elevation: 8,
+    zIndex: 10,
   },
   header: {
     paddingHorizontal: 20,
@@ -594,10 +608,14 @@ const styles = StyleSheet.create({
   },
   navRestoreText: { fontSize: 13, fontWeight: "700", color: "#3D2C00" },
 
+  scroll: { flex: 1, backgroundColor: "transparent" },
   scrollContent: { paddingBottom: 20 },
 
+  /* Content wrapper */
+  sheet: { paddingTop: 22 },
+
   /* Hero */
-  hero: { paddingHorizontal: 24, paddingTop: 24, marginBottom: 20 },
+  hero: { paddingHorizontal: 24, marginBottom: 18 },
   proBadge: {
     flexDirection: "row",
     alignItems: "center",
@@ -607,7 +625,7 @@ const styles = StyleSheet.create({
     paddingVertical: 5,
     paddingHorizontal: 13,
     alignSelf: "flex-start",
-    marginBottom: 16,
+    marginBottom: 12,
   },
   goldDot: {
     width: 8,
@@ -617,36 +635,20 @@ const styles = StyleSheet.create({
   },
   proBadgeText: { fontSize: 11, fontWeight: "700", letterSpacing: 0.08 },
   heroTitle: {
-    fontSize: 34,
+    fontSize: 22,
     fontWeight: "800",
-    lineHeight: 42,
-    letterSpacing: -0.5,
-    marginBottom: 10,
+    lineHeight: 28,
+    letterSpacing: -0.3,
   },
-  heroSub: { fontSize: 14, lineHeight: 22, fontWeight: "400", maxWidth: "92%" },
 
   /* Plans */
   plansContainer: { paddingHorizontal: 16, gap: 10, marginBottom: 4 },
-  planCard: { borderRadius: 18, padding: 18, overflow: "hidden" },
-  popularRibbon: {
-    position: "absolute",
-    top: 0,
-    right: 0,
-    paddingHorizontal: 14,
-    paddingVertical: 5,
-    borderBottomLeftRadius: 14,
-  },
-  popularRibbonText: {
-    fontSize: 9,
-    fontWeight: "800",
-    color: "#FFFFFF",
-    letterSpacing: 0.8,
-  },
+  planCard: { borderRadius: 18, padding: 15, overflow: "hidden" },
   planHead: {
     flexDirection: "row",
     alignItems: "flex-start",
     justifyContent: "space-between",
-    marginBottom: 12,
+    marginBottom: 10,
   },
   planHeadLeft: {
     flexDirection: "row",
@@ -666,14 +668,14 @@ const styles = StyleSheet.create({
   planName: { fontSize: 15, fontWeight: "700" },
   planSub: { fontSize: 12, marginTop: 2 },
   planPriceBlock: { alignItems: "flex-end" },
-  planPrice: { fontSize: 22, fontWeight: "800", letterSpacing: -0.5 },
+  planPrice: { fontSize: 20, fontWeight: "800", letterSpacing: -0.5 },
   planPeriod: { fontSize: 13, fontWeight: "400" },
   planOriginal: {
     fontSize: 11,
     textDecorationLine: "line-through",
     marginTop: 2,
   },
-  planDivider: { height: StyleSheet.hairlineWidth, marginBottom: 12 },
+  planDivider: { height: StyleSheet.hairlineWidth, marginBottom: 10 },
   planFooter: {
     flexDirection: "row",
     alignItems: "center",
@@ -686,31 +688,14 @@ const styles = StyleSheet.create({
   /* Features section */
   featuresSection: { paddingHorizontal: 16, marginTop: 20 },
   sectionLabel: {
-    fontSize: 11,
+    fontSize: 15,
     fontWeight: "700",
-    letterSpacing: 0.1,
-    textTransform: "uppercase",
-    marginBottom: 14,
+    letterSpacing: -0.2,
+    marginBottom: 12,
+    marginLeft: 2,
   },
 
   featCard: { borderRadius: 20, borderWidth: 1.5, overflow: "hidden" },
-  featCardHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 10,
-    paddingHorizontal: 16,
-    paddingTop: 14,
-    paddingBottom: 12,
-  },
-  featCardIconWrap: {
-    width: 30,
-    height: 30,
-    borderRadius: 9,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  featCardTitle: { fontSize: 14, fontWeight: "700", letterSpacing: -0.1 },
-
   featDivider: { height: StyleSheet.hairlineWidth, marginLeft: 56 },
   featRow: {
     flexDirection: "row",

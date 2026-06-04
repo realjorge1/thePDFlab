@@ -1,5 +1,6 @@
 import { AppHeaderContainer } from "@/components/AppHeaderContainer";
 import { PINGate } from "@/components/PINGate";
+import { usePermissionPrimer } from "@/components/PermissionPrimer";
 import { GradientView } from "@/components/GradientView";
 import { colors } from "@/constants/theme";
 import {
@@ -309,6 +310,7 @@ export default function CreateFileScreen() {
   const { colors: t } = useTheme();
   const insets = useSafeAreaInsets();
   const [isProcessing, setIsProcessing] = useState(false);
+  const { requestPrime, primer } = usePermissionPrimer();
 
   // Bottom bar height: bar content + safe area
   const bottomBarHeight = 72 + Math.max(insets.bottom, Platform.OS === "ios" ? 20 : 8);
@@ -361,6 +363,8 @@ export default function CreateFileScreen() {
 
       // Image → pick first, then navigate to preview screen
       if (option.method === "image" && (option.fileType === "pdf" || option.fileType === "docx")) {
+        const primed = await requestPrime("gallery");
+        if (!primed) return;
         setIsProcessing(true);
         try {
           const pickResult = await pickImagesFromLibrary();
@@ -388,7 +392,7 @@ export default function CreateFileScreen() {
         }
       }
     },
-    [router],
+    [router, requestPrime],
   );
 
   // Quick actions for bottom bar
@@ -523,6 +527,9 @@ export default function CreateFileScreen() {
           </View>
         </View>
       )}
+
+      {/* Pre-permission priming sheet for gallery access */}
+      {primer}
     </SafeAreaView>
     </PINGate>
   );
