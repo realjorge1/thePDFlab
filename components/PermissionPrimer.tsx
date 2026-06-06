@@ -15,8 +15,10 @@
  *   ...
  *   render {primer} somewhere in the screen tree (e.g. before </SafeAreaView>).
  *
- * If the OS permission is already granted, requestPrime resolves immediately
- * (true) without showing the sheet, so repeat use is never nagged.
+ * camera and folder access prime the sheet EVERY time (per product requirement
+ * that the user must always be asked before those are accessed). gallery skips
+ * the sheet once photos access is already granted, so picking images repeatedly
+ * is not nagged.
  *
  * This component never throws and never blocks the underlying feature: it only
  * gates the moment *before* the existing picker runs.
@@ -25,7 +27,6 @@
 import { colors as brandColors } from "@/constants/theme";
 import permissionService from "@/services/permissionService";
 import { useTheme } from "@/services/ThemeProvider";
-import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Camera, FolderOpen, Images } from "lucide-react-native";
 import React, { useCallback, useRef, useState } from "react";
 import {
@@ -40,11 +41,6 @@ import {
 // ─── Kinds & copy ─────────────────────────────────────────────────────────────
 
 export type PrimerKind = "camera" | "gallery" | "folder";
-
-// Folders use Android's Storage Access Framework (per-folder grants), so there's
-// no OS permission to query. Instead we remember — once — that the user has
-// acknowledged the primer, so we prime the first time and never nag after.
-const FOLDER_ACK_KEY = "@permission_folder_primer_ack";
 
 interface PrimerConfig {
   Icon: React.ComponentType<{ size?: number; color?: string }>;
@@ -82,9 +78,9 @@ const PRIMER_CONFIG: Record<PrimerKind, PrimerConfig> = {
 };
 
 // PrimerKind → permission type used to decide whether the sheet can be skipped.
-// "folder" has no OS permission (SAF), so it is handled separately via an ack flag.
+// Only "gallery" is allowed to skip when already granted; "camera" and "folder"
+// always re-prompt (see requestPrime), so they are intentionally absent here.
 const PERMISSION_FOR_KIND = {
-  camera: "camera",
   gallery: "media",
 } as const;
 
@@ -162,42 +158,37 @@ export function usePermissionPrimer() {
   const [visible, setVisible] = useState(false);
   const resolverRef = useRef<((ok: boolean) => void) | null>(null);
 
-  // Tracks the kind being requested so settle() can persist the right ack flag.
+  // Tracks the kind being requested (reserved for future per-kind handling).
   const kindRef = useRef<PrimerKind>("camera");
 
   const settle = useCallback((ok: boolean) => {
     const resolve = resolverRef.current;
     resolverRef.current = null;
     setVisible(false);
-    // Remember that the user has acknowledged folder access so we don't nag again.
-    if (ok && kindRef.current === "folder") {
-      AsyncStorage.setItem(FOLDER_ACK_KEY, "1").catch(() => {});
-    }
     resolve?.(ok);
   }, []);
 
   /**
-   * Show the priming sheet (unless the permission is already granted, or — for
-   * folders — already acknowledged once) and resolve true if the user is happy
-   * to proceed, false to abort. Never rejects.
+   * Show the priming sheet and resolve true if the user is happy to proceed,
+   * false to abort. Never rejects.
+   *
+   * Per user requirement: camera and folder access MUST prompt the user *every*
+   * time — so for those kinds the sheet is shown unconditionally and we never
+   * short-circuit on an already-granted OS permission or a prior folder ack.
+   * (The OS itself still only shows its own system dialog once per grant; this
+   * sheet is the app-controlled confirmation that always reappears.)
+   * "gallery" keeps the friendlier behavior of skipping the sheet once photos
+   * access is already granted.
    */
   const requestPrime = useCallback(
     async (k: PrimerKind): Promise<boolean> => {
       kindRef.current = k;
 
-      if (k === "folder") {
-        // SAF has no queryable permission; prime once, then proceed silently.
-        try {
-          const acked = await AsyncStorage.getItem(FOLDER_ACK_KEY);
-          if (acked) return true;
-        } catch {
-          // fall through and show the sheet
-        }
-      } else {
-        // Already granted → no need to prime, just proceed.
+      // gallery is the only kind allowed to skip the sheet once granted.
+      if (k === "gallery") {
         try {
           const granted = await permissionService.isGranted(
-            PERMISSION_FOR_KIND[k],
+            PERMISSION_FOR_KIND.gallery,
           );
           if (granted) return true;
         } catch {

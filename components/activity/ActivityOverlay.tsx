@@ -3,8 +3,8 @@
 // ---------------------------------------------
 // The single, root-mounted spring "pull-to-cancel" overlay. Subscribes to the
 // global activity store; when a task is active it dims the screen and shows the
-// shimmering 3-phase status text — no card, no icon, just the words floating
-// centered on the dimmed screen. The user can drag down (with springy
+// plain 3-phase status text — no card, no icon, no shimmer, just the words
+// floating centered on the dimmed screen. The user can drag down (with springy
 // rubber-band resistance) past a threshold to cancel — which aborts the
 // underlying request and springs the overlay away.
 //
@@ -12,7 +12,6 @@
 // unaffected. Wrapped in a SafeBoundary at the mount site.
 // ============================================
 
-import { ShimmerText } from "@/components/activity/ShimmerText";
 import { phaseMessage } from "@/services/activity/activityPhases";
 import { useActivityStore } from "@/services/activity/activityStore";
 import { useTheme } from "@/services/ThemeProvider";
@@ -188,26 +187,19 @@ export function ActivityOverlay() {
             status text floats alone — no card, no icon. */}
         <Animated.View style={styles.centerWrap}>
           <Animated.View style={[styles.content, contentStyle]}>
-            <ShimmerText
-              text={task.label ? `${task.label}…` : `${message}…`}
-              color={t.textSecondary}
-              highlightColor={mode === "dark" ? "#FFFFFF" : accent}
-              fontSize={18}
-              fontWeight="700"
-              style={styles.statusText}
-            />
+            <Animated.Text
+              style={[styles.statusText, { color: t.textSecondary }]}
+            >
+              {task.label ? `${task.label}…` : `${message}…`}
+            </Animated.Text>
 
             {/* Sub status uses the rotating phase copy when a label is set */}
             {!!task.label && (
-              <ShimmerText
-                text={`${message}…`}
-                color={t.textTertiary}
-                highlightColor={t.textSecondary}
-                fontSize={13}
-                fontWeight="500"
-                duration={1800}
-                style={styles.subText}
-              />
+              <Animated.Text
+                style={[styles.subText, { color: t.textTertiary }]}
+              >
+                {`${message}…`}
+              </Animated.Text>
             )}
 
             {determinate && (
@@ -267,9 +259,15 @@ const styles = StyleSheet.create({
     maxWidth: 340,
   },
   statusText: {
+    fontSize: 18,
+    fontWeight: "700",
+    letterSpacing: 0.2,
     textAlign: "center",
   },
   subText: {
+    fontSize: 13,
+    fontWeight: "500",
+    letterSpacing: 0.2,
     marginTop: 6,
     textAlign: "center",
   },

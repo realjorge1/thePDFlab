@@ -13,7 +13,7 @@ import {
   Search,
   Sparkles,
 } from "lucide-react-native";
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -27,16 +27,84 @@ import type { PurchasesPackage } from "react-native-purchases";
 import Animated, { FadeIn, FadeInDown } from "react-native-reanimated";
 import { SafeAreaView } from "react-native-safe-area-context";
 
-// Pricing — single source of truth
-const MONTHLY_PRICE = 4;
-const ANNUAL_PRICE = 35;
-const ANNUAL_IF_MONTHLY = MONTHLY_PRICE * 12; // 48
-const ANNUAL_SAVINGS = ANNUAL_IF_MONTHLY - ANNUAL_PRICE; // 13
-const ANNUAL_MONTHLY_EQUIV = ANNUAL_PRICE / 12; // 2.92
+// Fallback pricing (USD "rest of world") — used only when the store's real,
+// region-specific packages haven't loaded or are unavailable. The actual prices
+// shown to users come from RevenueCat (set per-region in Play Console), so a
+// user in Nigeria sees ₦ and a user in the UK sees £ automatically.
+const FALLBACK_MONTHLY_PRICE = 4;
+const FALLBACK_ANNUAL_PRICE = 35;
 
-// Whole dollars render without trailing zeros; fractions keep two decimals.
-const money = (n: number) =>
-  Number.isInteger(n) ? `$${n}` : `$${n.toFixed(2)}`;
+// Whole amounts render without trailing zeros; fractions keep two decimals.
+// `currency` is an ISO code (e.g. "NGN", "GBP", "USD"); when omitted we fall
+// back to a plain "$" for the USD defaults.
+const money = (n: number, currency?: string) => {
+  if (!currency) {
+    return Number.isInteger(n) ? `$${n}` : `$${n.toFixed(2)}`;
+  }
+  try {
+    return new Intl.NumberFormat(undefined, {
+      style: "currency",
+      currency,
+      // Whole values drop the ".00"; otherwise show cents.
+      minimumFractionDigits: Number.isInteger(n) ? 0 : 2,
+      maximumFractionDigits: 2,
+    }).format(n);
+  } catch {
+    // Unknown currency code — degrade gracefully to a bare number.
+    return Number.isInteger(n) ? `${n}` : n.toFixed(2);
+  }
+};
+
+// Pricing resolved from the live store packages (or the USD fallback). Every
+// field is display-ready text already formatted in the user's local currency.
+interface ResolvedPricing {
+  monthlyPrice: string; // e.g. "₦3,500" / "£3.89" / "$4"
+  annualPrice: string; // e.g. "₦29,999" / "£33.99" / "$35"
+  annualIfMonthly: string; // strikethrough "12× the monthly price"
+  annualSavings: string; // "You save …/yr"
+  annualMonthlyEquiv: string | null; // "~…/mo" for the annual plan
+  loaded: boolean; // false until real packages arrive
+}
+
+const FALLBACK_PRICING: ResolvedPricing = {
+  monthlyPrice: money(FALLBACK_MONTHLY_PRICE),
+  annualPrice: money(FALLBACK_ANNUAL_PRICE),
+  annualIfMonthly: money(FALLBACK_MONTHLY_PRICE * 12),
+  annualSavings: money(FALLBACK_MONTHLY_PRICE * 12 - FALLBACK_ANNUAL_PRICE),
+  annualMonthlyEquiv: `~${money(FALLBACK_ANNUAL_PRICE / 12 + 0.005)}`,
+  loaded: false,
+};
+
+// Build display-ready pricing from the live RevenueCat packages. All amounts
+// come back in the user's region/currency (Play Console per-region pricing).
+function resolvePricing(
+  monthlyPkg: PurchasesPackage | null,
+  annualPkg: PurchasesPackage | null,
+): ResolvedPricing {
+  // Need both to show monthly price, the strikethrough, and savings.
+  if (!monthlyPkg || !annualPkg) return FALLBACK_PRICING;
+
+  const m = monthlyPkg.product;
+  const a = annualPkg.product;
+  const currency = a.currencyCode;
+
+  const annualIfMonthlyNum = m.price * 12;
+  const savingsNum = annualIfMonthlyNum - a.price;
+
+  return {
+    // Store-formatted strings already carry the correct symbol/locale.
+    monthlyPrice: m.priceString,
+    annualPrice: a.priceString,
+    annualIfMonthly: money(annualIfMonthlyNum, currency),
+    annualSavings: money(savingsNum, currency),
+    // RevenueCat computes the per-month equivalent of the annual plan and
+    // formats it for us; fall back to a manual divide if it's null.
+    annualMonthlyEquiv: a.pricePerMonthString
+      ? `~${a.pricePerMonthString}`
+      : `~${money(a.price / 12, currency)}`,
+    loaded: true,
+  };
+}
 
 // Premium features — the complete, curated list shown on this screen
 const PREMIUM_FEATURES = [
@@ -53,7 +121,7 @@ const PREMIUM_FEATURES = [
   {
     label: "GozlinScientia & Workspace",
     icon: Atom,
-    detail: "Scientific calc + AI notebook",
+    detail: "Your AI-powered workspace to think, build & get work done",
   },
   {
     label: "Search and Explore",
@@ -75,22 +143,33 @@ export default function PremiumScreen() {
     "yearly",
   );
   const [isLoading, setIsLoading] = useState(false);
-  const monthlyPkg = useRef<PurchasesPackage | null>(null);
-  const annualPkg = useRef<PurchasesPackage | null>(null);
+  // Packages live in state (not a ref) so the price block re-renders once the
+  // store's region-specific offerings load.
+  const [monthlyPkg, setMonthlyPkg] = useState<PurchasesPackage | null>(null);
+  const [annualPkg, setAnnualPkg] = useState<PurchasesPackage | null>(null);
 
   const isDark = mode === "dark";
 
   useEffect(() => {
     getOfferings().then((offerings) => {
       if (!offerings?.current) return;
-      monthlyPkg.current = offerings.current.monthly ?? null;
-      annualPkg.current = offerings.current.annual ?? null;
+      setMonthlyPkg(offerings.current.monthly ?? null);
+      setAnnualPkg(offerings.current.annual ?? null);
     });
   }, [getOfferings]);
 
+  // Display-ready prices in the user's local currency (or USD fallback).
+  const pricing = resolvePricing(monthlyPkg, annualPkg);
+  // Only surface the savings pill / strikethrough when the annual plan is
+  // genuinely cheaper than 12× monthly in this region.
+  const hasAnnualSavings =
+    !pricing.loaded ||
+    (!!monthlyPkg &&
+      !!annualPkg &&
+      annualPkg.product.price < monthlyPkg.product.price * 12);
+
   const handleUpgradePress = async () => {
-    const pkg =
-      selectedPlan === "yearly" ? annualPkg.current : monthlyPkg.current;
+    const pkg = selectedPlan === "yearly" ? annualPkg : monthlyPkg;
     if (!pkg) {
       Alert.alert(
         "Not available",
@@ -276,7 +355,7 @@ export default function PremiumScreen() {
                     <Text
                       style={[styles.planPrice, { color: themeColors.text }]}
                     >
-                      {money(ANNUAL_PRICE)}
+                      {pricing.annualPrice}
                       <Text
                         style={[
                           styles.planPeriod,
@@ -287,14 +366,16 @@ export default function PremiumScreen() {
                         /yr
                       </Text>
                     </Text>
-                    <Text
-                      style={[
-                        styles.planOriginal,
-                        { color: themeColors.textTertiary },
-                      ]}
-                    >
-                      {money(ANNUAL_IF_MONTHLY)} if monthly
-                    </Text>
+                    {hasAnnualSavings && (
+                      <Text
+                        style={[
+                          styles.planOriginal,
+                          { color: themeColors.textTertiary },
+                        ]}
+                      >
+                        {pricing.annualIfMonthly} if monthly
+                      </Text>
+                    )}
                   </View>
                 </View>
 
@@ -306,24 +387,30 @@ export default function PremiumScreen() {
                 />
 
                 <View style={styles.planFooter}>
-                  <View
-                    style={[
-                      styles.savePill,
-                      { backgroundColor: "#F5C842" + "22" },
-                    ]}
-                  >
-                    <Text style={styles.savePillText}>
-                      💰 You save {money(ANNUAL_SAVINGS)}/yr
+                  {hasAnnualSavings ? (
+                    <View
+                      style={[
+                        styles.savePill,
+                        { backgroundColor: "#F5C842" + "22" },
+                      ]}
+                    >
+                      <Text style={styles.savePillText}>
+                        💰 You save {pricing.annualSavings}/yr
+                      </Text>
+                    </View>
+                  ) : (
+                    <View />
+                  )}
+                  {pricing.annualMonthlyEquiv && (
+                    <Text
+                      style={[
+                        styles.planMonthly,
+                        { color: themeColors.textSecondary },
+                      ]}
+                    >
+                      {pricing.annualMonthlyEquiv} / mo
                     </Text>
-                  </View>
-                  <Text
-                    style={[
-                      styles.planMonthly,
-                      { color: themeColors.textSecondary },
-                    ]}
-                  >
-                    ~${ANNUAL_MONTHLY_EQUIV.toFixed(2)} / mo
-                  </Text>
+                  )}
                 </View>
               </PressableScale>
             </Animated.View>
@@ -391,7 +478,7 @@ export default function PremiumScreen() {
                     <Text
                       style={[styles.planPrice, { color: themeColors.text }]}
                     >
-                      {money(MONTHLY_PRICE)}
+                      {pricing.monthlyPrice}
                       <Text
                         style={[
                           styles.planPeriod,
@@ -529,8 +616,10 @@ export default function PremiumScreen() {
               </Text>
               <Text style={styles.ctaBtnSub}>
                 {selectedPlan === "yearly"
-                  ? `${money(ANNUAL_PRICE)} / year  ·  Save ${money(ANNUAL_SAVINGS)}`
-                  : `${money(MONTHLY_PRICE)} / month`}
+                  ? hasAnnualSavings
+                    ? `${pricing.annualPrice} / year  ·  Save ${pricing.annualSavings}`
+                    : `${pricing.annualPrice} / year`
+                  : `${pricing.monthlyPrice} / month`}
               </Text>
             </Animated.View>
           )}
