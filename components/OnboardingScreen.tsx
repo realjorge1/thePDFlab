@@ -3,7 +3,6 @@ import { colors } from '@/constants/theme';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Dimensions,
-  Platform,
   ScrollView,
   StyleSheet,
   Text,
@@ -181,20 +180,18 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   wordsText: {
-    fontFamily: Platform.select({ ios: 'Georgia', android: 'serif', default: 'serif' }),
+    // Match the home-screen "words Inscribed" branding: system sans-serif,
+    // upright (no italic, no serif). Size/weight/spacing kept as designed.
     fontSize: 34,
     fontWeight: '400',
-    fontStyle: 'italic',
     color: 'rgba(255,255,255,0.90)',
     letterSpacing: 1,
     includeFontPadding: false,
     lineHeight: 40,
   },
   inscribedText: {
-    fontFamily: Platform.select({ ios: 'Georgia', android: 'serif', default: 'serif' }),
     fontSize: 52,
     fontWeight: '800',
-    fontStyle: 'italic',
     color: '#FFFFFF',
     letterSpacing: -1,
     includeFontPadding: false,
@@ -207,10 +204,8 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   welcomeText: {
-    fontFamily: Platform.select({ ios: 'Georgia', android: 'serif', default: 'serif' }),
     fontSize: 50,
     fontWeight: '400',
-    fontStyle: 'italic',
     color: 'rgba(255,255,255,0.92)',
     letterSpacing: 1,
     includeFontPadding: false,
