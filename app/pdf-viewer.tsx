@@ -14,7 +14,10 @@
 import MaterialIcons from "@expo/vector-icons/MaterialIcons";
 import { router, useLocalSearchParams } from "expo-router";
 import * as Sharing from "expo-sharing";
-import React, { useCallback, useRef, useState } from "react";
+// SECONDARY (additive): records that a document was opened so the Gozlin
+// workspace can surface related material. Fire-and-forget; never throws.
+import { recordDocumentOpen } from "@/services/contextAwarenessService";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -228,6 +231,17 @@ export default function PdfViewerScreen() {
   // when the resulting URI is opened. The wrap+native-decode round-trip
   // restores the original URI here without any extra work.
   const { uri, name } = useLocalSearchParams<{ uri: string; name: string }>();
+
+  // SECONDARY (additive): note this document open for context-awareness. Uses
+  // the same canonical key as reading-progress so it aligns with the library.
+  useEffect(() => {
+    if (!uri) return;
+    recordDocumentOpen({
+      uri: reEncodeSafDocumentUri(uri),
+      name: name || "Document",
+      type: "pdf",
+    });
+  }, [uri, name]);
 
   const [state, setState] = useState<ViewerState>({
     normalizedUri: null,

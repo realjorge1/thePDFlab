@@ -11,6 +11,7 @@ import { isVoiceAvailable } from "@/services/whisperService";
 import { spacing } from "@/constants/theme";
 import { colors as appColors } from "@/constants/theme";
 import { sendChat, summarize, extractTasks } from "@/services/ai/ai.service";
+import { deepStripMarkdown } from "@/utils/sanitizeAiText";
 import { recordAIInteraction } from "@/services/workspaceInsightsService";
 import { computeFormula, computeConversion, quickConvert } from "@/services/scientiaCompute";
 import { scheduleTaskReminder, cancelScheduledNotification } from "@/services/notificationService";
@@ -20,6 +21,8 @@ import DocumentStudio from "@/components/workspace/DocumentStudio";
 import KnowledgeGraph from "@/components/workspace/KnowledgeGraph";
 import ProgressDashboard from "@/components/workspace/ProgressDashboard";
 import SourceLibraryPicker from "@/components/workspace/SourceLibraryPicker";
+// SECONDARY (additive): the "Discover" surface for the new intelligence services.
+import WorkspaceKnowledgePanel from "@/components/workspace/WorkspaceKnowledgePanel";
 import { SCHEDULE_PENDING_KEY_PREFIX } from "@/app/schedule-task";
 import type { PendingScheduleData } from "@/app/schedule-task";
 import { useTheme } from "@/services/ThemeProvider";
@@ -29,7 +32,8 @@ import AILogoIcon from "@/components/AIButton/AILogoIcon";
 import { API_ENDPOINTS } from "@/config/api";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Clipboard from "expo-clipboard";
-import * as Haptics from "expo-haptics";
+// Haptics are globally disabled — this is a no-op shim (see utils/haptics.ts).
+import * as Haptics from "@/utils/haptics";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import Svg, { Circle, G, Line as SvgLine, Path, Polyline, Rect } from "react-native-svg";
 import {
@@ -48,6 +52,7 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronUp,
+  Compass,
   Copy as CopyIcon,
   FileText,
   FunctionSquare,
@@ -471,13 +476,14 @@ interface ScientiaBlock extends BaseBlock {
 type Block = NoteBlock | ComputeBlock | ChartBlock | AIBlock | TaskBlock | ScientiaBlock;
 
 // Top-level WorkSpace views (segmented switcher under the header).
-type WorkspaceView = "notebook" | "studio" | "graph" | "progress";
+type WorkspaceView = "notebook" | "studio" | "graph" | "progress" | "discover";
 
 const WORKSPACE_VIEWS: Array<{ id: WorkspaceView; label: string; Icon: any }> = [
   { id: "notebook", label: "Notes", Icon: BookOpen },
   { id: "studio", label: "Studio", Icon: PenLine },
   { id: "graph", label: "Graph", Icon: Network },
   { id: "progress", label: "Progress", Icon: BarChart3 },
+  { id: "discover", label: "Discover", Icon: Compass },
 ];
 
 interface PersistedState {
@@ -912,7 +918,8 @@ export default function GozlinWorkspaceScreen() {
         });
         const json = await res.json();
         if (!res.ok || !json.success) throw new Error(json.error || "Calculation failed");
-        update(id, { result: json.data, loading: false });
+        // Strip Markdown from every text field so the result reads as clean prose.
+        update(id, { result: deepStripMarkdown(json.data), loading: false });
       } catch (e: any) {
         update(id, { error: e?.message || "Calculation failed", loading: false });
       }
@@ -1190,6 +1197,8 @@ export default function GozlinWorkspaceScreen() {
           <KnowledgeGraph mode={mode} t={t} onJumpToNote={handleJumpToNote} />
         ) : view === "progress" ? (
           <ProgressDashboard mode={mode} t={t} />
+        ) : view === "discover" ? (
+          <WorkspaceKnowledgePanel mode={mode} t={t} onOpenNote={handleJumpToNote} />
         ) : (
         <>
         <ScrollView
@@ -3998,6 +4007,7 @@ function WorkspaceTabBar({
     { type: "creator", kind: "scientia", label: "Scientia", Icon: Atom },
     { type: "view", ...viewMeta("progress") },
     { type: "view", ...viewMeta("graph") },
+    { type: "view", ...viewMeta("discover") },
     { type: "creator", kind: "task", label: "Task", Icon: ListChecks },
     { type: "creator", kind: "chart", label: "Chart", Icon: ChartColumn },
     { type: "creator", kind: "ai", label: "gozlin", Icon: Wand2 },

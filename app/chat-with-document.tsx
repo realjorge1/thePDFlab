@@ -237,7 +237,7 @@ export default function ChatWithDocumentScreen() {
           )
           .join("\n\n");
         if (citationList) {
-          answerText += `\n\n---\n📌 **Sources:**\n${citationList}`;
+          answerText += `\n\n---\n📌 Sources:\n${citationList}`;
         }
       }
 

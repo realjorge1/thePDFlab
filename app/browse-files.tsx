@@ -4,7 +4,8 @@ import { useLibrary } from "@/services/document-manager/hooks/use-library";
 import { FileItem } from "@/src/components/FileItem";
 import { useFolderAccess } from "@/src/hooks/useFolderAccess";
 import { FileMetadata } from "@/src/types/folder.types";
-import * as Haptics from "expo-haptics";
+// Haptics are globally disabled — this is a no-op shim (see utils/haptics.ts).
+import * as Haptics from "@/utils/haptics";
 import * as IntentLauncher from "expo-intent-launcher";
 import { useRouter } from "expo-router";
 import {

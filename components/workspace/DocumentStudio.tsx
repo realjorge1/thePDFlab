@@ -1,10 +1,11 @@
 // ============================================
-// Document Studio — a three-panel writing workspace inside the WorkSpace.
-//   • Source Library (top): activate books; one-click AI actions.
-//   • Editor (center): rich-text StudioEditor + formatting toolbar.
-//   • AI Assistant (bottom panel): Assistant / Quotes / Outline tabs.
-// Plus word-count target, attributed quote injection, tone control, cross-book
-// synthesis, and export to PDF / DOCX / TXT. State persists to AsyncStorage.
+// Document Studio — a focused, writing-first workspace inside the WorkSpace.
+//   • Document bar (top): title, live word/target stats, export.
+//   • Editor (center, the hero): full-bleed rich-text StudioEditor.
+//   • Formatting toolbar (bottom): rides above the keyboard.
+//   • AI Assistant (bottom sheet): sources + one-click AI + results, all in
+//     one place — no stacked panels, nothing overlapping the editor.
+// State (title, body, target, active sources) persists to AsyncStorage.
 // ============================================
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -23,15 +24,13 @@ import {
 import {
   Bold,
   BookMarked,
-  ChevronDown,
-  ChevronUp,
+  BookPlus,
   Download,
   Heading1,
   Heading2,
   Italic,
   Link2,
   List,
-  Plus,
   Quote,
   RotateCcw,
   Sparkles,
@@ -56,6 +55,8 @@ import StudioEditor, {
   type EditorHeading,
   type StudioEditorHandle,
 } from "@/components/workspace/StudioEditor";
+// SECONDARY (additive): auto-discovers related notes/docs/references + tables.
+import ResearchAssistantPanel from "@/components/workspace/ResearchAssistantPanel";
 
 const STUDIO_KEY = "@wordsinscribed/doc_studio_v1";
 const ACCENT = "#9333EA";
@@ -66,8 +67,6 @@ interface StudioState {
   target: number;
   activeUris: string[];
 }
-
-type AssistantTab = "assistant" | "quotes" | "outline";
 
 const TONES: { id: Tone; label: string }[] = [
   { id: "formal", label: "Formal" },
@@ -97,8 +96,9 @@ export default function DocumentStudio({
   const [activeSources, setActiveSources] = useState<UnifiedFileRecord[]>([]);
   const [pickerOpen, setPickerOpen] = useState(false);
 
-  const [panelOpen, setPanelOpen] = useState(true);
-  const [tab, setTab] = useState<AssistantTab>("assistant");
+  // The AI assistant now lives in a bottom sheet instead of an inline panel,
+  // so it never competes with the editor for vertical space.
+  const [assistantOpen, setAssistantOpen] = useState(false);
 
   const [busy, setBusy] = useState<string | null>(null);
   const [quotes, setQuotes] = useState<SourceQuote[]>([]);
@@ -205,32 +205,48 @@ export default function DocumentStudio({
   }, []);
 
   // ── One-click AI actions ───────────────────────────────────────────────────
+  // Insert-type actions close the sheet so the result is visible in the editor.
   const doSuggest = () =>
     run("Suggesting a section…", async () => {
       const out = await suggestSection(text, activeSources);
       if (out) {
         stashUndo();
         editorRef.current?.insertText(out);
+        setAssistantOpen(false);
       }
     });
 
-  const doQuotes = () =>
+  // Quotes need at least one source; tapping with none opens the shelf so the
+  // dependency reveals itself through use rather than a written explanation.
+  const doQuotes = () => {
+    if (activeSources.length === 0) {
+      setAssistantOpen(false);
+      setPickerOpen(true);
+      return;
+    }
     run("Finding quotes…", async () => {
-      setTab("quotes");
-      setPanelOpen(true);
       const qs = await findQuotes(activeSources, lastParagraph);
       setQuotes(qs);
       if (qs.length === 0) Alert.alert("Quotes", "No relevant passages found in the active sources.");
     });
+  };
 
-  const doSynthesize = () =>
+  // Synthesis bridges two or more books; one or none opens the shelf to add more.
+  const doSynthesize = () => {
+    if (activeSources.length < 2) {
+      setAssistantOpen(false);
+      setPickerOpen(true);
+      return;
+    }
     run("Bridging your books…", async () => {
       const out = await synthesizeBooks(activeSources);
       if (out) {
         stashUndo();
         editorRef.current?.insertText(out);
+        setAssistantOpen(false);
       }
     });
+  };
 
   const doOutline = () =>
     run("Drafting an outline…", async () => {
@@ -251,6 +267,7 @@ export default function DocumentStudio({
     editorRef.current?.insertOutline(outlineDraft);
     setOutlineDraft(null);
     setMissing(null);
+    setAssistantOpen(false);
   };
 
   const applyTone = (tone: Tone) =>
@@ -267,11 +284,18 @@ export default function DocumentStudio({
           .map((p) => `<p>${escapeHtml(p).replace(/\n/g, "<br>")}</p>`)
           .join("");
         editorRef.current?.setContent(htmlOut);
+        setAssistantOpen(false);
       }
     });
 
   const insertQuote = (q: SourceQuote) => {
     editorRef.current?.insertQuote(q.quote, q.source);
+    setAssistantOpen(false);
+  };
+
+  const jumpToHeading = (id: string) => {
+    setAssistantOpen(false);
+    editorRef.current?.scrollToHeading(id);
   };
 
   // ── Export ─────────────────────────────────────────────────────────────────
@@ -350,122 +374,97 @@ export default function DocumentStudio({
 
   if (!hydrated) {
     return (
-      <View style={styles.loadingWrap}>
+      <View style={[styles.loadingWrap, { backgroundColor: surface }]}>
         <ActivityIndicator color={ACCENT} />
       </View>
     );
   }
 
   return (
-    <View style={styles.container}>
-      {/* ── Title + word target ── */}
-      <View style={styles.titleRow}>
+    <View style={[styles.container, { backgroundColor: surface }]}>
+      {/* ── Document bar: title · stats · export ── */}
+      <View style={[styles.docBar, { borderBottomColor: border }]}>
+        <View style={styles.titleCol}>
+          <TouchableOpacity
+            onPress={() => setInputModal({ kind: "title", value: title })}
+            activeOpacity={0.7}
+          >
+            <Text style={[styles.docTitle, { color: t.text }]} numberOfLines={1}>
+              {title}
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            onPress={() => setInputModal({ kind: "target", value: target ? String(target) : "" })}
+            activeOpacity={0.7}
+            hitSlop={{ top: 6, bottom: 8, left: 0, right: 20 }}
+          >
+            <Text style={[styles.docStats, { color: t.textTertiary }]} numberOfLines={1}>
+              {wordCount.toLocaleString()}
+              {target > 0 ? ` / ${target.toLocaleString()}` : ""} words
+              {target > 0 && targetHint ? ` · ${targetHint}` : target === 0 ? " · set a goal" : ""}
+            </Text>
+          </TouchableOpacity>
+        </View>
         <TouchableOpacity
-          style={{ flex: 1 }}
-          onPress={() => setInputModal({ kind: "title", value: title })}
+          onPress={exportDoc}
+          style={[styles.exportBtn, { backgroundColor: `${ACCENT}14` }]}
+          activeOpacity={0.85}
         >
-          <Text style={[styles.docTitle, { color: t.text }]} numberOfLines={1}>
-            {title}
-          </Text>
-        </TouchableOpacity>
-        <TouchableOpacity onPress={exportDoc} style={[styles.exportBtn, { backgroundColor: `${ACCENT}18` }]}>
-          <Download size={14} color={ACCENT} />
+          <Download size={15} color={ACCENT} strokeWidth={2.3} />
           <Text style={styles.exportText}>Export</Text>
         </TouchableOpacity>
       </View>
 
-      <View style={styles.metaRow}>
+      {/* ── Progress hairline (only with a goal set) ── */}
+      {target > 0 ? (
         <View style={[styles.progressTrack, { backgroundColor: field }]}>
           <View style={[styles.progressFill, { width: `${progress * 100}%`, backgroundColor: ACCENT }]} />
         </View>
-        <TouchableOpacity onPress={() => setInputModal({ kind: "target", value: target ? String(target) : "" })}>
-          <Text style={[styles.metaText, { color: t.textSecondary }]}>
-            {wordCount}
-            {target > 0 ? ` / ${target}` : ""} words{target > 0 && targetHint ? ` · ${targetHint}` : " · set target"}
-          </Text>
-        </TouchableOpacity>
-      </View>
-
-      {/* ── Source Library ── */}
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        contentContainerStyle={styles.sourceRow}
-      >
-        <TouchableOpacity
-          onPress={() => setPickerOpen(true)}
-          style={[styles.sourceChip, styles.addChip, { borderColor: border }]}
-        >
-          <Plus size={13} color={t.textSecondary} />
-          <Text style={[styles.sourceChipText, { color: t.textSecondary }]}>Sources</Text>
-        </TouchableOpacity>
-        {activeSources.map((s) => (
-          <TouchableOpacity
-            key={s.uri}
-            onPress={() => toggleSource(s)}
-            style={[styles.sourceChip, { backgroundColor: `${ACCENT}18`, borderColor: `${ACCENT}55` }]}
-          >
-            <BookMarked size={12} color={ACCENT} />
-            <Text style={[styles.sourceChipText, { color: ACCENT }]} numberOfLines={1}>
-              {stripExt(s.name)}
-            </Text>
-            <X size={11} color={ACCENT} />
-          </TouchableOpacity>
-        ))}
-      </ScrollView>
-
-      {/* ── One-click AI actions ── */}
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.actionRow}>
-        <ActionChip label="Suggest section" Icon={Sparkles} onPress={doSuggest} t={t} border={border} />
-        <ActionChip label="Find quotes" Icon={Quote} onPress={doQuotes} t={t} border={border} disabled={activeSources.length === 0} />
-        <ActionChip
-          label="Synthesize"
-          Icon={Wand2}
-          onPress={doSynthesize}
-          t={t}
-          border={border}
-          disabled={activeSources.length < 2}
-        />
-        <ActionChip label="Outline" Icon={List} onPress={doOutline} t={t} border={border} />
-      </ScrollView>
-
-      {/* ── Outline chip banner ── */}
-      {outlineDraft ? (
-        <View style={[styles.outlineBanner, { backgroundColor: `${ACCENT}12`, borderColor: `${ACCENT}40` }]}>
-          <Text style={[styles.outlineTitle, { color: ACCENT }]}>Suggested outline</Text>
-          <Text style={[styles.outlineBody, { color: t.textSecondary }]} numberOfLines={3}>
-            {outlineDraft.join(" · ")}
-          </Text>
-          <View style={styles.outlineActions}>
-            <TouchableOpacity onPress={acceptOutline} style={[styles.outlineBtn, { backgroundColor: ACCENT }]}>
-              <Text style={styles.outlineBtnText}>Insert</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              onPress={() => {
-                setOutlineDraft(null);
-                setMissing(null);
-              }}
-              style={[styles.outlineBtn, { backgroundColor: field }]}
-            >
-              <Text style={[styles.outlineBtnText, { color: t.textSecondary }]}>Dismiss</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
       ) : null}
 
-      {/* ── Formatting toolbar ── */}
-      <View style={[styles.toolbar, { backgroundColor: field, borderColor: border }]}>
-        <ToolBtn Icon={Bold} onPress={() => editorRef.current?.exec("bold")} t={t} />
-        <ToolBtn Icon={Italic} onPress={() => editorRef.current?.exec("italic")} t={t} />
-        <ToolBtn Icon={Heading1} onPress={() => editorRef.current?.exec("formatBlock", "<h1>")} t={t} />
-        <ToolBtn Icon={Heading2} onPress={() => editorRef.current?.exec("formatBlock", "<h2>")} t={t} />
-        <ToolBtn Icon={List} onPress={() => editorRef.current?.exec("insertUnorderedList")} t={t} />
-        <ToolBtn Icon={Quote} onPress={() => editorRef.current?.exec("formatBlock", "<blockquote>")} t={t} />
-        <ToolBtn Icon={Link2} onPress={() => setInputModal({ kind: "link", value: "" })} t={t} />
-        {canUndo ? <ToolBtn Icon={RotateCcw} onPress={applyUndo} t={t} tint={ACCENT} /> : null}
+      {/* ── Source shelf: the always-visible signature of Studio. A writing
+            surface with your own books open beside it — this is what a notebook
+            doesn't have. Empty, it invites a book; filled, the AI writes from it. ── */}
+      <View style={[styles.shelf, { borderBottomColor: border }]}>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
+          contentContainerStyle={styles.shelfScroll}
+        >
+          <TouchableOpacity
+            onPress={() => setPickerOpen(true)}
+            style={[
+              styles.shelfAdd,
+              activeSources.length === 0
+                ? { backgroundColor: `${ACCENT}12`, borderColor: `${ACCENT}55` }
+                : { borderColor: border },
+            ]}
+            activeOpacity={0.8}
+          >
+            <BookPlus size={15} color={ACCENT} strokeWidth={2.2} />
+            <Text style={[styles.shelfAddText, { color: ACCENT }]}>
+              {activeSources.length === 0 ? "Add source books" : "Sources"}
+            </Text>
+          </TouchableOpacity>
+          {activeSources.map((s) => (
+            <TouchableOpacity
+              key={s.uri}
+              onPress={() => toggleSource(s)}
+              style={[styles.sourceChip, { backgroundColor: `${ACCENT}18`, borderColor: `${ACCENT}55` }]}
+              activeOpacity={0.7}
+            >
+              <BookMarked size={12} color={ACCENT} />
+              <Text style={[styles.sourceChipText, { color: ACCENT }]} numberOfLines={1}>
+                {stripExt(s.name)}
+              </Text>
+              <X size={11} color={ACCENT} />
+            </TouchableOpacity>
+          ))}
+        </ScrollView>
       </View>
 
-      {/* ── Editor ── */}
+      {/* ── Editor (the hero) ── */}
       <View style={styles.editorWrap}>
         <StudioEditor ref={editorRef} initialHtml={initialHtml} onChange={onEditorChange} mode={mode} />
         {busy ? (
@@ -476,124 +475,173 @@ export default function DocumentStudio({
         ) : null}
       </View>
 
-      {/* ── AI Assistant panel ── */}
-      <View style={[styles.panel, { backgroundColor: surface, borderColor: border }]}>
-        <TouchableOpacity style={styles.panelHeader} onPress={() => setPanelOpen((v) => !v)} activeOpacity={0.7}>
-          <Sparkles size={14} color={ACCENT} />
-          <Text style={[styles.panelTitle, { color: t.text }]}>AI Assistant</Text>
-          <View style={{ flex: 1 }} />
-          {panelOpen ? <ChevronDown size={18} color={t.textSecondary} /> : <ChevronUp size={18} color={t.textSecondary} />}
-        </TouchableOpacity>
+      {/* ── Bottom bar: formatting (scrolls) + Assistant ── */}
+      <View style={[styles.bottomBar, { backgroundColor: surface, borderTopColor: border }]}>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
+          contentContainerStyle={styles.toolScroll}
+          style={styles.toolScrollView}
+        >
+          <ToolBtn Icon={Bold} onPress={() => editorRef.current?.exec("bold")} t={t} />
+          <ToolBtn Icon={Italic} onPress={() => editorRef.current?.exec("italic")} t={t} />
+          <ToolBtn Icon={Heading1} onPress={() => editorRef.current?.exec("formatBlock", "<h1>")} t={t} />
+          <ToolBtn Icon={Heading2} onPress={() => editorRef.current?.exec("formatBlock", "<h2>")} t={t} />
+          <ToolBtn Icon={List} onPress={() => editorRef.current?.exec("insertUnorderedList")} t={t} />
+          <ToolBtn Icon={Quote} onPress={() => editorRef.current?.exec("formatBlock", "<blockquote>")} t={t} />
+          <ToolBtn Icon={Link2} onPress={() => setInputModal({ kind: "link", value: "" })} t={t} />
+          {canUndo ? <ToolBtn Icon={RotateCcw} onPress={applyUndo} t={t} tint={ACCENT} /> : null}
+        </ScrollView>
 
-        {panelOpen ? (
-          <View style={styles.panelBody}>
-            <View style={[styles.tabBar, { borderColor: border }]}>
-              {(["assistant", "quotes", "outline"] as AssistantTab[]).map((id) => (
-                <TouchableOpacity key={id} style={styles.tabBtn} onPress={() => setTab(id)}>
-                  <Text
-                    style={[
-                      styles.tabText,
-                      { color: tab === id ? ACCENT : t.textTertiary },
-                      tab === id && styles.tabTextActive,
-                    ]}
-                  >
-                    {id === "assistant" ? "Assistant" : id === "quotes" ? "Quotes" : "Outline"}
-                  </Text>
-                </TouchableOpacity>
-              ))}
+        <TouchableOpacity
+          onPress={() => setAssistantOpen(true)}
+          style={[styles.assistantBtn, { backgroundColor: ACCENT }]}
+          activeOpacity={0.85}
+        >
+          <Sparkles size={15} color="#FFF" strokeWidth={2.3} />
+          <Text style={styles.assistantBtnText}>Assistant</Text>
+        </TouchableOpacity>
+      </View>
+
+      {/* ── AI Assistant bottom sheet ── */}
+      <Modal
+        visible={assistantOpen}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setAssistantOpen(false)}
+      >
+        <View style={styles.sheetBackdrop}>
+          <TouchableOpacity style={{ flex: 1 }} activeOpacity={1} onPress={() => setAssistantOpen(false)} />
+          <View style={[styles.sheet, { backgroundColor: surface, borderColor: border }]}>
+            <View style={[styles.grabber, { backgroundColor: border }]} />
+
+            <View style={styles.sheetHeader}>
+              <Sparkles size={16} color={ACCENT} />
+              <Text style={[styles.sheetTitle, { color: t.text }]}>AI Assistant</Text>
+              <View style={{ flex: 1 }} />
+              {busy ? <ActivityIndicator size="small" color={ACCENT} style={{ marginRight: 10 }} /> : null}
+              <TouchableOpacity onPress={() => setAssistantOpen(false)} hitSlop={10}>
+                <X size={20} color={t.textSecondary} />
+              </TouchableOpacity>
             </View>
 
-            <ScrollView style={styles.tabContent} keyboardShouldPersistTaps="handled">
-              {tab === "assistant" ? (
-                <View>
-                  <Text style={[styles.sectionLabel, { color: t.textTertiary }]}>Adjust tone</Text>
-                  <View style={styles.toneRow}>
-                    {TONES.map((tn) => (
-                      <TouchableOpacity
-                        key={tn.id}
-                        onPress={() => applyTone(tn.id)}
-                        style={[styles.toneChip, { borderColor: border, backgroundColor: field }]}
-                      >
-                        <Text style={[styles.toneText, { color: t.textSecondary }]}>{tn.label}</Text>
-                      </TouchableOpacity>
-                    ))}
-                  </View>
-                  <Text style={[styles.assistHint, { color: t.textTertiary }]}>
-                    Tone rewrites the whole draft. Use Undo (↺) in the toolbar to revert.
-                  </Text>
+            <ScrollView
+              style={styles.sheetScroll}
+              keyboardShouldPersistTaps="handled"
+              showsVerticalScrollIndicator={false}
+            >
+              {/* Write with AI */}
+              <Text style={[styles.sectionLabel, { color: t.textTertiary }]}>Write with AI</Text>
+              <View style={styles.grid}>
+                <SheetAction label="Suggest section" Icon={Sparkles} onPress={doSuggest} t={t} field={field} border={border} />
+                <SheetAction label="Find quotes" Icon={Quote} onPress={doQuotes} t={t} field={field} border={border} />
+                <SheetAction label="Synthesize" Icon={Wand2} onPress={doSynthesize} t={t} field={field} border={border} />
+                <SheetAction label="Outline" Icon={List} onPress={doOutline} t={t} field={field} border={border} />
+              </View>
 
-                  {missing && missing.length > 0 ? (
-                    <View style={[styles.missingBox, { backgroundColor: `${ACCENT}10`, borderColor: `${ACCENT}33` }]}>
-                      <Text style={[styles.missingTitle, { color: ACCENT }]}>Missing sections</Text>
-                      <Text style={[styles.missingBody, { color: t.textSecondary }]}>{missing.join(", ")}</Text>
-                    </View>
-                  ) : null}
-
-                  <TouchableOpacity onPress={doSuggest} style={[styles.bigBtn, { backgroundColor: ACCENT }]}>
-                    <Sparkles size={14} color="#FFF" />
-                    <Text style={styles.bigBtnText}>Suggest the next section</Text>
+              {/* Adjust tone */}
+              <Text style={[styles.sectionLabel, { color: t.textTertiary }]}>Adjust tone</Text>
+              <View style={styles.toneRow}>
+                {TONES.map((tn) => (
+                  <TouchableOpacity
+                    key={tn.id}
+                    onPress={() => applyTone(tn.id)}
+                    style={[styles.toneChip, { borderColor: border, backgroundColor: field }]}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={[styles.toneText, { color: t.textSecondary }]}>{tn.label}</Text>
                   </TouchableOpacity>
+                ))}
+              </View>
+
+              {/* Research assistant — auto-discovered material + references */}
+              <ResearchAssistantPanel
+                draftText={text}
+                t={t}
+                field={field}
+                border={border}
+                onInsertText={(s) => {
+                  stashUndo();
+                  editorRef.current?.insertText(s);
+                  setAssistantOpen(false);
+                }}
+                onInsertOutline={(hs) => {
+                  stashUndo();
+                  editorRef.current?.insertOutline(hs);
+                  setAssistantOpen(false);
+                }}
+              />
+
+              {/* Suggested outline (AI result) */}
+              {outlineDraft ? (
+                <View style={[styles.resultBox, { backgroundColor: `${ACCENT}12`, borderColor: `${ACCENT}40` }]}>
+                  <Text style={[styles.resultTitle, { color: ACCENT }]}>Suggested outline</Text>
+                  <Text style={[styles.resultBody, { color: t.textSecondary }]}>{outlineDraft.join("  ·  ")}</Text>
+                  {missing && missing.length > 0 ? (
+                    <Text style={[styles.resultMeta, { color: t.textTertiary }]}>
+                      Missing from your draft: {missing.join(", ")}
+                    </Text>
+                  ) : null}
+                  <View style={styles.resultActions}>
+                    <TouchableOpacity onPress={acceptOutline} style={[styles.resultBtn, { backgroundColor: ACCENT }]}>
+                      <Text style={styles.resultBtnText}>Insert</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      onPress={() => {
+                        setOutlineDraft(null);
+                        setMissing(null);
+                      }}
+                      style={[styles.resultBtn, { backgroundColor: field }]}
+                    >
+                      <Text style={[styles.resultBtnText, { color: t.textSecondary }]}>Dismiss</Text>
+                    </TouchableOpacity>
+                  </View>
                 </View>
               ) : null}
 
-              {tab === "quotes" ? (
-                <View>
-                  {activeSources.length === 0 ? (
-                    <Text style={[styles.emptyTab, { color: t.textTertiary }]}>
-                      Activate a book above, then tap “Find quotes” to surface relevant passages.
-                    </Text>
-                  ) : (
-                    <>
-                      <TouchableOpacity onPress={doQuotes} style={[styles.bigBtn, { backgroundColor: ACCENT, marginBottom: 10 }]}>
-                        <Quote size={14} color="#FFF" />
-                        <Text style={styles.bigBtnText}>Find quotes for this paragraph</Text>
-                      </TouchableOpacity>
-                      {quotes.length === 0 ? (
-                        <Text style={[styles.emptyTab, { color: t.textTertiary }]}>
-                          No quotes yet.
-                        </Text>
-                      ) : (
-                        quotes.map((q, i) => (
-                          <TouchableOpacity
-                            key={i}
-                            onPress={() => insertQuote(q)}
-                            style={[styles.quoteCard, { backgroundColor: field, borderColor: border }]}
-                          >
-                            <Text style={[styles.quoteText, { color: t.text }]}>“{q.quote}”</Text>
-                            <Text style={[styles.quoteSource, { color: ACCENT }]}>— {q.source} · tap to insert</Text>
-                          </TouchableOpacity>
-                        ))
-                      )}
-                    </>
-                  )}
-                </View>
+              {/* Quotes (AI result) */}
+              {quotes.length > 0 ? (
+                <>
+                  <Text style={[styles.sectionLabel, { color: t.textTertiary }]}>Quotes · tap to insert</Text>
+                  {quotes.map((q, i) => (
+                    <TouchableOpacity
+                      key={i}
+                      onPress={() => insertQuote(q)}
+                      style={[styles.quoteCard, { backgroundColor: field, borderColor: border }]}
+                      activeOpacity={0.7}
+                    >
+                      <Text style={[styles.quoteText, { color: t.text }]}>“{q.quote}”</Text>
+                      <Text style={[styles.quoteSource, { color: ACCENT }]}>— {q.source}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </>
               ) : null}
 
-              {tab === "outline" ? (
-                <View>
-                  {headings.length === 0 ? (
-                    <Text style={[styles.emptyTab, { color: t.textTertiary }]}>
-                      Add headings (H1/H2) and they’ll appear here. Tap one to jump to it.
-                    </Text>
-                  ) : (
-                    headings.map((h) => (
-                      <TouchableOpacity
-                        key={h.id}
-                        onPress={() => editorRef.current?.scrollToHeading(h.id)}
-                        style={[styles.outlineItem, { paddingLeft: 4 + (h.level - 1) * 16 }]}
-                      >
-                        <Text style={[styles.outlineItemText, { color: t.textSecondary }]} numberOfLines={1}>
-                          {h.text || "(untitled heading)"}
-                        </Text>
-                      </TouchableOpacity>
-                    ))
-                  )}
-                </View>
+              {/* Document outline (jump to heading) */}
+              {headings.length > 0 ? (
+                <>
+                  <Text style={[styles.sectionLabel, { color: t.textTertiary }]}>Document outline</Text>
+                  {headings.map((h) => (
+                    <TouchableOpacity
+                      key={h.id}
+                      onPress={() => jumpToHeading(h.id)}
+                      style={[styles.outlineItem, { paddingLeft: 2 + (h.level - 1) * 16 }]}
+                      activeOpacity={0.7}
+                    >
+                      <Text style={[styles.outlineItemText, { color: t.textSecondary }]} numberOfLines={1}>
+                        {h.text || "(untitled heading)"}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </>
               ) : null}
+
+              <View style={{ height: 28 }} />
             </ScrollView>
           </View>
-        ) : null}
-      </View>
+        </View>
+      </Modal>
 
       {/* ── Modals ── */}
       <SourceLibraryPicker
@@ -636,11 +684,12 @@ export default function DocumentStudio({
 }
 
 // ─── Small presentational helpers ─────────────────────────────────────────────
-function ActionChip({
+function SheetAction({
   label,
   Icon,
   onPress,
   t,
+  field,
   border,
   disabled,
 }: {
@@ -648,6 +697,7 @@ function ActionChip({
   Icon: any;
   onPress: () => void;
   t: any;
+  field: string;
   border: string;
   disabled?: boolean;
 }) {
@@ -655,10 +705,15 @@ function ActionChip({
     <TouchableOpacity
       onPress={onPress}
       disabled={disabled}
-      style={[styles.actionChip, { borderColor: border, opacity: disabled ? 0.4 : 1 }]}
+      activeOpacity={0.8}
+      style={[styles.gridBtn, { backgroundColor: field, borderColor: border, opacity: disabled ? 0.4 : 1 }]}
     >
-      <Icon size={13} color={ACCENT} />
-      <Text style={[styles.actionChipText, { color: t.text }]}>{label}</Text>
+      <View style={[styles.gridIcon, { backgroundColor: `${ACCENT}18` }]}>
+        <Icon size={15} color={ACCENT} strokeWidth={2.2} />
+      </View>
+      <Text style={[styles.gridBtnText, { color: t.text }]} numberOfLines={1}>
+        {label}
+      </Text>
     </TouchableOpacity>
   );
 }
@@ -666,7 +721,7 @@ function ActionChip({
 function ToolBtn({ Icon, onPress, t, tint }: { Icon: any; onPress: () => void; t: any; tint?: string }) {
   return (
     <TouchableOpacity onPress={onPress} style={styles.toolBtn} hitSlop={{ top: 6, bottom: 6, left: 4, right: 4 }}>
-      <Icon size={17} color={tint || t.textSecondary} strokeWidth={2.2} />
+      <Icon size={18} color={tint || t.textSecondary} strokeWidth={2.2} />
     </TouchableOpacity>
   );
 }
@@ -693,108 +748,159 @@ ${body}
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, paddingHorizontal: 0, paddingTop: 8 },
+  container: { flex: 1 },
   loadingWrap: { flex: 1, alignItems: "center", justifyContent: "center" },
 
-  titleRow: { flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 6 },
-  docTitle: { fontSize: 17, fontWeight: "800", letterSpacing: -0.3 },
-  exportBtn: { flexDirection: "row", alignItems: "center", gap: 5, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 10 },
+  // ── Document bar ──
+  docBar: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    paddingHorizontal: 16,
+    paddingTop: 8,
+    paddingBottom: 10,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  titleCol: { flex: 1 },
+  docTitle: { fontSize: 18, fontWeight: "800", letterSpacing: -0.3 },
+  docStats: { fontSize: 11.5, fontWeight: "600", marginTop: 3 },
+  exportBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 10,
+  },
   exportText: { color: ACCENT, fontWeight: "700", fontSize: 12.5 },
 
-  metaRow: { flexDirection: "row", alignItems: "center", gap: 10, marginBottom: 8 },
-  progressTrack: { flex: 1, height: 6, borderRadius: 3, overflow: "hidden" },
-  progressFill: { height: 6, borderRadius: 3 },
-  metaText: { fontSize: 11.5, fontWeight: "600" },
+  // ── Progress hairline ──
+  progressTrack: { height: 3, width: "100%", overflow: "hidden" },
+  progressFill: { height: 3 },
 
-  sourceRow: { gap: 7, paddingVertical: 2, alignItems: "center" },
-  sourceChip: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 5,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 14,
-    borderWidth: 1,
-    maxWidth: 180,
-  },
-  addChip: {},
-  sourceChipText: { fontSize: 12, fontWeight: "600" },
-
-  actionRow: { gap: 7, paddingVertical: 8, alignItems: "center" },
-  actionChip: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 5,
-    paddingHorizontal: 11,
-    paddingVertical: 7,
-    borderRadius: 12,
-    borderWidth: 1,
-  },
-  actionChipText: { fontSize: 12.5, fontWeight: "600" },
-
-  outlineBanner: { borderWidth: 1, borderRadius: 12, padding: 10, marginBottom: 8, gap: 4 },
-  outlineTitle: { fontSize: 12, fontWeight: "800", letterSpacing: 0.3 },
-  outlineBody: { fontSize: 12.5, lineHeight: 17 },
-  outlineActions: { flexDirection: "row", gap: 8, marginTop: 4 },
-  outlineBtn: { paddingHorizontal: 14, paddingVertical: 6, borderRadius: 8 },
-  outlineBtnText: { color: "#FFF", fontWeight: "700", fontSize: 12.5 },
-
-  toolbar: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 2,
-    borderWidth: 1,
-    borderRadius: 10,
-    paddingHorizontal: 6,
-    paddingVertical: 4,
-    marginBottom: 6,
-  },
-  toolBtn: { paddingHorizontal: 9, paddingVertical: 5 },
-
-  editorWrap: { flex: 1, borderRadius: 12, overflow: "hidden", position: "relative" },
+  // ── Editor ──
+  editorWrap: { flex: 1, position: "relative" },
   busyBar: {
     position: "absolute",
-    top: 8,
+    top: 12,
     alignSelf: "center",
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 7,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
     borderRadius: 20,
     borderWidth: 1,
   },
   busyText: { fontSize: 12, fontWeight: "600" },
 
-  panel: { borderTopWidth: 1, borderRadius: 12, borderWidth: 1, marginTop: 6, overflow: "hidden" },
-  panelHeader: { flexDirection: "row", alignItems: "center", gap: 7, paddingHorizontal: 12, paddingVertical: 10 },
-  panelTitle: { fontSize: 13.5, fontWeight: "700" },
-  panelBody: { maxHeight: 230 },
-  tabBar: { flexDirection: "row", borderTopWidth: StyleSheet.hairlineWidth },
-  tabBtn: { flex: 1, alignItems: "center", paddingVertical: 9 },
-  tabText: { fontSize: 12.5, fontWeight: "600" },
-  tabTextActive: { fontWeight: "800" },
-  tabContent: { paddingHorizontal: 12, paddingVertical: 10 },
+  // ── Bottom bar (formatting + assistant) ──
+  bottomBar: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderTopWidth: StyleSheet.hairlineWidth,
+  },
+  toolScrollView: { flex: 1 },
+  toolScroll: { flexDirection: "row", alignItems: "center", gap: 2, paddingRight: 6 },
+  toolBtn: { paddingHorizontal: 9, paddingVertical: 6 },
+  assistantBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: 14,
+    paddingVertical: 9,
+    borderRadius: 11,
+  },
+  assistantBtnText: { color: "#FFF", fontWeight: "700", fontSize: 13 },
 
-  sectionLabel: { fontSize: 10.5, fontWeight: "800", letterSpacing: 0.5, textTransform: "uppercase", marginBottom: 6 },
-  toneRow: { flexDirection: "row", flexWrap: "wrap", gap: 7 },
-  toneChip: { paddingHorizontal: 12, paddingVertical: 7, borderRadius: 10, borderWidth: 1 },
+  // ── Source shelf ──
+  shelf: { paddingVertical: 8, borderBottomWidth: StyleSheet.hairlineWidth },
+  shelfScroll: { flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 16 },
+  shelfAdd: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 12,
+    borderWidth: 1,
+  },
+  shelfAddText: { fontSize: 12.5, fontWeight: "700" },
+
+  // ── Assistant bottom sheet ──
+  sheetBackdrop: { flex: 1, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "flex-end" },
+  sheet: {
+    maxHeight: "82%",
+    borderTopLeftRadius: 22,
+    borderTopRightRadius: 22,
+    borderWidth: 1,
+    paddingHorizontal: 16,
+    paddingTop: 8,
+    paddingBottom: 12,
+  },
+  grabber: { width: 40, height: 4, borderRadius: 2, alignSelf: "center", marginBottom: 10 },
+  sheetHeader: { flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 4 },
+  sheetTitle: { fontSize: 16, fontWeight: "800" },
+  sheetScroll: {},
+
+  sectionLabel: {
+    fontSize: 10.5,
+    fontWeight: "800",
+    letterSpacing: 0.5,
+    textTransform: "uppercase",
+    marginTop: 16,
+    marginBottom: 8,
+  },
+  sourceChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderRadius: 12,
+    borderWidth: 1,
+    maxWidth: 200,
+  },
+  sourceChipText: { fontSize: 12, fontWeight: "600", flexShrink: 1 },
+
+  grid: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
+  gridBtn: {
+    flexBasis: "47%",
+    flexGrow: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 9,
+    paddingHorizontal: 11,
+    paddingVertical: 11,
+    borderRadius: 12,
+    borderWidth: 1,
+  },
+  gridIcon: { width: 28, height: 28, borderRadius: 8, alignItems: "center", justifyContent: "center" },
+  gridBtnText: { fontSize: 12.5, fontWeight: "700", flexShrink: 1 },
+
+  toneRow: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
+  toneChip: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 10, borderWidth: 1 },
   toneText: { fontSize: 12.5, fontWeight: "600" },
-  assistHint: { fontSize: 11, marginTop: 8, lineHeight: 15 },
-  missingBox: { marginTop: 10, padding: 10, borderRadius: 10, borderWidth: 1 },
-  missingTitle: { fontSize: 12, fontWeight: "800", marginBottom: 2 },
-  missingBody: { fontSize: 12.5, lineHeight: 17 },
-  bigBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 7, paddingVertical: 11, borderRadius: 11, marginTop: 12 },
-  bigBtnText: { color: "#FFF", fontWeight: "700", fontSize: 13 },
 
-  emptyTab: { fontSize: 12.5, lineHeight: 18, paddingVertical: 6 },
-  quoteCard: { borderRadius: 10, borderWidth: 1, padding: 10, marginBottom: 8 },
+  resultBox: { marginTop: 14, padding: 12, borderRadius: 12, borderWidth: 1 },
+  resultTitle: { fontSize: 12, fontWeight: "800", letterSpacing: 0.3, marginBottom: 4 },
+  resultBody: { fontSize: 12.5, lineHeight: 18 },
+  resultMeta: { fontSize: 11.5, lineHeight: 16, marginTop: 6 },
+  resultActions: { flexDirection: "row", gap: 8, marginTop: 10 },
+  resultBtn: { paddingHorizontal: 16, paddingVertical: 7, borderRadius: 9 },
+  resultBtnText: { color: "#FFF", fontWeight: "700", fontSize: 12.5 },
+
+  quoteCard: { borderRadius: 12, borderWidth: 1, padding: 11, marginBottom: 8 },
   quoteText: { fontSize: 13, lineHeight: 19, fontStyle: "italic" },
   quoteSource: { fontSize: 11.5, fontWeight: "700", marginTop: 6 },
 
-  outlineItem: { paddingVertical: 7 },
+  outlineItem: { paddingVertical: 8 },
   outlineItemText: { fontSize: 13, fontWeight: "500" },
 
+  // ── Small input modal (title / target / link) ──
   inputBackdrop: { flex: 1, backgroundColor: "rgba(0,0,0,0.5)", alignItems: "center", justifyContent: "center", padding: 28 },
   inputCard: { width: "100%", borderRadius: 16, borderWidth: 1, padding: 16 },
   inputTitle: { fontSize: 15, fontWeight: "700", marginBottom: 10 },

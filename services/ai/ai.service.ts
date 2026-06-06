@@ -19,6 +19,7 @@ import { generateId } from "./ai.types";
 import { assertAIPremium } from "./premiumGuard";
 import { BackendAIProvider } from "./providers/backend.provider";
 import { MockAIProvider } from "./providers/mock.provider";
+import { deepStripMarkdown, stripMarkdown } from "@/utils/sanitizeAiText";
 
 // ─── Extended document ref (internal) ────────────────────────────────────────
 interface AIDocumentRefInternal extends AIDocumentRef {
@@ -35,12 +36,48 @@ const SESSIONS_KEY = "@wordsinscribed/ai_sessions";
 const MAX_SESSIONS = 50;
 const TEXT_INPUT_LIMIT = 15_000; // characters
 
+// ─── AI output sanitization ───────────────────────────────────────────────────
+// Every AI result is routed through here so raw Markdown tokens (## / ** / *)
+// never reach the UI — answers should read as clean prose, not a mock draft.
+
+function sanitizeAIResponse(res: AIResponse): AIResponse {
+  return {
+    ...res,
+    content: typeof res.content === "string" ? stripMarkdown(res.content) : res.content,
+    structuredData: res.structuredData
+      ? deepStripMarkdown(res.structuredData)
+      : res.structuredData,
+  };
+}
+
+/**
+ * Wrap a provider so every method that resolves to an AIResponse has its text
+ * (content + structured fields) stripped of Markdown formatting. New provider
+ * methods are covered automatically.
+ */
+function makeSanitizingProvider(provider: AIProvider): AIProvider {
+  return new Proxy(provider, {
+    get(target, prop, receiver) {
+      const orig = Reflect.get(target, prop, receiver);
+      if (typeof orig !== "function") return orig;
+      return async (...args: unknown[]) => {
+        const result = await orig.apply(target, args);
+        return result &&
+          typeof result === "object" &&
+          "content" in (result as object)
+          ? sanitizeAIResponse(result as AIResponse)
+          : result;
+      };
+    },
+  });
+}
+
 // ─── Singleton provider (swap here when backend is ready) ─────────────────────
-let _provider: AIProvider = new MockAIProvider();
+let _provider: AIProvider = makeSanitizingProvider(new MockAIProvider());
 let _providerInitialized = false;
 
 export function setAIProvider(provider: AIProvider) {
-  _provider = provider;
+  _provider = makeSanitizingProvider(provider);
 }
 
 export function getAIProvider(): AIProvider {
@@ -69,7 +106,7 @@ export async function initAIProvider(): Promise<void> {
     if (res.ok) {
       const data = await res.json();
       if (data.success && data.currentProvider) {
-        _provider = new BackendAIProvider();
+        _provider = makeSanitizingProvider(new BackendAIProvider());
         // Only mark as initialized on success so failed attempts allow retries.
         _providerInitialized = true;
         return;
@@ -346,8 +383,8 @@ export async function summarizeHighlights(
       const json = await res.json();
       const data = json?.data ?? {};
       return {
-        summary: Array.isArray(data.summary) ? data.summary : [],
-        keyThemes: Array.isArray(data.keyThemes) ? data.keyThemes : [],
+        summary: Array.isArray(data.summary) ? deepStripMarkdown(data.summary) : [],
+        keyThemes: Array.isArray(data.keyThemes) ? deepStripMarkdown(data.keyThemes) : [],
       };
     }
   } catch (e) {
@@ -389,7 +426,7 @@ export async function convertHighlightToTask(
     });
     if (res.ok) {
       const json = await res.json();
-      if (json?.data && typeof json.data === "object") return json.data;
+      if (json?.data && typeof json.data === "object") return deepStripMarkdown(json.data);
     }
   } catch (e) {
     console.warn("[AI] convertHighlightToTask failed, using local fallback", e);
@@ -686,7 +723,7 @@ export async function askPdfQuestion(
     };
 
     return {
-      answer: data.answer,
+      answer: stripMarkdown(data.answer),
       citations: data.citations ?? [],
       found: data.found ?? true,
     };

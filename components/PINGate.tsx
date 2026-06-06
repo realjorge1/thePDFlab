@@ -19,7 +19,8 @@ import {
   useSettings,
   type ScreenLockSettings,
 } from "@/services/settingsService";
-import * as Haptics from "expo-haptics";
+// Haptics are globally disabled — this is a no-op shim (see utils/haptics.ts).
+import * as Haptics from "@/utils/haptics";
 import { useRouter } from "expo-router";
 import {
   ArrowLeft,

@@ -16,6 +16,8 @@
 
 import MaterialIcons from "@expo/vector-icons/MaterialIcons";
 import { router, useLocalSearchParams } from "expo-router";
+// SECONDARY (additive): records the open for context-awareness surfacing.
+import { recordDocumentOpen } from "@/services/contextAwarenessService";
 import React, {
   useCallback,
   useEffect,
@@ -354,6 +356,9 @@ export default function EpubViewerScreen() {
         markFileOpened(uri).catch((e) =>
           console.error("[EpubViewer] Failed to mark file as opened:", e),
         );
+        // SECONDARY (additive): note this open for the Gozlin workspace's
+        // context-awareness. Same uri key as the file index above.
+        recordDocumentOpen({ uri, name, type: "epub" });
       }
     } catch (err) {
       console.error("[EpubViewer] Error initialising:", err);

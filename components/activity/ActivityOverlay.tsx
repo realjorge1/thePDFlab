@@ -16,7 +16,8 @@ import { ShimmerText } from "@/components/activity/ShimmerText";
 import { phaseMessage } from "@/services/activity/activityPhases";
 import { useActivityStore } from "@/services/activity/activityStore";
 import { useTheme } from "@/services/ThemeProvider";
-import * as Haptics from "expo-haptics";
+// Haptics are globally disabled — this is a no-op shim (see utils/haptics.ts).
+import * as Haptics from "@/utils/haptics";
 import { ChevronDown } from "lucide-react-native";
 import React, { useEffect, useState } from "react";
 import { StyleSheet, View } from "react-native";

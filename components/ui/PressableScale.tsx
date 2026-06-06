@@ -7,7 +7,8 @@
 // Adopt incrementally anywhere a tappable control should feel responsive.
 // ============================================
 
-import * as Haptics from "expo-haptics";
+// Haptics are globally disabled — this is a no-op shim (see utils/haptics.ts).
+import * as Haptics from "@/utils/haptics";
 import React from "react";
 import {
   Pressable,

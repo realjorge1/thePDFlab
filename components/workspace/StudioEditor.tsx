@@ -99,7 +99,7 @@ function buildHtml(initialHtml: string, mode: "light" | "dark"): string {
 </style>
 </head>
 <body>
-<div id="ed" contenteditable="true" data-placeholder="Start writing… pull from your books, get AI help, all here.">${initialHtml}</div>
+<div id="ed" contenteditable="true" data-placeholder="Start writing…">${initialHtml}</div>
 <script>
   var ed = document.getElementById('ed');
   var savedRange = null;

@@ -7,6 +7,7 @@
 import { API_ENDPOINTS, wakeUpBackend } from "@/config/api";
 import { assertAIPremium } from "@/services/ai/premiumGuard";
 import type { AIChatMessage, AIDocumentRef } from "@/services/ai/ai.types";
+import { stripMarkdown } from "@/utils/sanitizeAiText";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -191,7 +192,8 @@ export async function askDocumentQuestion(
     const data = await response.json();
 
     return {
-      answer: data.answer,
+      // Strip Markdown so the answer renders as clean prose (no ## / ** tokens).
+      answer: stripMarkdown(data.answer),
       citations: data.citations || [],
       found: data.found !== false,
       retrievedChunks: data.retrievedChunks || [],

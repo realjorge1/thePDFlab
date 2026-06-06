@@ -68,6 +68,9 @@ import {
   warmFailureCache,
   zenodoAdapter,
 } from "@/src/services/library";
+// SECONDARY (additive): meaning-aware search. Falls back to the exact keyword
+// ranking below when AI is unavailable, so existing search never degrades.
+import { semanticFilter } from "@/services/semanticSearchService";
 
 // ============================================================================
 // CONSTANTS
@@ -309,17 +312,32 @@ export default function DownloadsScreen() {
 
         // Filter out URLs that recently failed
         results = filterFailedResults(results);
+        const unfiltered = results;
 
-        // Rank by relevance and drop low-quality matches
-        results = filterByRelevance(trimmedQuery, results);
+        // Rank by relevance and drop low-quality matches (unchanged: shown
+        // immediately so search stays as fast as before).
+        const ranked = filterByRelevance(trimmedQuery, unfiltered);
 
-        setSearchResults(results);
+        setSearchResults(ranked);
 
-        if (results.length === 0) {
+        if (ranked.length === 0) {
           setSearchError(
             "No downloadable materials found. Try a different search term.",
           );
         }
+
+        // SECONDARY (additive): in the background, append meaning-related
+        // matches for AI users. Never blocks or changes the results above —
+        // a no-op when AI is off/offline (enriched === ranked).
+        void semanticFilter(trimmedQuery, unfiltered, { enableAI: true })
+          .then((enriched) => {
+            if (!isCurrent()) return;
+            if (enriched.length > ranked.length) {
+              setSearchResults(enriched);
+              setSearchError(null);
+            }
+          })
+          .catch(() => {});
       } catch (error) {
         console.error("Search error:", error);
         if (!isCurrent()) return;
