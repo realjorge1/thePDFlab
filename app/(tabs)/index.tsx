@@ -7,7 +7,6 @@ import { PressableScale } from "@/components/ui/PressableScale";
 import { aiFeatures } from "@/constants/ai-features";
 import { GLOBAL_CONTAINER_HEADERS } from "@/constants/featureFlags";
 import { colors } from "@/constants/theme";
-import { useSubscription } from "@/context/SubscriptionContext";
 import { useRecentDocuments as useDocLibRecentDocuments } from "@/hooks/useDocLib";
 import { useFileIndex } from "@/hooks/useFileIndex";
 import { useReadingProgressFor } from "@/hooks/useReadingProgress";
@@ -35,7 +34,6 @@ import {
   Filter,
   FolderOpen,
   LayoutDashboard,
-  Lock,
   PencilLine,
   Presentation,
   Search,
@@ -207,7 +205,6 @@ export default function HomeScreen() {
   const router = useRouter();
   const { colors: t, mode } = useTheme();
   const { settings } = useSettings();
-  const { isPremium } = useSubscription();
   // Secret "noir" mode — tapping the "Activity" header toggles it app-wide.
   const { noir, toggleNoir } = useNoir();
   const activityAccents = noir ? NOIR_ACCENTS : ACTIVITY_ACCENTS;
@@ -819,13 +816,6 @@ export default function HomeScreen() {
                             </Text>
                           </View>
                         </View>
-                        {/* Premium lock — shown only to non-subscribers. Tapping
-                            still opens the workspace, which presents the gate. */}
-                        {!isPremium && (
-                          <View style={styles.workspaceLockBadge}>
-                            <Lock color="#FFFFFF" size={11} strokeWidth={2.5} />
-                          </View>
-                        )}
                       </GradientView>
                     </PressableScale>
 
@@ -1648,17 +1638,6 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: "800",
     color: "white",
-  },
-  workspaceLockBadge: {
-    position: "absolute",
-    top: 8,
-    right: 10,
-    width: 20,
-    height: 20,
-    borderRadius: 10,
-    backgroundColor: ACTIVITY_ACCENTS.premium,
-    justifyContent: "center",
-    alignItems: "center",
   },
   bentoWideSubtitle: {
     fontSize: 11,

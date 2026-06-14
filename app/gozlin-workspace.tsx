@@ -1130,7 +1130,7 @@ export default function GozlinWorkspaceScreen() {
   return (
     <PremiumGate
       feature="Gozlin WorkSpace"
-      description="The AI-powered notebook is a Premium feature."
+      description="Do so much more on Workspace."
     >
     <PINGate screen="gozlin">
     <SafeAreaView style={[styles.safe, { backgroundColor: t.background }]}>
