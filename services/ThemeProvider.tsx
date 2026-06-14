@@ -5,6 +5,7 @@
  * chosen theme mode (system / light / dark). Reads from settingsService.
  */
 import { colors as brandColors } from "@/constants/theme";
+import { useNoir } from "@/services/NoirProvider";
 import { useSettings } from "@/services/settingsService";
 import React, { createContext, useContext, useMemo } from "react";
 import { useColorScheme as useSystemColorScheme } from "react-native";
@@ -141,6 +142,51 @@ const darkTheme: ThemeTokens = {
   },
 };
 
+// "Noir" — a fully desaturated charcoal palette. Every token is a neutral gray
+// (no hue at all), giving the deliberate "dark gray / old photo" base. Paired
+// with the whole-app grayscale filter in NoirProvider; this half guarantees the
+// UI still reads as monochrome on devices where the filter is unsupported.
+const noirTheme: ThemeTokens = {
+  mode: "dark",
+  colors: {
+    primary: "#9CA3AF",
+    primaryDark: "#6B7280",
+    primaryLight: "#D1D5DB",
+    secondary: "#9CA3AF",
+    accent: "#A1A1AA",
+
+    background: "#1A1A1A",
+    backgroundSecondary: "#202020",
+    card: "#262626",
+    surface: "#262626",
+
+    text: "#E5E5E5",
+    textSecondary: "#A3A3A3",
+    textTertiary: "#737373",
+    textInverse: "#1A1A1A",
+
+    border: "#404040",
+    borderLight: "#2E2E2E",
+
+    success: "#A3A3A3",
+    error: "#C4C4C4",
+    warning: "#BDBDBD",
+    info: "#9E9E9E",
+
+    tabBar: "#1A1A1A",
+    tabBarBorder: "#2E2E2E",
+    tabActive: "#E5E5E5",
+    tabInactive: "#737373",
+
+    settingsBg: "#1A1A1A",
+    sectionHeader: "#A3A3A3",
+    rowBg: "#262626",
+    separator: "#404040",
+    comingSoonBadge: "#2E2E2E",
+    comingSoonText: "#D1D5DB",
+  },
+};
+
 // ─── Context ──────────────────────────────────────────────────────────────────
 
 const ThemeContext = createContext<ThemeTokens>(lightTheme);
@@ -154,8 +200,11 @@ export function useTheme(): ThemeTokens {
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const { settings } = useSettings();
   const systemScheme = useSystemColorScheme();
+  const { noir } = useNoir();
 
   const theme = useMemo(() => {
+    // Noir overrides the user's light/dark choice while it's active.
+    if (noir) return noirTheme;
     let mode: "light" | "dark" = "light";
     if (settings.themeMode === "dark") {
       mode = "dark";
@@ -163,7 +212,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
       mode = systemScheme === "dark" ? "dark" : "light";
     }
     return mode === "dark" ? darkTheme : lightTheme;
-  }, [settings.themeMode, systemScheme]);
+  }, [settings.themeMode, systemScheme, noir]);
 
   return (
     <ThemeContext.Provider value={theme}>{children}</ThemeContext.Provider>

@@ -7,15 +7,18 @@ import type { AIProvider } from "../ai.provider";
 import type {
     AIAnalyzeRequest,
     AIChatRequest,
-    AIClassifyRequest,
+    AIDevilsAdvocateRequest,
     AIExplainRequest,
     AIGenerateDocumentRequest,
     AIHighlightRequest,
+    AINarrativeArcRequest,
     AIQuizRequest,
     AIResponse,
     AISummarizeRequest,
     AITasksRequest,
     AITranslateRequest,
+    ChallengerRole,
+    DocFormat,
 } from "../ai.types";
 
 /** Simulate network latency (600–1200 ms). */
@@ -321,42 +324,254 @@ export class MockAIProvider implements AIProvider {
     );
   }
 
-  // ── Classify ──────────────────────────────────────────────────────────────
-  async classify(req: AIClassifyRequest): Promise<AIResponse> {
-    await delay();
+  // ── Devil's Advocate ────────────────────────────────────────────────────────
+  async devilsAdvocate(req: AIDevilsAdvocateRequest): Promise<AIResponse> {
+    await delay(900 + Math.random() * 700);
 
-    const filename = req.filename || "document.pdf";
+    if (!hasGroundingText(req.text)) {
+      return {
+        content:
+          "I couldn't read enough text from this document to ground real objections. Try a text-based PDF, DOCX, or PPTX so I don't have to guess.",
+      };
+    }
+
+    const fmt = inferMockFormat(req.documentName);
+    const { roleKey, detectedRole, documentType } = inferChallenger(
+      req.role,
+      req.customRole,
+      req.documentName,
+      req.text,
+    );
+    const hasContext = !!req.contextText && hasGroundingText(req.contextText);
+
     const structured = {
-      type: "report",
-      confidence: 87,
-      suggestedFilename: "Report_Strategic_Planning_Q1_2026.pdf",
-      summary:
-        "A strategic planning report outlining key initiatives and resource allocation for Q1 2026.",
-      keyEntities: [
-        "Acme Corporation",
-        "Q1 2026",
-        "Strategic Planning",
-        "John Smith",
-        "Board of Directors",
+      __kind: "devils-advocate",
+      detectedRole,
+      roleKey,
+      documentType,
+      killerObjections: [
+        {
+          title:
+            "You claim a 40% cost reduction — where is the methodology behind it?",
+          detail:
+            "This will be the first question in the room. A headline number with no derivation reads as marketing, not evidence.",
+          severity: "critical",
+          reference: fmt === "pptx" ? "Slide 3" : "Page 2",
+        },
+        {
+          title:
+            "Your timeline assumes zero change-management friction.",
+          detail:
+            "Every committee member has watched that assumption fail. With no buffer or adoption plan, the schedule looks naive.",
+          severity: "critical",
+          reference: fmt === "pptx" ? "Slide 7" : "Section 4",
+        },
+        {
+          title:
+            "A competitor offers a comparable solution at a lower price — you never address it.",
+          detail:
+            "Silence on the obvious alternative is read as either ignorance or avoidance. Neither helps you.",
+          severity: "high",
+          reference: fmt === "pptx" ? "Slide 5" : "Section 3",
+        },
       ],
+      secondaryChallenges: [
+        {
+          title: "The success metrics are outputs, not outcomes.",
+          detail: "Activity counts won't convince anyone the goal was met.",
+          severity: "high",
+        },
+        {
+          title: "No mention of who owns delivery after sign-off.",
+          severity: "medium",
+        },
+        {
+          title: "The ROI window conveniently ends before recurring costs kick in.",
+          severity: "high",
+        },
+        {
+          title: "Assumptions are stated as facts without sourcing.",
+          severity: "medium",
+        },
+        {
+          title: "The ask is buried — the reader has to hunt for what you want.",
+          severity: "medium",
+        },
+        {
+          title: "Edge cases and failure modes are absent entirely.",
+          severity: "medium",
+        },
+      ],
+      blindSpots: [
+        {
+          text: "No risk-mitigation or downside scenario.",
+          why: "A CFO will not approve a proposal with no downside case.",
+        },
+        {
+          text: "Every example comes from the same industry.",
+          why: "A reader in a different sector won't find them credible.",
+        },
+        {
+          text: "Nothing addresses what happens if the core assumption is wrong.",
+          why: "Reviewers probe the load-bearing assumption first.",
+        },
+      ],
+      formatExtras:
+        fmt === "pptx"
+          ? [
+              {
+                label: "Add a slide",
+                detail:
+                  "Objection #2 surfaces right after the Timeline slide. Add a 'Change Management' slide immediately after it.",
+                location: "after Slide 7",
+              },
+            ]
+          : fmt === "pdf"
+            ? [
+                {
+                  label: "Methodology gap",
+                  detail:
+                    "Section 3 (Methodology) has no sample-size justification — reviewers at this level require it.",
+                  location: "Section 3",
+                },
+              ]
+            : [
+                {
+                  label: "Undefended clause",
+                  detail:
+                    "The text uses 'reasonable efforts' without defining it. Opposing counsel will exploit the ambiguity.",
+                  location: "Clause 4.2",
+                },
+              ],
+      groundedObjections: hasContext
+        ? [
+            {
+              claim:
+                "Your document claims category leadership, but the context document contradicts it.",
+              evidence:
+                "The attached report shows the named competitor at 34% share versus your 18%.",
+              source: `${req.contextName || "context document"}, page 12`,
+            },
+          ]
+        : undefined,
+      rfpCoverage: hasContext
+        ? [
+            { criterion: "ISO 27001 certified vendor", status: "missing", note: "Your document never states certification status." },
+            { criterion: "Implementation methodology", status: "partial", note: "Mentioned but not described step by step." },
+            { criterion: "Reference customers", status: "covered" },
+          ]
+        : undefined,
     };
 
     return {
-      content: `📋 **Document Classification: "${filename}"**
+      content: `Surfaced the objections a ${detectedRole.toLowerCase()} will raise about ${req.documentName ? `"${req.documentName}"` : "your document"}.`,
+      structuredData: structured as unknown as Record<string, unknown>,
+    };
+  }
 
-**Type:** Report (87% confidence)
-**Suggested Filename:** Report_Strategic_Planning_Q1_2026.pdf
+  // ── Narrative Arc ─────────────────────────────────────────────────────────
+  async narrativeArc(req: AINarrativeArcRequest): Promise<AIResponse> {
+    await delay(900 + Math.random() * 600);
 
-**Summary:** A strategic planning report outlining key initiatives and resource allocation for Q1 2026.
+    if (!hasGroundingText(req.text)) {
+      return {
+        content:
+          "I couldn't read enough structure (titles/headings) to judge the arc. Try a text-based PDF, DOCX, or PPTX.",
+      };
+    }
 
-**Key Entities:**
-• Acme Corporation
-• Q1 2026
-• Strategic Planning
-• John Smith
-• Board of Directors
+    const fmt: DocFormat = req.format || inferMockFormat(req.documentName);
+    const hasContext = !!req.contextText && hasGroundingText(req.contextText);
+    const editable = fmt !== "pdf";
 
-_Note: In the full version, the document will be analyzed by AI for accurate classification._`,
+    const detectedType =
+      fmt === "pptx" ? "Pitch Deck" : fmt === "docx" ? "Business Proposal" : "Consulting Report";
+    const idealStructure =
+      fmt === "pptx"
+        ? ["Problem", "Agitate", "Solution", "Proof", "CTA"]
+        : fmt === "docx"
+          ? ["Executive Summary", "Problem", "Solution", "Evidence", "Pricing", "Next Steps"]
+          : ["Executive Summary", "Key Findings", "Analysis", "Recommendations"];
+
+    // Deliberately misplaced sections to demonstrate the verdict.
+    const detectedSections =
+      fmt === "docx"
+        ? [
+            { title: "Executive Summary", index: 1, role: "Executive Summary", status: "misplaced" as const },
+            { title: "Problem Statement", index: 2, role: "Problem", status: "ok" as const },
+            { title: "Pricing", index: 3, role: "Pricing", status: "misplaced" as const },
+            { title: "Proposed Solution", index: 4, role: "Solution", status: "ok" as const },
+            { title: "Case Studies", index: 5, role: "Evidence", status: "ok" as const },
+            { title: "Next Steps", index: 6, role: "Next Steps", status: "ok" as const },
+          ]
+        : fmt === "pptx"
+          ? [
+              { title: "Our Solution", index: 1, role: "Solution", status: "misplaced" as const },
+              { title: "The Problem", index: 2, role: "Problem", status: "misplaced" as const },
+              { title: "Market Proof", index: 3, role: "Proof", status: "ok" as const },
+              { title: "Why Now", index: 4, role: "Agitate", status: "misplaced" as const },
+              { title: "The Ask", index: 5, role: "CTA", status: "ok" as const },
+            ]
+          : [
+              { title: "Key Findings", index: 1, role: "Key Findings", status: "misplaced" as const },
+              { title: "Executive Summary", index: 2, role: "Executive Summary", status: "misplaced" as const },
+              { title: "Analysis", index: 3, role: "Analysis", status: "ok" as const },
+              { title: "Recommendations", index: 4, role: "Recommendations", status: "ok" as const },
+            ];
+
+    const verdictLine =
+      fmt === "docx"
+        ? "Your pricing appears before your evidence — readers see the cost before they believe the solution works."
+        : fmt === "pptx"
+          ? "Your solution opens the deck before the audience feels the problem."
+          : "Your summary sits on page 2, after the findings the reader hasn't been set up for.";
+
+    const diagnosis =
+      fmt === "docx"
+        ? "This reads like a business proposal, but Pricing (section 3) appears before Case Studies (section 5). Decision-makers see the cost before they're convinced of the value — the most common reason proposals get rejected without a meeting."
+        : fmt === "pptx"
+          ? "Pitch decks win when the audience feels the pain before the fix. Here the Solution leads and the Problem is buried on slide 2, so the fix lands before anyone wants it."
+          : "Consulting reports lead with the answer. Here Key Findings precede the Executive Summary, so the reader hits conclusions without the framing that makes them land.";
+
+    const reorder =
+      fmt === "docx"
+        ? [
+            { instruction: "Move 'Case Studies' before 'Pricing'.", from: 5, to: 3 },
+            { instruction: "Keep 'Executive Summary' on page 1 — lead with the outcome." },
+            { instruction: "'Next Steps' should follow the price, not precede the proof." },
+          ]
+        : fmt === "pptx"
+          ? [
+              { instruction: "Flip slides 1 and 2 — open with 'The Problem'.", from: 2, to: 1 },
+              { instruction: "Move 'Why Now' (Agitate) to right after the problem.", from: 4, to: 2 },
+            ]
+          : [
+              { instruction: "Move 'Executive Summary' to the top.", from: 2, to: 1 },
+              { instruction: "Let 'Key Findings' follow the summary, not lead." },
+            ];
+
+    const structured = {
+      __kind: "narrative-arc",
+      verdict: "weak" as const,
+      verdictLine,
+      detectedType,
+      format: fmt,
+      diagnosis,
+      idealStructure,
+      detectedSections,
+      reorder,
+      editable,
+      rfpCoverage: hasContext
+        ? [
+            { criterion: "Describe your implementation methodology", status: "missing", note: "No matching section found — this will be flagged." },
+            { criterion: "Pricing & commercial terms", status: "covered" },
+            { criterion: "Security & compliance", status: "partial", note: "Touched on, but not as its own section." },
+          ]
+        : undefined,
+    };
+
+    return {
+      content: `Weak arc — ${detectedType}. ${verdictLine}`,
       structuredData: structured as unknown as Record<string, unknown>,
     };
   }
@@ -645,6 +860,66 @@ This approach makes things faster, more reliable, and easier to manage — just 
       } as unknown as Record<string, unknown>,
     };
   }
+}
+
+// ── Helpers for document-grounded mock analysis ──────────────────────────────
+
+/** True when we have enough real extracted text (not a placeholder) to ground output. */
+function hasGroundingText(text?: string): boolean {
+  if (!text) return false;
+  const t = text.trim();
+  return t.length > 120 && !t.startsWith("[");
+}
+
+/** Best-effort format from a filename extension. Defaults to pdf. */
+function inferMockFormat(name?: string): DocFormat {
+  const n = (name || "").toLowerCase();
+  if (n.endsWith(".pptx") || n.endsWith(".ppt")) return "pptx";
+  if (n.endsWith(".docx") || n.endsWith(".doc")) return "docx";
+  return "pdf";
+}
+
+/** Resolve the challenger: honor an explicit override, else infer from name/text. */
+function inferChallenger(
+  role: ChallengerRole | undefined,
+  customRole: string | undefined,
+  name?: string,
+  text?: string,
+): { roleKey: ChallengerRole; detectedRole: string; documentType: string } {
+  const LABELS: Record<Exclude<ChallengerRole, "auto" | "custom">, string> = {
+    investor: "Skeptical Investor",
+    client: "Budget-Conscious Client",
+    procurement: "Procurement Committee",
+    "peer-reviewer": "Peer Reviewer",
+    "opposing-counsel": "Opposing Counsel",
+    stakeholder: "Senior Stakeholder",
+    cfo: "CFO",
+    "evaluation-committee": "Evaluation Committee",
+  };
+
+  if (role === "custom" && customRole?.trim()) {
+    return { roleKey: "custom", detectedRole: customRole.trim(), documentType: "Document" };
+  }
+  if (role && role !== "auto" && role !== "custom") {
+    return { roleKey: role, detectedRole: LABELS[role], documentType: "Document" };
+  }
+
+  // Auto-infer from filename + text keywords.
+  const hay = `${name || ""} ${(text || "").slice(0, 400)}`.toLowerCase();
+  const fmt = inferMockFormat(name);
+  if (fmt === "pptx" || /pitch|deck|seed|series\s?[ab]|raise|valuation/.test(hay)) {
+    return { roleKey: "investor", detectedRole: LABELS.investor, documentType: "Pitch Deck" };
+  }
+  if (/abstract|methodology|hypothesis|p\s?<|results|literature review/.test(hay)) {
+    return { roleKey: "peer-reviewer", detectedRole: LABELS["peer-reviewer"], documentType: "Research Paper" };
+  }
+  if (/whereas|hereby|clause|party|agreement|liability|indemnif/.test(hay)) {
+    return { roleKey: "opposing-counsel", detectedRole: LABELS["opposing-counsel"], documentType: "Legal Document" };
+  }
+  if (/rfp|proposal|scope of work|deliverable|sow/.test(hay)) {
+    return { roleKey: "procurement", detectedRole: LABELS.procurement, documentType: "Proposal" };
+  }
+  return { roleKey: "client", detectedRole: LABELS.client, documentType: "Business Proposal" };
 }
 
 // ── Helpers for document-aware mock questions ────────────────────────────────

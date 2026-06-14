@@ -4,9 +4,17 @@
 // ============================================================================
 
 import React from "react";
-import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import {
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
+} from "react-native";
 
-const ACCENT = "#6366F1";
+import { Palette } from "@/services/document-manager";
+import { useTheme } from "@/services/ThemeProvider";
+
+const ACCENT = Palette.primary[500];
 
 interface Props {
   message: string;
@@ -14,6 +22,8 @@ interface Props {
   offlineSuspected: boolean;
   onRetry: () => void;
   onBack: () => void;
+  // When provided, offers the explicit low-fidelity on-device preview.
+  onBasicPreview?: () => void;
 }
 
 export function ErrorState({
@@ -22,7 +32,10 @@ export function ErrorState({
   offlineSuspected,
   onRetry,
   onBack,
+  onBasicPreview,
 }: Props) {
+  const { colors: t } = useTheme();
+
   const title = offlineSuspected
     ? "You appear to be offline"
     : "Can't open presentation";
@@ -33,18 +46,45 @@ export function ErrorState({
   return (
     <View style={styles.root}>
       <Text style={styles.icon}>{offlineSuspected ? "📡" : "⚠️"}</Text>
-      <Text style={styles.title}>{title}</Text>
-      <Text style={styles.body}>{message}</Text>
-      <Text style={styles.hint}>{hint}</Text>
+      <Text style={[styles.title, { color: t.text }]}>{title}</Text>
+      <Text style={[styles.body, { color: t.textSecondary }]}>
+        {message}
+      </Text>
+      <Text style={[styles.hint, { color: t.textTertiary }]}>{hint}</Text>
 
       {retryable && (
         <TouchableOpacity style={styles.primaryBtn} onPress={onRetry}>
           <Text style={styles.primaryText}>Try again</Text>
         </TouchableOpacity>
       )}
-      <TouchableOpacity style={styles.secondaryBtn} onPress={onBack}>
-        <Text style={styles.secondaryText}>Go back</Text>
+      <TouchableOpacity
+        style={[
+          styles.secondaryBtn,
+          { backgroundColor: t.backgroundSecondary },
+        ]}
+        onPress={onBack}
+      >
+        <Text style={[styles.secondaryText, { color: t.text }]}>
+          Go back
+        </Text>
       </TouchableOpacity>
+
+      {onBasicPreview && (
+        <TouchableOpacity
+          style={styles.tertiaryBtn}
+          onPress={onBasicPreview}
+          hitSlop={8}
+        >
+          <Text style={[styles.tertiaryText, { color: t.textSecondary }]}>
+            Show basic preview
+          </Text>
+        </TouchableOpacity>
+      )}
+      {onBasicPreview && (
+        <Text style={[styles.tertiaryHint, { color: t.textTertiary }]}>
+          Basic preview is text-only and won&apos;t match the original design.
+        </Text>
+      )}
     </View>
   );
 }
@@ -59,19 +99,16 @@ const styles = StyleSheet.create({
   },
   icon: { fontSize: 48 },
   title: {
-    color: "#FFFFFF",
     fontSize: 18,
     fontWeight: "700",
     marginTop: 4,
   },
   body: {
-    color: "rgba(255,255,255,0.65)",
     fontSize: 13,
     textAlign: "center",
     marginHorizontal: 12,
   },
   hint: {
-    color: "rgba(255,255,255,0.4)",
     fontSize: 11,
     textAlign: "center",
     marginHorizontal: 24,
@@ -90,8 +127,22 @@ const styles = StyleSheet.create({
     paddingVertical: 11,
     paddingHorizontal: 28,
     borderRadius: 12,
-    backgroundColor: "rgba(255,255,255,0.1)",
   },
   primaryText: { color: "#FFFFFF", fontWeight: "700", fontSize: 14 },
-  secondaryText: { color: "#FFFFFF", fontWeight: "600", fontSize: 14 },
+  secondaryText: { fontWeight: "600", fontSize: 14 },
+  tertiaryBtn: {
+    marginTop: 10,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+  },
+  tertiaryText: {
+    fontWeight: "600",
+    fontSize: 13,
+    textDecorationLine: "underline",
+  },
+  tertiaryHint: {
+    fontSize: 10,
+    textAlign: "center",
+    marginTop: -4,
+  },
 });

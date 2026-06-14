@@ -1,5 +1,8 @@
 // ============================================
 // AI Empty State – shown when no messages exist yet
+// Time-of-day greeting + a one-line description of what the active feature
+// does. Only the default Chat shows the gozlin badge; every other feature is
+// icon-free so the description carries the meaning.
 // ============================================
 
 import AILogoBadge from "@/components/AIButton/AILogoBadge";
@@ -8,38 +11,8 @@ import { spacing } from "@/constants/theme";
 import { useTheme } from "@/services/ThemeProvider";
 import type { AIAction } from "@/services/ai/ai.types";
 import { AI_FEATURES } from "@/services/ai/ai.types";
-import {
-  BookOpen,
-  Brain,
-  FileSearch,
-  FileSignature,
-  FileText,
-  GraduationCap,
-  Highlighter,
-  Languages,
-  Lightbulb,
-  ListChecks,
-  MessageSquare,
-  ScanSearch,
-  Sparkles,
-} from "lucide-react-native";
 import React, { useState } from "react";
 import { StyleSheet, Text, View } from "react-native";
-
-const ICON_MAP: Record<string, React.ComponentType<any>> = {
-  "message-square": MessageSquare,
-  "book-open": BookOpen,
-  languages: Languages,
-  "file-search": FileSearch,
-  brain: Brain,
-  "list-checks": ListChecks,
-  "file-signature": FileSignature,
-  "file-text": FileText,
-  "scan-search": ScanSearch,
-  highlighter: Highlighter,
-  lightbulb: Lightbulb,
-  "graduation-cap": GraduationCap,
-};
 
 interface Props {
   action: AIAction;
@@ -50,28 +23,27 @@ export const AIEmptyState = React.memo(function AIEmptyState({
 }: Props) {
   const { colors: t, mode } = useTheme();
   const feature = AI_FEATURES.find((f) => f.id === action);
-  const Icon = feature ? ICON_MAP[feature.icon] || Sparkles : Sparkles;
-  const color = feature?.color || "#9333EA";
+  const isChat = action === "chat";
   // Pick a fresh time-based greeting once per mount (i.e. each time the empty
   // screen opens / the feature changes). Never repeats twice in a row.
   const [greeting] = useState(() => pickGreeting());
 
   return (
     <View style={styles.container}>
-      <View
-        style={[
-          styles.iconCircle,
-          {
-            backgroundColor: mode === "dark" ? `${color}22` : `${color}15`,
-          },
-        ]}
-      >
-        {action === "chat" ? (
+      {/* Only the default Chat keeps a centered icon — the gozlin badge. */}
+      {isChat && (
+        <View
+          style={[
+            styles.iconCircle,
+            {
+              backgroundColor:
+                mode === "dark" ? "rgba(99,102,241,0.18)" : "rgba(99,102,241,0.12)",
+            },
+          ]}
+        >
           <AILogoBadge size={56} />
-        ) : (
-          <Icon color={color} size={44} strokeWidth={1.8} />
-        )}
-      </View>
+        </View>
+      )}
       <Text style={[styles.title, { color: t.text }]}>{greeting}</Text>
       <Text style={[styles.subtitle, { color: t.textSecondary }]}>
         {feature?.description || "Select a mode to get started"}
@@ -97,32 +69,14 @@ const styles = StyleSheet.create({
   title: {
     fontSize: 20,
     fontWeight: "700",
-    marginBottom: 4,
+    marginBottom: 6,
     textAlign: "center",
   },
   subtitle: {
-    fontSize: 14,
+    fontSize: 15,
+    lineHeight: 21,
     textAlign: "center",
+    maxWidth: 300,
     marginBottom: spacing.lg,
-  },
-  hints: {
-    alignSelf: "stretch",
-    gap: spacing.xs + 2,
-  },
-  hintRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingVertical: 10,
-    paddingHorizontal: 14,
-    borderRadius: 10,
-    gap: 8,
-  },
-  hintBullet: {
-    fontSize: 18,
-    fontWeight: "700",
-  },
-  hintText: {
-    fontSize: 13,
-    flex: 1,
   },
 });

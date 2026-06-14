@@ -58,7 +58,35 @@ const MIME_BY_EXTENSION: Record<string, string> = {
 
 const MAX_RECURSION_DEPTH = 10;
 
+// Number of SAF entries we stat (getInfoAsync) at once. Statting every child
+// sequentially is the dominant cost of a scan; a bounded pool keeps large
+// folders fast without flooding the content resolver.
+const STAT_CONCURRENCY = 8;
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
+
+/**
+ * Map over `items` running at most `limit` async tasks at a time, preserving
+ * input order in the result.
+ */
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let cursor = 0;
+  const worker = async () => {
+    while (true) {
+      const i = cursor++;
+      if (i >= items.length) return;
+      results[i] = await fn(items[i]);
+    }
+  };
+  const poolSize = Math.min(limit, items.length);
+  await Promise.all(Array.from({ length: poolSize }, worker));
+  return results;
+}
 
 function extractExtension(name: string): string {
   const idx = name.lastIndexOf(".");
@@ -279,20 +307,32 @@ class SAFBridge {
       return;
     }
 
-    for (const childUri of childUris) {
-      let info: any = null;
-      try {
-        info = await FileSystem.getInfoAsync(childUri);
-      } catch {
-        // Skip entries we can't stat
-        continue;
-      }
+    // Stat all children in parallel (bounded). This is the slow part of a scan,
+    // so a concurrency pool turns N sequential round-trips into N/POOL.
+    const stats = await mapWithConcurrency(
+      childUris,
+      STAT_CONCURRENCY,
+      async (childUri) => {
+        try {
+          return { childUri, info: await FileSystem.getInfoAsync(childUri) };
+        } catch {
+          // Skip entries we can't stat
+          return { childUri, info: null as any };
+        }
+      },
+    );
+
+    const subdirectories: string[] = [];
+
+    for (const { childUri, info } of stats) {
       if (!info?.exists) continue;
 
       const name = decodeNameFromUri(childUri);
 
       if (info.isDirectory) {
-        await this.scanRecursive(childUri, parentDisplay, out, depth + 1);
+        // Recurse after the current directory's files are collected, so we keep
+        // recursion depth-first but bounded (one directory's stats at a time).
+        subdirectories.push(childUri);
         continue;
       }
 
@@ -314,6 +354,10 @@ class SAFBridge {
         type: getDocumentType(name, inferredMime),
         parentFolder: parentDisplay,
       });
+    }
+
+    for (const dirUri of subdirectories) {
+      await this.scanRecursive(dirUri, parentDisplay, out, depth + 1);
     }
   }
 }

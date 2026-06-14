@@ -1,5 +1,7 @@
 export { AIChatBubble } from "./AIChatBubble";
 export { AIDocumentBar } from "./AIDocumentBar";
+export { AnalyzeSheet } from "./AnalyzeSheet";
+export type { AnalyzeTarget } from "./AnalyzeSheet";
 export { AIEmptyState } from "./AIEmptyState";
 export { AILanguagePicker } from "./AILanguagePicker";
 export { AIModeSelector } from "./AIModeSelector";
@@ -9,19 +11,16 @@ export { AthemiHeader } from "./AthemiHeader";
 // Structured AI output renderers
 export {
   AIActionsBar,
-  ClassifyRenderer,
-  DocumentRenderer,
+  DevilsAdvocateRenderer,
   ExplainRenderer,
   HighlightRenderer,
   InsightRenderer,
+  NarrativeArcRenderer,
   StructuredMessageRenderer,
   TableRenderer,
   TaskRenderer,
-  parseDocumentSections,
 } from "./renderers";
 export type {
-  ClassifyData,
-  DocumentSection,
   InsightData,
   TableData,
   TaskData,

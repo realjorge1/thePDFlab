@@ -22,11 +22,14 @@ import type {
   AIChatMessage,
   AIDocumentRef,
   AISession,
+  ChallengerRole,
+  DocFormat,
   HighlightItem,
 } from "@/services/ai";
 import {
   analyze,
-  classifyDocument,
+  CHALLENGER_ROLES,
+  checkNarrativeArc,
   clearAIScreenState,
   clearAllSessions,
   convertHighlightToTask,
@@ -43,6 +46,7 @@ import {
   initAIProvider,
   loadSessions,
   pickDocument,
+  runDevilsAdvocate,
   saveAIScreenState,
   saveSession,
   sendChat,
@@ -66,14 +70,17 @@ import {
   GraduationCap,
   Highlighter,
   Languages,
+  Layers,
   LayoutDashboard,
   Lightbulb,
   ListChecks,
   MessageSquare,
   Paperclip,
-  ScanSearch,
+  Plus,
   Send,
+  Swords,
   Wand2,
+  Waypoints,
   X,
 } from "lucide-react-native";
 import React, {
@@ -119,10 +126,10 @@ const AI_SEND_LABELS: Partial<Record<AIAction, string>> = {
   chat: "Thinking",
   summarize: "Summarizing",
   translate: "Translating",
-  "extract-text": "Extracting text",
+  "devils-advocate": "Stress-testing",
+  "narrative-arc": "Checking the arc",
   analyze: "Analyzing",
   tasks: "Finding tasks",
-  classify: "Classifying",
   highlight: "Finding highlights",
   explain: "Explaining",
   "chat-with-document": "Reading the document",
@@ -140,10 +147,10 @@ const CARD_WIDTH = Math.floor(
 const FILE_ONLY_MODES: AIAction[] = [
   "summarize",
   "translate",
-  "extract-text",
+  "devils-advocate",
+  "narrative-arc",
   "analyze",
   "tasks",
-  "classify",
   "highlight",
   "explain",
   // "quiz" intentionally excluded — quiz uses its own dedicated panel with
@@ -153,13 +160,13 @@ const FILE_ONLY_MODES: AIAction[] = [
 const FEATURE_ICONS: Record<string, React.ComponentType<any>> = {
   summarize: BookOpen,
   translate: Languages,
-  "extract-text": FileText,
+  "devils-advocate": Swords,
+  "narrative-arc": Waypoints,
   chat: MessageSquare,
   analyze: Brain,
   tasks: ListChecks,
   "generate-document": Wand2,
   "chat-with-document": FileText,
-  classify: ScanSearch,
   highlight: Highlighter,
   explain: Lightbulb,
   quiz: GraduationCap,
@@ -206,6 +213,14 @@ function parsePageSelection(input: string, totalPages: number): number[] {
   return Array.from(pages).sort((a, b) => a - b);
 }
 
+// Best-effort document format from a filename extension (for Narrative Arc).
+function inferFormat(doc?: AIDocumentRef): DocFormat {
+  const n = (doc?.name || "").toLowerCase();
+  if (n.endsWith(".pptx") || n.endsWith(".ppt")) return "pptx";
+  if (n.endsWith(".docx") || n.endsWith(".doc")) return "docx";
+  return "pdf";
+}
+
 function extractTextForPages(fullText: string, pageNums: number[], totalPages: number): string {
   if (pageNums.length >= totalPages) return fullText;
   const sections: Record<number, string> = {};
@@ -230,10 +245,14 @@ export default function AIScreen() {
   const { glowStyle, onType } = useTypingGlow(ACCENT);
   // "Ask gozlin" deep-link: viewers pass selected text (and optionally a target
   // action, e.g. from Voice to Document) as route params.
-  const { initialText, initialAction } = useLocalSearchParams<{
-    initialText?: string;
-    initialAction?: string;
-  }>();
+  const { initialText, initialAction, fileUri, fileName, fileMime } =
+    useLocalSearchParams<{
+      initialText?: string;
+      initialAction?: string;
+      fileUri?: string;
+      fileName?: string;
+      fileMime?: string;
+    }>();
 
   // ── State ─────────────────────────────────────────────────────────────────
   const [activeAction, setActiveAction] = useState<AIAction>("chat");
@@ -246,6 +265,14 @@ export default function AIScreen() {
   const [extractionStatus, setExtractionStatus] = useState<
     "none" | "extracted" | "partial"
   >("none");
+
+  // Devil's Advocate: which challenger the analysis is run as ("auto" infers it).
+  const [challengerRole, setChallengerRole] = useState<ChallengerRole>("auto");
+  // Optional second "context" document (RFP / competitor doc / rejection letter)
+  // used by Devil's Advocate + Narrative Arc for cross-document grounding.
+  const [contextDoc, setContextDoc] = useState<AIDocumentRef | undefined>();
+  const [contextDocText, setContextDocText] = useState<string | undefined>();
+  const [isExtractingContextDoc, setIsExtractingContextDoc] = useState(false);
 
   // Translate-specific
   const [targetLang, setTargetLang] = useState("es");
@@ -289,7 +316,7 @@ export default function AIScreen() {
   const [isGenerating, setIsGenerating] = useState(false);
 
   const scrollRef = useRef<FlatList>(null);
-  const filePickerForRef = useRef<"attach" | "translate">("attach");
+  const filePickerForRef = useRef<"attach" | "translate" | "context">("attach");
   const navigation = useNavigation();
 
   // ── Close dropdown on screen blur / navigation away ─────────────────────
@@ -386,6 +413,45 @@ export default function AIScreen() {
       clearAIScreenState();
     }
     // Run only once on mount (initialText is a route param, stable for this screen visit)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // ── Deep-link from a viewer / library "Analyze" entry ──────────────────────
+  // Attaches the passed file and opens it directly in the chosen analysis mode.
+  useEffect(() => {
+    if (!fileUri || !fileName) return;
+    const allowed: AIAction[] = ["devils-advocate", "narrative-arc"];
+    const action = (allowed as string[]).includes(initialAction ?? "")
+      ? (initialAction as AIAction)
+      : "devils-advocate";
+    const doc: AIDocumentRef = {
+      uri: fileUri,
+      name: fileName,
+      mimeType: fileMime || "application/octet-stream",
+    };
+    setActiveAction(action);
+    setSession(createSession(action, doc));
+    setAttachedDoc(doc);
+    setExtractionStatus("none");
+    setIsExtractingAttachedDoc(true);
+    clearAIScreenState();
+    (async () => {
+      try {
+        const text = await extractDocumentText(doc);
+        setDocText(text);
+        const trimmed = text?.trimStart() ?? "";
+        setExtractionStatus(
+          text && (trimmed.startsWith("[Page ") || !trimmed.startsWith("["))
+            ? "extracted"
+            : "partial",
+        );
+      } catch {
+        setExtractionStatus("partial");
+      } finally {
+        setIsExtractingAttachedDoc(false);
+      }
+    })();
+    // Run once on mount — file params are stable for this screen visit.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -693,6 +759,18 @@ export default function AIScreen() {
     }
   }, [activeAction]);
 
+  // Reset analysis-only state (role + context doc) when leaving both modes.
+  useEffect(() => {
+    if (activeAction !== "devils-advocate" && activeAction !== "narrative-arc") {
+      setContextDoc(undefined);
+      setContextDocText(undefined);
+      setIsExtractingContextDoc(false);
+    }
+    if (activeAction !== "devils-advocate") {
+      setChallengerRole("auto");
+    }
+  }, [activeAction]);
+
   // ── Document attachment ───────────────────────────────────────────────────
   const handleAttachDocument = useCallback(async () => {
     filePickerForRef.current = "attach";
@@ -704,6 +782,11 @@ export default function AIScreen() {
 
     const doc = await pickDocument();
     if (!doc) return;
+
+    if (filePickerForRef.current === "context") {
+      await attachContextDoc(doc);
+      return;
+    }
 
     if (filePickerForRef.current === "translate") {
       setIsExtractingTranslateDoc(true);
@@ -798,6 +881,11 @@ export default function AIScreen() {
       size: selectedFile.size,
     };
 
+    if (filePickerForRef.current === "context") {
+      await attachContextDoc(doc);
+      return;
+    }
+
     if (filePickerForRef.current === "translate") {
       setIsExtractingTranslateDoc(true);
       setTranslateDocExtractionFailed(false);
@@ -883,6 +971,33 @@ export default function AIScreen() {
     }));
   }, []);
 
+  // ── Optional context document (Devil's Advocate + Narrative Arc) ──────────
+  const attachContextDoc = useCallback(async (doc: AIDocumentRef) => {
+    setContextDoc(doc);
+    setContextDocText(undefined);
+    setIsExtractingContextDoc(true);
+    try {
+      const text = await extractDocumentText(doc);
+      const isPlaceholder = !text || text.trimStart().startsWith("[");
+      setContextDocText(isPlaceholder ? "" : text);
+    } catch {
+      setContextDocText("");
+    } finally {
+      setIsExtractingContextDoc(false);
+    }
+  }, []);
+
+  const handleAttachContextDoc = useCallback(() => {
+    filePickerForRef.current = "context";
+    setShowFileSourcePicker(true);
+  }, []);
+
+  const handleRemoveContextDoc = useCallback(() => {
+    setContextDoc(undefined);
+    setContextDocText(undefined);
+    setIsExtractingContextDoc(false);
+  }, []);
+
   // ── Modes that can be sent with just a file (no text required) ────────────
   // (hoisted to module level via FILE_ONLY_MODES constant below)
 
@@ -910,16 +1025,16 @@ export default function AIScreen() {
     // Modes that strictly require a document
     if (
       (activeAction === "chat-with-document" ||
-        activeAction === "extract-text" ||
-        activeAction === "classify") &&
+        activeAction === "devils-advocate" ||
+        activeAction === "narrative-arc") &&
       !hasFile
     ) {
       Alert.alert(
         "Document Required",
-        activeAction === "extract-text"
-          ? "Please attach a PDF to extract text from."
-          : activeAction === "classify"
-            ? "Please attach a document to classify."
+        activeAction === "devils-advocate"
+          ? "Please attach a file or deck to stress-test."
+          : activeAction === "narrative-arc"
+            ? "Please attach a file or deck to check its arc."
             : "Please attach a document first for this feature.",
       );
       return;
@@ -983,45 +1098,32 @@ export default function AIScreen() {
                 signal,
               );
               break;
-            case "extract-text": {
-              // Text Extraction: return the raw extracted text from the document
-              // (already extracted during attachment via extractDocumentText)
-              let extracted = docText;
-              if (!extracted && attachedDoc) {
-                extracted = await extractDocumentText(attachedDoc);
-                setDocText(extracted);
-                setExtractionStatus("extracted");
-              }
-              if (extracted && (extracted.startsWith("[Page ") || !extracted.startsWith("["))) {
-                const wordCount = extracted.split(/\s+/).length;
-                const pageMatches = extracted.match(/\[Page \d+\]/g);
-                const pageCount = pageMatches ? pageMatches.length : 1;
-                response = {
-                  content:
-                    `📄 **Extracted Text from "${attachedDoc?.name || "document"}"**\n\n` +
-                    `**Stats:** ${wordCount.toLocaleString()} words · ${pageCount} page${pageCount !== 1 ? "s" : ""}`,
-                  structuredData: {
-                    __kind: "document",
-                    fullText: extracted,
-                  },
-                };
-              } else {
-                response = {
-                  content:
-                    extracted ||
-                    "❌ Could not extract text from this document. Please try a different PDF.",
-                };
-              }
+            case "devils-advocate":
+              response = await runDevilsAdvocate(
+                effectiveText,
+                attachedDoc?.name,
+                challengerRole,
+                undefined,
+                contextDocText,
+                contextDoc?.name,
+                signal,
+              );
               break;
-            }
+            case "narrative-arc":
+              response = await checkNarrativeArc(
+                effectiveText,
+                attachedDoc?.name,
+                inferFormat(attachedDoc),
+                contextDocText,
+                contextDoc?.name,
+                signal,
+              );
+              break;
             case "analyze":
               response = await analyze(effectiveText, undefined, attachedDoc?.name, signal);
               break;
             case "tasks":
               response = await extractTasks(effectiveText, attachedDoc?.name, signal);
-              break;
-            case "classify":
-              response = await classifyDocument(effectiveText, attachedDoc?.name, signal);
               break;
             case "highlight":
               response = await highlightKeyPoints(effectiveText, attachedDoc?.name, signal);
@@ -1096,6 +1198,9 @@ export default function AIScreen() {
     docText,
     session.messages,
     targetLang,
+    challengerRole,
+    contextDoc,
+    contextDocText,
   ]);
 
   // ── New session ───────────────────────────────────────────────────────────
@@ -1229,9 +1334,12 @@ export default function AIScreen() {
       chat: "Ask me anything...",
       summarize: "Paste text or attach file...",
       translate: "Paste text or attach file...",
-      "extract-text": attachedDoc
-        ? `Extract text from "${attachedDoc.name}"...`
-        : "Attach a PDF to extract text...",
+      "devils-advocate": attachedDoc
+        ? `Stress-test "${attachedDoc.name}" — add focus (optional)…`
+        : "Attach a file or deck to stress-test...",
+      "narrative-arc": attachedDoc
+        ? `Check the arc of "${attachedDoc.name}" — add focus (optional)…`
+        : "Attach a file or deck to check the arc...",
       analyze: "Paste text or attach file...",
       tasks: attachedDoc
         ? `Extract tasks from "${attachedDoc.name}"...`
@@ -1243,9 +1351,6 @@ export default function AIScreen() {
       "chat-with-document": attachedDoc
         ? `Ask about "${attachedDoc.name}"...`
         : "Attach a document first...",
-      classify: attachedDoc
-        ? `Classify "${attachedDoc.name}"...`
-        : "Attach a document to classify...",
       highlight: "Paste text or attach file to highlight...",
       explain: "Paste complex text to simplify...",
       quiz: "Use the Quiz panel below to attach a document and start a quiz.",
@@ -1286,87 +1391,49 @@ export default function AIScreen() {
     setInputText(prompt);
   }, []);
 
-  const handleConvertToEditable = useCallback(
-    (_sections: any[]) => {
-      Alert.alert(
-        "Convert to Editable",
-        "This will open the extracted content in the in-app editor.",
-      );
+  // ── Devil's Advocate: re-run as a different challenger role ───────────────
+  const handleRerunWithRole = useCallback(
+    (role: ChallengerRole, customRole?: string) => {
+      if (isLoading) return;
+      setChallengerRole(role);
+      const text = docText || "";
+      const name = stateRef.current.attachedDoc?.name;
+      setIsLoading(true);
+      runCancelable<any>(
+        (signal) =>
+          runDevilsAdvocate(
+            text,
+            name,
+            role,
+            customRole,
+            contextDocText,
+            contextDoc?.name,
+            signal,
+          ),
+        { kind: "ai", label: "Stress-testing" },
+      )
+        .then((response: any) => {
+          const assistantMsg = createMessage(
+            "assistant",
+            response.content,
+            response.structuredData,
+          );
+          setSession((prev) => ({
+            ...prev,
+            messages: [...prev.messages, assistantMsg],
+            updatedAt: Date.now(),
+          }));
+        })
+        .catch((e) => {
+          if (isCancelError(e)) return;
+          Alert.alert(
+            "Devil's Advocate",
+            e instanceof Error ? e.message : "Something went wrong. Please try again.",
+          );
+        })
+        .finally(() => setIsLoading(false));
     },
-    [],
-  );
-
-  const handleRenameFile = useCallback(
-    async (filename: string) => {
-      if (!attachedDoc || !filename) return;
-      try {
-        // 1. Sanitize: strip chars illegal on Android/iOS/Windows, trim whitespace
-        const sanitized = filename
-          .replace(/[<>:"/\\|?*\x00-\x1F]/g, "_")
-          .trim()
-          .replace(/[._]+$/, ""); // strip trailing dots/underscores
-        if (!sanitized) {
-          Alert.alert("Rename", "The suggested filename is invalid.");
-          return;
-        }
-
-        // 2. Preserve the original file extension when the suggestion lacks one
-        const origExt = attachedDoc.name.includes(".")
-          ? attachedDoc.name.substring(attachedDoc.name.lastIndexOf("."))
-          : "";
-        const withExt =
-          origExt &&
-          !sanitized.toLowerCase().endsWith(origExt.toLowerCase())
-            ? `${sanitized}${origExt}`
-            : sanitized;
-
-        // 3. Auto-resolve duplicate names in the file index
-        const { getFileByUri, upsertFileRecord, loadFileIndex } =
-          await import("@/services/fileIndexService");
-
-        const allFiles = await loadFileIndex();
-        let finalName = withExt;
-        const baseNoExt = withExt.includes(".")
-          ? withExt.substring(0, withExt.lastIndexOf("."))
-          : withExt;
-        const ext = withExt.includes(".")
-          ? withExt.substring(withExt.lastIndexOf("."))
-          : "";
-
-        let counter = 1;
-        while (
-          allFiles.some(
-            (f) =>
-              f.name.toLowerCase() === finalName.toLowerCase() &&
-              f.uri !== attachedDoc.uri,
-          )
-        ) {
-          finalName = `${baseNoExt} (${counter})${ext}`;
-          if (++counter > 99) break;
-        }
-
-        // 4. Update (or create) the file index record with the new display name.
-        //    The URI is unchanged — we're renaming the index entry, not the
-        //    underlying content:// or file:// resource.
-        await upsertFileRecord({
-          uri: attachedDoc.uri,
-          name: finalName,
-          mimeType: attachedDoc.mimeType,
-          size: attachedDoc.size,
-          source: "imported",
-        });
-
-        // 5. Reflect the new name in the current AI session
-        setAttachedDoc((prev) => (prev ? { ...prev, name: finalName } : prev));
-        setSmartFolderToast(`Renamed to "${finalName}"`);
-      } catch (e: any) {
-        Alert.alert(
-          "Rename failed",
-          e?.message || "Could not rename the file. Please try again.",
-        );
-      }
-    },
-    [attachedDoc],
+    [isLoading, docText, contextDoc, contextDocText],
   );
 
   // Lightweight in-screen toast for smart-folder confirmations
@@ -1376,80 +1443,6 @@ export default function AIScreen() {
     const timer = setTimeout(() => setSmartFolderToast(null), 2400);
     return () => clearTimeout(timer);
   }, [smartFolderToast]);
-
-  // Smart Folder integration: classify result → create-or-find folder by name,
-  // ensure the attached file exists in the unified file index, then map the
-  // file to the folder so it shows up in the Folders screen immediately.
-  const handleMoveToFolder = useCallback(
-    async (folderName: string) => {
-      if (!attachedDoc || !folderName) return;
-      try {
-        const [
-          { getAllFolders, createFolder, moveFileToFolder, FOLDER_COLORS },
-          { upsertFileRecord, getFileByUri },
-          { getAllFiles: getLegacyFiles },
-        ] = await Promise.all([
-          import("@/services/folderService"),
-          import("@/services/fileIndexService"),
-          import("@/services/fileService"),
-        ]);
-
-        // 1) Find or auto-create the smart folder at the root
-        const allFolders = await getAllFolders();
-        const target =
-          allFolders.find(
-            (f) =>
-              f.parentId === null &&
-              f.name.toLowerCase() === folderName.toLowerCase(),
-          ) ||
-          (await createFolder(
-            folderName,
-            null,
-            FOLDER_COLORS[Math.floor(Math.random() * FOLDER_COLORS.length)],
-          ));
-
-        // 2) Determine the file ID to use for the folder mapping.
-        //    The Folders screen uses the legacy fileService ID for legacy files,
-        //    so we must check the legacy store first. Only fall back to the
-        //    unified fileIndexService if the file is not in the legacy store.
-        const legacyFiles = await getLegacyFiles();
-        const legacyFile = legacyFiles.find((f) => f.uri === attachedDoc.uri);
-
-        let fileId: string;
-        if (legacyFile) {
-          fileId = legacyFile.id;
-        } else {
-          let record = await getFileByUri(attachedDoc.uri);
-          if (!record) {
-            record = await upsertFileRecord({
-              uri: attachedDoc.uri,
-              name: attachedDoc.name,
-              mimeType: attachedDoc.mimeType,
-              size: attachedDoc.size,
-              source: "imported",
-            });
-          }
-          fileId = record.id;
-        }
-
-        // 3) Add the file to the folder (creates the file → folder mapping)
-        await moveFileToFolder(fileId, target.id);
-
-        setSmartFolderToast(`Added to "${target.name}" folder`);
-      } catch (e: any) {
-        Alert.alert(
-          "Smart Folder",
-          `Could not add to folder: ${e?.message || "Unknown error"}`,
-        );
-      }
-    },
-    [attachedDoc],
-  );
-
-  const [autoSortEnabled, setAutoSortEnabled] = useState(false);
-  const handleToggleAutoSort = useCallback((enabled: boolean) => {
-    setAutoSortEnabled(enabled);
-  }, []);
 
   const handleExport = useCallback(() => {
     Alert.alert("Export", "Exporting current output (wire to your share/export flow).");
@@ -1464,12 +1457,12 @@ export default function AIScreen() {
       "explain": "Explain",
       "summarize": "Summarize",
       "translate": "Translate",
-      "extract-text": "Extract Text",
+      "devils-advocate": "Devil's Advocate",
+      "narrative-arc": "Narrative Arc",
       "generate-document": "Generate",
       "analyze": "Analyze",
       "tasks": "Tasks",
       "highlight": "Highlights",
-      "classify": "Classify",
       "chat": "Chat",
       "chat-with-document": "Chat",
       "quiz": "Quiz",
@@ -1487,18 +1480,6 @@ export default function AIScreen() {
 
   const handleExtractTasks = useCallback(() => {
     setActiveAction("tasks");
-  }, []);
-
-  const handleExplainDocParagraph = useCallback((text: string) => {
-    if (!text) return;
-    setActiveAction("explain");
-    setInputText(text.length > 2000 ? text.slice(0, 2000) : text);
-  }, []);
-
-  const handleSummarizeDocParagraph = useCallback((text: string) => {
-    if (!text) return;
-    setActiveAction("summarize");
-    setInputText(text.length > 2000 ? text.slice(0, 2000) : text);
   }, []);
 
   // ── Highlight-specific handlers ─────────────────────────────────────────
@@ -1650,16 +1631,10 @@ export default function AIScreen() {
         onAddAllToTodos={handleAddAllToTodos}
         onSourceTap={handleSourceTap}
         onAskMore={handleAskMore}
-        onConvertToEditable={handleConvertToEditable}
-        onRenameFile={handleRenameFile}
-        onMoveToFolder={handleMoveToFolder}
-        onToggleAutoSort={handleToggleAutoSort}
-        autoSortEnabled={autoSortEnabled}
         onExport={handleExport}
         onAddToNotes={handleAddToNotes}
         onExtractTasks={handleExtractTasks}
-        onExplainDocParagraph={handleExplainDocParagraph}
-        onSummarizeDocParagraph={handleSummarizeDocParagraph}
+        onRerunWithRole={handleRerunWithRole}
         onJumpToHighlight={handleJumpToHighlight}
         onConvertHighlightToTask={handleConvertHighlightToTask}
         onAddHighlightToNotes={handleAddHighlightToNotes}
@@ -1675,16 +1650,10 @@ export default function AIScreen() {
       handleAddAllToTodos,
       handleSourceTap,
       handleAskMore,
-      handleConvertToEditable,
-      handleRenameFile,
-      handleMoveToFolder,
-      handleToggleAutoSort,
-      autoSortEnabled,
       handleExport,
       handleAddToNotes,
       handleExtractTasks,
-      handleExplainDocParagraph,
-      handleSummarizeDocParagraph,
+      handleRerunWithRole,
       handleJumpToHighlight,
       handleConvertHighlightToTask,
       handleAddHighlightToNotes,
@@ -1874,6 +1843,106 @@ export default function AIScreen() {
               >
                 <X size={16} color={t.textTertiary} />
               </TouchableOpacity>
+            </View>
+          )}
+
+          {/* ─── Analysis controls (Devil's Advocate + Narrative Arc) ── */}
+          {(activeAction === "devils-advocate" ||
+            activeAction === "narrative-arc") && (
+            <View style={styles.analysisControls}>
+              {/* Challenger role selector — Devil's Advocate only */}
+              {activeAction === "devils-advocate" && (
+                <View>
+                  <Text style={[styles.analysisLabel, { color: t.textTertiary }]}>
+                    WHO WILL READ THIS?
+                  </Text>
+                  <ScrollView
+                    horizontal
+                    showsHorizontalScrollIndicator={false}
+                    contentContainerStyle={styles.rolePillsRow}
+                  >
+                    {CHALLENGER_ROLES.map((r) => {
+                      const active = challengerRole === r.key;
+                      return (
+                        <TouchableOpacity
+                          key={r.key}
+                          onPress={() => setChallengerRole(r.key)}
+                          activeOpacity={0.8}
+                          style={[
+                            styles.rolePill,
+                            {
+                              backgroundColor: active
+                                ? "#DC2626"
+                                : mode === "dark"
+                                  ? "#1E293B"
+                                  : "#F1F5F9",
+                              borderColor: active ? "#DC2626" : t.border,
+                            },
+                          ]}
+                        >
+                          <Text
+                            style={[
+                              styles.rolePillText,
+                              { color: active ? "#FFF" : t.textSecondary },
+                            ]}
+                          >
+                            {r.label}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </ScrollView>
+                </View>
+              )}
+
+              {/* Optional context document */}
+              {contextDoc ? (
+                <View
+                  style={[
+                    styles.contextChip,
+                    {
+                      backgroundColor: mode === "dark" ? "#0F172A" : "#EFF6FF",
+                      borderColor: mode === "dark" ? "#334155" : "#BFDBFE",
+                    },
+                  ]}
+                >
+                  <Layers size={14} color="#0EA5E9" />
+                  <Text
+                    style={[styles.contextChipText, { color: t.text }]}
+                    numberOfLines={1}
+                  >
+                    Context: {contextDoc.name}
+                  </Text>
+                  {isExtractingContextDoc ? (
+                    <ActivityIndicator size="small" color="#0EA5E9" />
+                  ) : null}
+                  <TouchableOpacity
+                    onPress={handleRemoveContextDoc}
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  >
+                    <X size={14} color={t.textTertiary} />
+                  </TouchableOpacity>
+                </View>
+              ) : (
+                <TouchableOpacity
+                  onPress={handleAttachContextDoc}
+                  activeOpacity={0.75}
+                  style={[
+                    styles.contextAddBtn,
+                    {
+                      borderColor: t.border,
+                      backgroundColor: mode === "dark" ? "#0F172A" : "#F8FAFC",
+                    },
+                  ]}
+                >
+                  <Plus size={14} color={t.textSecondary} />
+                  <Text style={[styles.contextAddText, { color: t.textSecondary }]}>
+                    {activeAction === "devils-advocate"
+                      ? "Add context (RFP, competitor doc…)"
+                      : "Compare against an RFP (optional)"}
+                  </Text>
+                </TouchableOpacity>
+              )}
             </View>
           )}
 
@@ -2531,6 +2600,62 @@ const styles = StyleSheet.create({
   },
   docBarName: {
     flex: 1,
+    fontSize: 12.5,
+    fontWeight: "600",
+  },
+  // ─── Analysis controls (Devil's Advocate + Narrative Arc) ───
+  analysisControls: {
+    marginTop: 4,
+    marginBottom: 6,
+    gap: 8,
+  },
+  analysisLabel: {
+    fontSize: 10,
+    fontWeight: "700",
+    letterSpacing: 0.6,
+    marginBottom: 6,
+  },
+  rolePillsRow: {
+    flexDirection: "row",
+    gap: 6,
+    paddingRight: 8,
+  },
+  rolePill: {
+    paddingHorizontal: 11,
+    paddingVertical: 6,
+    borderRadius: 14,
+    borderWidth: 1,
+  },
+  rolePillText: {
+    fontSize: 11.5,
+    fontWeight: "600",
+  },
+  contextChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    borderRadius: 10,
+    borderWidth: 1,
+    minHeight: 42,
+  },
+  contextChipText: {
+    flex: 1,
+    fontSize: 12.5,
+    fontWeight: "600",
+  },
+  contextAddBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    borderRadius: 10,
+    borderWidth: 1,
+    alignSelf: "flex-start",
+  },
+  contextAddText: {
     fontSize: 12.5,
     fontWeight: "600",
   },

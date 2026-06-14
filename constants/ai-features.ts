@@ -21,10 +21,10 @@ export const aiFeatures = [
     color: "#9333EA",
   },
   {
-    id: "extract-text",
-    name: "Extract Text",
-    description: "Pull readable text from PDFs",
-    color: "#059669",
+    id: "devils-advocate",
+    name: "Devil's Advocate",
+    description: "The hardest objections your audience will raise",
+    color: "#DC2626",
   },
   {
     id: "analyze",
@@ -45,10 +45,10 @@ export const aiFeatures = [
     color: "#14B8A6",
   },
   {
-    id: "classify",
-    name: "Classify",
-    description: "Detect type & smart rename",
-    color: "#F97316",
+    id: "narrative-arc",
+    name: "Narrative Arc",
+    description: "Does your story flow or fall apart?",
+    color: "#0EA5E9",
   },
   {
     id: "highlight",

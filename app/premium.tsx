@@ -662,11 +662,6 @@ const styles = StyleSheet.create({
 
   /* Header */
   headerContainer: {
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.12,
-    shadowRadius: 16,
-    elevation: 8,
     zIndex: 10,
   },
   header: {

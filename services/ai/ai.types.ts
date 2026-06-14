@@ -7,13 +7,13 @@ export type AIAction =
   | "chat"
   | "translate"
   | "summarize"
-  | "extract-text"
   | "analyze"
   | "tasks"
   | "fill-form"
   | "generate-document"
   | "chat-with-document"
-  | "classify"
+  | "devils-advocate"
+  | "narrative-arc"
   | "highlight"
   | "explain"
   | "quiz";
@@ -96,10 +96,146 @@ export interface AIChatRequest {
   signal?: AbortSignal;
 }
 
-export interface AIClassifyRequest {
+// ─── Devil's Advocate ────────────────────────────────────────────────────────
+
+/** Who will scrutinize the document. "auto" lets the backend infer from type. */
+export type ChallengerRole =
+  | "auto"
+  | "investor"
+  | "client"
+  | "procurement"
+  | "peer-reviewer"
+  | "opposing-counsel"
+  | "stakeholder"
+  | "cfo"
+  | "evaluation-committee"
+  | "custom";
+
+/** Selectable challengers shown in the "Who will read this?" picker. */
+export const CHALLENGER_ROLES: { key: ChallengerRole; label: string }[] = [
+  { key: "auto", label: "Auto" },
+  { key: "investor", label: "Investor" },
+  { key: "client", label: "Client" },
+  { key: "procurement", label: "Procurement" },
+  { key: "peer-reviewer", label: "Peer Reviewer" },
+  { key: "opposing-counsel", label: "Opposing Counsel" },
+  { key: "cfo", label: "CFO" },
+  { key: "stakeholder", label: "Stakeholder" },
+  { key: "evaluation-committee", label: "Evaluation Cmte" },
+];
+
+export interface AIDevilsAdvocateRequest {
   text: string;
-  filename?: string;
+  documentName?: string;
+  /** Auto-inferred challenger unless the user overrides it. */
+  role?: ChallengerRole;
+  /** Free-text role when role === "custom". */
+  customRole?: string;
+  /** Optional second context document (RFP, competitor doc, rejection letter…). */
+  contextText?: string;
+  contextName?: string;
   signal?: AbortSignal;
+}
+
+export type DocFormat = "pptx" | "docx" | "pdf";
+
+export interface AINarrativeArcRequest {
+  text: string;
+  documentName?: string;
+  /** Drives the expected structure + whether reorder is actionable. */
+  format?: DocFormat;
+  /** Optional RFP/context document for cross-document section coverage. */
+  contextText?: string;
+  contextName?: string;
+  signal?: AbortSignal;
+}
+
+// ─── Devil's Advocate structured output ───────────────────────────────────────
+
+export type ObjectionSeverity = "critical" | "high" | "medium";
+
+export interface Objection {
+  title: string;
+  detail?: string;
+  severity?: ObjectionSeverity;
+  /** e.g. "Slide 7" / "Section 3" / "Clause 4.2". */
+  reference?: string;
+}
+
+export interface BlindSpot {
+  text: string;
+  why?: string;
+}
+
+export interface FormatExtra {
+  label: string;
+  detail: string;
+  /** Where it applies, e.g. "after slide 7". */
+  location?: string;
+}
+
+export interface GroundedObjection {
+  claim: string;
+  evidence: string;
+  /** Citation into the context document, e.g. "page 12". */
+  source?: string;
+}
+
+export type CoverageStatus = "covered" | "missing" | "partial";
+
+export interface RfpCriterion {
+  criterion: string;
+  status: CoverageStatus;
+  note?: string;
+}
+
+export interface DevilsAdvocateData {
+  __kind: "devils-advocate";
+  /** Human label for the inferred/selected challenger, e.g. "Skeptical Investor". */
+  detectedRole: string;
+  roleKey: ChallengerRole;
+  documentType?: string;
+  killerObjections: Objection[];
+  secondaryChallenges: Objection[];
+  blindSpots: BlindSpot[];
+  formatExtras?: FormatExtra[];
+  groundedObjections?: GroundedObjection[];
+  rfpCoverage?: RfpCriterion[];
+}
+
+// ─── Narrative Arc structured output ──────────────────────────────────────────
+
+export type ArcVerdict = "strong" | "weak" | "broken";
+export type ArcSectionStatus = "ok" | "misplaced" | "missing" | "extra";
+
+export interface ArcSection {
+  title: string;
+  index: number;
+  /** The structural role this section plays, e.g. "Problem", "Proof". */
+  role?: string;
+  status: ArcSectionStatus;
+}
+
+export interface ReorderStep {
+  instruction: string;
+  from?: number;
+  to?: number;
+}
+
+export interface NarrativeArcData {
+  __kind: "narrative-arc";
+  verdict: ArcVerdict;
+  verdictLine: string;
+  detectedType: string;
+  format: DocFormat;
+  diagnosis: string;
+  /** The ideal arc for the detected type, e.g. ["Problem","Agitate","Solution","Proof","CTA"]. */
+  idealStructure?: string[];
+  detectedSections: ArcSection[];
+  reorder: ReorderStep[];
+  rfpCoverage?: RfpCriterion[];
+  /** PPTX/DOCX are reorderable; PDF is recommendations-only. */
+  editable: boolean;
 }
 
 export interface AIHighlightRequest {
@@ -341,15 +477,6 @@ export const AI_FEATURES: AIFeatureMeta[] = [
     inputPlaceholder: "Paste text or attach file...",
   },
   {
-    id: "extract-text",
-    name: "Extract Text",
-    description: "Pull readable text from PDFs",
-    color: "#059669",
-    icon: "file-text",
-    requiresDocument: true,
-    inputPlaceholder: "Attach a PDF to extract text...",
-  },
-  {
     id: "analyze",
     name: "Analyze",
     description: "Deep analysis & insights",
@@ -377,13 +504,22 @@ export const AI_FEATURES: AIFeatureMeta[] = [
     inputPlaceholder: "Describe the data to fill or paste source text...",
   },
   {
-    id: "classify",
-    name: "Classify",
-    description: "Detect document type & suggest filename",
-    color: "#F97316",
-    icon: "scan-search",
+    id: "devils-advocate",
+    name: "Devil's Advocate",
+    description: "Surfaces the hardest objections your audience will raise — grounded in what you wrote",
+    color: "#DC2626",
+    icon: "scale",
     requiresDocument: true,
-    inputPlaceholder: "Attach a document to classify...",
+    inputPlaceholder: "Attach a file or deck to stress-test...",
+  },
+  {
+    id: "narrative-arc",
+    name: "Narrative Arc",
+    description: "Checks whether your slides or sections flow as a story, and suggests a reorder",
+    color: "#0EA5E9",
+    icon: "waypoints",
+    requiresDocument: true,
+    inputPlaceholder: "Attach a file or deck to check the arc...",
   },
   {
     id: "highlight",

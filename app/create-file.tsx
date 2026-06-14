@@ -213,6 +213,8 @@ const CreationCard = React.memo(function CreationCard({
   theme,
   isProcessing,
 }: CardProps) {
+  const { mode } = useTheme();
+  const containerBorderColor = mode === "dark" ? "rgba(255,255,255,0.35)" : "#B0B0B0";
   const scaleAnim = useRef(new Animated.Value(1)).current;
 
   const handlePressIn = useCallback(() => {
@@ -252,7 +254,7 @@ const CreationCard = React.memo(function CreationCard({
           styles.card,
           {
             backgroundColor: theme.card,
-            borderColor: theme.borderLight,
+            borderColor: containerBorderColor,
           },
         ]}
       >
@@ -307,7 +309,8 @@ const QuickAction = React.memo(function QuickAction({
 // ─── Main Screen ────────────────────────────────────────────────────────────
 export default function CreateFileScreen() {
   const router = useRouter();
-  const { colors: t } = useTheme();
+  const { colors: t, mode } = useTheme();
+  const containerBorderColor = mode === "dark" ? "rgba(255,255,255,0.35)" : "#B0B0B0";
   const insets = useSafeAreaInsets();
   const [isProcessing, setIsProcessing] = useState(false);
   const { requestPrime, primer } = usePermissionPrimer();
@@ -519,7 +522,7 @@ export default function CreateFileScreen() {
       {/* ── Processing Overlay ── */}
       {isProcessing && (
         <View style={styles.overlay}>
-          <View style={[styles.overlayCard, { backgroundColor: t.card }]}>
+          <View style={[styles.overlayCard, { backgroundColor: t.card, borderColor: containerBorderColor }]}>
             <ActivityIndicator size="large" color={t.primary} />
             <Text style={[styles.overlayText, { color: t.text }]}>
               Creating file...
@@ -602,11 +605,6 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     padding: 16,
     borderWidth: 1,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.06,
-    shadowRadius: 8,
-    elevation: 2,
   },
   cardIconBox: {
     width: 52,
@@ -634,11 +632,6 @@ const styles = StyleSheet.create({
     right: 0,
     bottom: 0,
     borderTopWidth: StyleSheet.hairlineWidth,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: -3 },
-    shadowOpacity: 0.08,
-    shadowRadius: 12,
-    elevation: 10,
   },
   bottomBarContent: {
     flexDirection: "row",
@@ -679,11 +672,7 @@ const styles = StyleSheet.create({
     borderRadius: 24,
     padding: 36,
     alignItems: "center",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.2,
-    shadowRadius: 24,
-    elevation: 12,
+    borderWidth: 1,
   },
   overlayText: {
     marginTop: 16,

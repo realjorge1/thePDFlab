@@ -14,13 +14,42 @@ import * as FileSystem from "expo-file-system/legacy";
 import { API_BASE_URL } from "@/config/api";
 import type { PptxRenderServerResult } from "../types/pptxViewer";
 
-const UPLOAD_TIMEOUT_MS = 180_000; // 3 min — LibreOffice cold start can be slow
+const UPLOAD_TIMEOUT_MS = 180_000; // 3 min — covers cold start + serialized queue
 const DOWNLOAD_TIMEOUT_MS = 60_000;
 
 export type RenderProgress =
   | { stage: "uploading" }
   | { stage: "rendering" }
   | { stage: "downloading" };
+
+// Server error body: { error, code, details, hint? }. Codes:
+//   503 ENGINE_UNAVAILABLE — renderer down; 503 CONVERSION_FAILED — this deck
+//   failed or timed out; 400 INVALID_INPUT — bad extension / empty / >100 MB.
+// The server never silently degrades to a text-only PDF anymore.
+export type PptxErrorCode =
+  | "ENGINE_UNAVAILABLE"
+  | "CONVERSION_FAILED"
+  | "INVALID_INPUT"
+  | string;
+
+export class PptxConversionError extends Error {
+  status: number;
+  code?: PptxErrorCode;
+  hint?: string;
+
+  constructor(
+    message: string,
+    status: number,
+    code?: PptxErrorCode,
+    hint?: string,
+  ) {
+    super(message);
+    this.name = "PptxConversionError";
+    this.status = status;
+    this.code = code;
+    this.hint = hint;
+  }
+}
 
 function sanitize(name: string): string {
   return name.replace(/[^a-zA-Z0-9._-]/g, "_");
@@ -61,15 +90,40 @@ async function postPptxForConversion(
 
     if (!response.ok) {
       const text = await response.text().catch(() => "");
-      let detail = text.slice(0, 300);
+      let body: {
+        error?: string;
+        code?: string;
+        details?: string;
+        hint?: string;
+      } = {};
       try {
-        const json = JSON.parse(text);
-        detail = json.details || json.error || detail;
+        body = JSON.parse(text);
       } catch {
         // not JSON
       }
-      throw new Error(
-        `Could not convert presentation (${response.status}): ${detail}`,
+
+      let message: string;
+      if (response.status === 503) {
+        message =
+          body.code === "CONVERSION_FAILED"
+            ? "This presentation could not be converted right now. Please try again later."
+            : "Presentation conversion is temporarily unavailable. Please try again later.";
+      } else if (response.status === 400) {
+        message =
+          body.details ||
+          body.error ||
+          "This file can't be converted. Use a .pptx or .ppt file under 100 MB.";
+      } else {
+        const detail = body.details || body.error || text.slice(0, 300);
+        message = `Could not convert presentation (${response.status})${
+          detail ? `: ${detail}` : ""
+        }`;
+      }
+      throw new PptxConversionError(
+        message,
+        response.status,
+        body.code,
+        body.hint,
       );
     }
 
@@ -110,7 +164,10 @@ export async function downloadPdfToCache(
   try {
     const result = await FileSystem.downloadAsync(fullUrl, targetUri);
     if (result.status !== 200) {
-      throw new Error(`PDF download failed with status ${result.status}`);
+      throw new PptxConversionError(
+        `PDF download failed with status ${result.status}`,
+        result.status,
+      );
     }
     return result.uri;
   } finally {
@@ -129,32 +186,68 @@ export async function uploadConvertAndDownload(
   fileName: string,
   onProgress?: (p: RenderProgress) => void,
 ): Promise<{ server: PptxRenderServerResult; localPdfUri: string }> {
-  const server = await postPptxForConversion(fileUri, fileName, onProgress);
-  const localPdfUri = await downloadPdfToCache(
-    server.streamUrl,
-    server.downloadName,
-    onProgress,
-  );
-  return { server, localPdfUri };
+  let server = await postPptxForConversion(fileUri, fileName, onProgress);
+  try {
+    const localPdfUri = await downloadPdfToCache(
+      server.streamUrl,
+      server.downloadName,
+      onProgress,
+    );
+    return { server, localPdfUri };
+  } catch (err) {
+    // 404 on the stream URL means the rendered output expired server-side
+    // (outputs are kept ~1 hour). Re-convert once — uploads are cached by
+    // file hash, so this is cheap — and retry the download.
+    if (err instanceof PptxConversionError && err.status === 404) {
+      server = await postPptxForConversion(fileUri, fileName, onProgress);
+      const localPdfUri = await downloadPdfToCache(
+        server.streamUrl,
+        server.downloadName,
+        onProgress,
+      );
+      return { server, localPdfUri };
+    }
+    throw err;
+  }
 }
 
 /**
  * Health check against the backend LibreOffice renderer.
+ *
+ * Gate on `ok` (true only when the body reports status === "ok"). `engine`
+ * carries the renderer version (e.g. "LibreOffice 7.4.7.2") for diagnostics.
+ * Doubles as a warm-up ping for the renderer on Render's free tier.
  */
-export async function isPptxRendererAvailable(): Promise<boolean> {
+export interface PptxRendererHealth {
+  ok: boolean;
+  engine?: string;
+}
+
+export async function getPptxRendererHealth(
+  timeoutMs = 8000,
+): Promise<PptxRendererHealth> {
   try {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 5000);
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
       const res = await fetch(`${API_BASE_URL}/pptx/health`, {
         method: "GET",
         signal: controller.signal,
       });
-      return res.ok;
+      if (!res.ok) return { ok: false };
+      const body = (await res.json().catch(() => null)) as {
+        status?: string;
+        engine?: string;
+      } | null;
+      return { ok: body?.status === "ok", engine: body?.engine };
     } finally {
       clearTimeout(timer);
     }
   } catch {
-    return false;
+    return { ok: false };
   }
+}
+
+export async function isPptxRendererAvailable(): Promise<boolean> {
+  return (await getPptxRendererHealth()).ok;
 }

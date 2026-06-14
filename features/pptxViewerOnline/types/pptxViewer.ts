@@ -16,8 +16,9 @@ export type RenderStage =
       sizeBytes: number;
     }
   | {
-      // On-device rendered fallback (no backend). `html` is a fully
-      // self-contained page produced by the offline PPTX parser.
+      // On-device rendered basic preview (no backend). `html` is a fully
+      // self-contained page produced by the offline PPTX parser. Only entered
+      // via the user-tapped "Show basic preview" action — never automatically.
       phase: "ready_offline";
       html: string;
       totalSlides: number;
@@ -27,6 +28,9 @@ export type RenderStage =
       message: string;
       retryable: boolean;
       offlineSuspected: boolean;
+      // Whether the error screen should offer the low-fidelity on-device
+      // preview as an explicit escape hatch.
+      canBasicPreview: boolean;
     };
 
 export interface PptxRenderServerResult {

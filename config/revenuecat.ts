@@ -11,4 +11,4 @@ export const PREMIUM_ENTITLEMENT_ID = "premium";
 // regardless of the user's real subscription status. This bypasses all
 // paywalls and the AI premium guard so upgrades can be tested end-to-end.
 // SET BACK TO false BEFORE RELEASE.
-export const FORCE_PREMIUM_UNLOCK = false;
+export const FORCE_PREMIUM_UNLOCK = true;

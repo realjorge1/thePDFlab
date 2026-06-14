@@ -1,7 +1,8 @@
 // ============================================================================
 // SlideStrip — horizontal scrollable page indicator. Lets the user jump to
 // any slide by tapping. Pure JS (no native thumbnail rendering) so it stays
-// lightweight and avoids spinning up N Pdf instances.
+// lightweight and avoids spinning up N Pdf instances. Theme-aware to match
+// the signature viewer chrome.
 // ============================================================================
 
 import React, { useEffect, useRef } from "react";
@@ -13,7 +14,9 @@ import {
   View,
 } from "react-native";
 
-const ACCENT = "#6366F1";
+import { Palette } from "@/services/document-manager";
+import { useTheme } from "@/services/ThemeProvider";
+
 const ITEM_WIDTH = 44;
 const ITEM_GAP = 8;
 
@@ -25,6 +28,7 @@ interface Props {
 
 export function SlideStrip({ totalPages, currentPage, onJump }: Props) {
   const scrollRef = useRef<ScrollView | null>(null);
+  const { colors: t } = useTheme();
 
   useEffect(() => {
     if (!scrollRef.current || totalPages <= 1) return;
@@ -38,7 +42,15 @@ export function SlideStrip({ totalPages, currentPage, onJump }: Props) {
   if (totalPages <= 1) return null;
 
   return (
-    <View style={styles.wrap}>
+    <View
+      style={[
+        styles.wrap,
+        {
+          backgroundColor: t.card,
+          borderTopColor: t.borderLight,
+        },
+      ]}
+    >
       <ScrollView
         ref={scrollRef}
         horizontal
@@ -50,11 +62,21 @@ export function SlideStrip({ totalPages, currentPage, onJump }: Props) {
           return (
             <TouchableOpacity
               key={page}
-              style={[styles.item, active && styles.itemActive]}
+              style={[
+                styles.item,
+                { backgroundColor: t.backgroundSecondary },
+                active && styles.itemActive,
+              ]}
               onPress={() => onJump(page)}
               hitSlop={4}
             >
-              <Text style={[styles.label, active && styles.labelActive]}>
+              <Text
+                style={[
+                  styles.label,
+                  { color: t.textSecondary },
+                  active && styles.labelActive,
+                ]}
+              >
                 {page}
               </Text>
             </TouchableOpacity>
@@ -67,9 +89,7 @@ export function SlideStrip({ totalPages, currentPage, onJump }: Props) {
 
 const styles = StyleSheet.create({
   wrap: {
-    backgroundColor: "rgba(0,0,0,0.6)",
     borderTopWidth: 1,
-    borderTopColor: "rgba(255,255,255,0.08)",
   },
   content: {
     paddingHorizontal: 12,
@@ -80,15 +100,14 @@ const styles = StyleSheet.create({
     width: ITEM_WIDTH,
     height: 32,
     borderRadius: 8,
-    backgroundColor: "rgba(255,255,255,0.08)",
     alignItems: "center",
     justifyContent: "center",
   },
-  itemActive: { backgroundColor: ACCENT },
+  itemActive: { backgroundColor: Palette.primary[500] },
   label: {
-    color: "rgba(255,255,255,0.6)",
     fontSize: 13,
     fontWeight: "600",
+    fontVariant: ["tabular-nums"],
   },
   labelActive: { color: "#FFFFFF" },
 });

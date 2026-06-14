@@ -8,5 +8,10 @@
 
 export { default as PptxViewerOnlineScreen } from "./screens/PptxViewerOnlineScreen";
 export { clearPptxCache, getCacheStats } from "./services/pptxCache";
-export { isPptxRendererAvailable } from "./services/pptxRenderClient";
+export {
+  getPptxRendererHealth,
+  isPptxRendererAvailable,
+  PptxConversionError,
+} from "./services/pptxRenderClient";
+export type { PptxRendererHealth } from "./services/pptxRenderClient";
 export type { RenderStage } from "./types/pptxViewer";

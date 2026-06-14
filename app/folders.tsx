@@ -18,7 +18,7 @@ import {
   showOpenFailedAlert,
   useQuickAccess,
 } from "@/services/document-manager";
-import { cleanFileName } from "@/services/safFolderSync";
+import { cleanFileName, syncSafFoldersToAppFolders } from "@/services/safFolderSync";
 import {
   addToFavorites,
   getFavorites,
@@ -118,6 +118,8 @@ const FolderFileActionSheetModal: React.FC<FolderFileActionSheetModalProps> = ({
   onFileInfo,
   onDelete,
 }) => {
+  const { mode: sheetMode } = useTheme();
+  const containerBorderColor = sheetMode === "dark" ? "rgba(255,255,255,0.35)" : "#B0B0B0";
   const visible = file !== null;
   const translateY = React.useRef(new Animated.Value(0)).current;
 
@@ -173,7 +175,7 @@ const FolderFileActionSheetModal: React.FC<FolderFileActionSheetModalProps> = ({
         <Animated.View
           style={[
             fs.sheet,
-            { backgroundColor: theme.card, transform: [{ translateY }] },
+            { backgroundColor: theme.card, borderColor: containerBorderColor, transform: [{ translateY }] },
           ]}
           onStartShouldSetResponder={() => true}
         >
@@ -326,11 +328,7 @@ const fs = StyleSheet.create({
     paddingHorizontal: 18,
     width: "100%",
     maxWidth: 440,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: -4 },
-    shadowOpacity: 0.18,
-    shadowRadius: 16,
-    elevation: 14,
+    borderWidth: 1,
   },
   grabArea: {
     paddingTop: 6,
@@ -407,6 +405,7 @@ type ViewMode = "list" | "grid";
 // ============================================================================
 export default function FoldersScreen() {
   const { colors: t, mode } = useTheme();
+  const containerBorderColor = mode === "dark" ? "rgba(255,255,255,0.35)" : "#B0B0B0";
 
   // ── Navigation state ────────────────────────────────────────────────────
   const [currentFolderId, setCurrentFolderId] = useState<string | null>(null);
@@ -527,7 +526,12 @@ export default function FoldersScreen() {
 
   useFocusEffect(
     useCallback(() => {
+      // Show current data immediately, then reconcile any SAF-imported folders
+      // (creates/populates app folders for connected device folders) and reload.
       loadData();
+      syncSafFoldersToAppFolders()
+        .then(() => loadData())
+        .catch(() => {});
     }, [loadData]),
   );
 
@@ -548,13 +552,22 @@ export default function FoldersScreen() {
       .sort((a, b) => a.name.localeCompare(b.name));
   }, [folders, currentFolderId]);
 
+  // Resolve a file's folder by its own id OR the stable `saf:<uri>` key the SAF
+  // sync uses. A SAF file gets a different unified-index id once it's opened, so
+  // matching on id alone would drop it from its folder after the first tap.
+  const folderIdForFile = useCallback(
+    (file: QuickAccessFile): string | undefined =>
+      fileFolderMap[file.id] ?? fileFolderMap[`saf:${file.uri}`],
+    [fileFolderMap],
+  );
+
   const currentFiles = useMemo(() => {
     // Root level shows only folders — no files
     if (currentFolderId === null) return [];
     return allFiles
-      .filter((file) => fileFolderMap[file.id] === currentFolderId)
+      .filter((file) => folderIdForFile(file) === currentFolderId)
       .sort((a, b) => b.lastOpenedAt - a.lastOpenedAt);
-  }, [allFiles, fileFolderMap, currentFolderId]);
+  }, [allFiles, folderIdForFile, currentFolderId]);
 
   const filteredSubfolders = useMemo(() => {
     if (!searchQuery.trim()) return currentSubfolders;
@@ -840,9 +853,9 @@ export default function FoldersScreen() {
   const availableFilesToAdd = useMemo(() => {
     if (!currentFolderId) return [];
     return allFiles
-      .filter((file) => fileFolderMap[file.id] !== currentFolderId)
+      .filter((file) => folderIdForFile(file) !== currentFolderId)
       .sort((a, b) => b.lastOpenedAt - a.lastOpenedAt);
-  }, [allFiles, fileFolderMap, currentFolderId]);
+  }, [allFiles, folderIdForFile, currentFolderId]);
 
   const filteredAddFiles = useMemo(() => {
     if (!addFilesSearch.trim()) return availableFilesToAdd;
@@ -1010,7 +1023,7 @@ export default function FoldersScreen() {
             s.gridCard,
             {
               backgroundColor: t.card,
-              borderColor: t.borderLight,
+              borderColor: containerBorderColor,
             },
           ]}
           onPress={() => handleNavigateToFolder(folder.id)}
@@ -1064,7 +1077,7 @@ export default function FoldersScreen() {
             s.gridCard,
             {
               backgroundColor: t.card,
-              borderColor: t.borderLight,
+              borderColor: containerBorderColor,
             },
           ]}
           onPress={() => handleFilePress(file)}
@@ -1249,7 +1262,7 @@ export default function FoldersScreen() {
           </Text>
           {currentFolderId ? (
             <TouchableOpacity
-              style={s.emptyButton}
+              style={[s.emptyButton, { borderColor: containerBorderColor }]}
               onPress={() => {
                 setAddFilesSearch("");
                 setAddFilesSelected(new Set());
@@ -1269,7 +1282,7 @@ export default function FoldersScreen() {
             </TouchableOpacity>
           ) : (
             <TouchableOpacity
-              style={s.emptyButton}
+              style={[s.emptyButton, { borderColor: containerBorderColor }]}
               onPress={() => {
                 setNewFolderName("");
                 setNewFolderColor(FOLDER_COLORS[0]);
@@ -1374,7 +1387,7 @@ export default function FoldersScreen() {
           }}
         >
           <View
-            style={[s.createModal, { backgroundColor: t.card }]}
+            style={[s.createModal, { backgroundColor: t.card, borderColor: containerBorderColor }]}
             onStartShouldSetResponder={() => true}
           >
             <Text style={[s.modalTitle, { color: t.text }]}>
@@ -1461,7 +1474,7 @@ export default function FoldersScreen() {
           onPress={() => setActionFolder(null)}
         >
           <View
-            style={[s.actionSheet, { backgroundColor: t.card }]}
+            style={[s.actionSheet, { backgroundColor: t.card, borderColor: containerBorderColor }]}
             onStartShouldSetResponder={() => true}
           >
             <View style={[s.actionHandle, { backgroundColor: t.border }]} />
@@ -1544,7 +1557,7 @@ export default function FoldersScreen() {
           onPress={() => setShowAddFiles(false)}
         >
           <View
-            style={[s.addFilesModal, { backgroundColor: t.card }]}
+            style={[s.addFilesModal, { backgroundColor: t.card, borderColor: containerBorderColor }]}
             onStartShouldSetResponder={() => true}
           >
             <Text style={[s.modalTitle, { color: t.text }]}>
@@ -1682,13 +1695,7 @@ export default function FoldersScreen() {
 const s = StyleSheet.create({
   container: { flex: 1 },
   // ── Header ──
-  headerContainer: {
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.15,
-    shadowRadius: 16,
-    elevation: 8,
-  },
+  headerContainer: {},
   header: {
     paddingHorizontal: 20,
     paddingTop: Platform.OS === "android" ? 20 : 16,
@@ -1836,11 +1843,6 @@ const s = StyleSheet.create({
     borderRadius: 14,
     borderWidth: 1,
     marginBottom: 8,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05,
-    shadowRadius: 8,
-    elevation: 2,
   },
   fileIcon: {
     width: 44,
@@ -1887,11 +1889,7 @@ const s = StyleSheet.create({
   emptyButton: {
     borderRadius: 16,
     overflow: "hidden",
-    shadowColor: colors.primary,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 4,
+    borderWidth: 1,
   },
   emptyButtonGradient: {
     flexDirection: "row",
@@ -1917,11 +1915,7 @@ const s = StyleSheet.create({
     padding: 24,
     width: SCREEN_WIDTH * 0.85,
     maxWidth: 400,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.25,
-    shadowRadius: 24,
-    elevation: 16,
+    borderWidth: 1,
   },
   modalTitle: {
     fontSize: 18,
@@ -1982,11 +1976,7 @@ const s = StyleSheet.create({
     marginBottom: 20,
     width: SCREEN_WIDTH * 0.7,
     maxWidth: 320,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.2,
-    shadowRadius: 16,
-    elevation: 12,
+    borderWidth: 1,
   },
   actionHandle: {
     width: 40,
@@ -2038,11 +2028,6 @@ const s = StyleSheet.create({
     marginBottom: 14,
     overflow: "hidden",
     borderWidth: 1,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.04,
-    shadowRadius: 4,
-    elevation: 1,
     paddingBottom: 6,
   },
   gridIconArea: {
@@ -2082,11 +2067,7 @@ const s = StyleSheet.create({
     width: SCREEN_WIDTH * 0.9,
     maxWidth: 420,
     maxHeight: "75%",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.25,
-    shadowRadius: 24,
-    elevation: 16,
+    borderWidth: 1,
   },
   addFilesSearchBar: {
     flexDirection: "row",

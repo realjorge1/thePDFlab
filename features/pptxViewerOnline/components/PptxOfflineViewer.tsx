@@ -6,12 +6,7 @@
 // API of PptxPdfViewer so the SlideStrip can drive it interchangeably.
 // ============================================================================
 
-import React, {
-  forwardRef,
-  useCallback,
-  useImperativeHandle,
-  useRef,
-} from "react";
+import React, { forwardRef, useImperativeHandle, useRef } from "react";
 import { StyleSheet } from "react-native";
 import { WebView, type WebViewMessageEvent } from "react-native-webview";
 
@@ -72,6 +67,6 @@ export const PptxOfflineViewer = forwardRef<PptxOfflineViewerHandle, Props>(
 const styles = StyleSheet.create({
   viewer: {
     flex: 1,
-    backgroundColor: "#111827",
+    backgroundColor: "#000000",
   },
 });

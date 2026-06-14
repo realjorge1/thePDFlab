@@ -12,6 +12,7 @@ import {
   TouchableOpacity,
   TextInput,
   StyleSheet,
+  Keyboard,
   KeyboardAvoidingView,
   Platform,
   ScrollView,
@@ -23,7 +24,6 @@ import {
   Animated,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useRouter } from 'expo-router';
 import { useTheme } from '@/services/ThemeProvider';
 import { AppHeaderContainer } from '@/components/AppHeaderContainer';
 import { GradientView } from '@/components/GradientView';
@@ -39,16 +39,13 @@ import {
   fieldsForLayout,
   type FieldId,
 } from '../../components/PPT/SlideFieldEditor';
-import { SlideLayout, ThemeId } from '../../types/ppt.types';
-import { saveFileToDevice, MIME_TYPES, UTI_TYPES } from '@/utils/file-save-utils';
+import { SlideLayout, ThemeId, PPTPresentation } from '../../types/ppt.types';
 import { markFileAsCreated } from '@/services/fileService';
 import {
   ArrowLeft,
   RotateCcw,
   RotateCw,
-  Download,
   Palette,
-  Play,
   Copy,
   ChevronLeft,
   ChevronRight,
@@ -78,16 +75,16 @@ const LAYOUTS: { id: SlideLayout; label: string; icon: string }[] = [
 interface PPTCreatorScreenProps {
   onGoBack?: () => void;
   initialThemeId?: ThemeId;
+  /** Pre-built deck to open in the editor (e.g. from Topic-to-deck). */
+  initialPresentation?: PPTPresentation;
 }
 
-export const PPTCreatorScreen: React.FC<PPTCreatorScreenProps> = ({ onGoBack, initialThemeId }) => {
+export const PPTCreatorScreen: React.FC<PPTCreatorScreenProps> = ({ onGoBack, initialThemeId, initialPresentation }) => {
   const { colors: t, mode } = useTheme();
-  const router = useRouter();
-  const editor = usePPTEditor(undefined, initialThemeId);
+  const editor = usePPTEditor(initialPresentation, initialThemeId);
   const exporter = useExportPPT();
   const [isCreating, setIsCreating] = useState(false);
   const [themeModalVisible, setThemeModalVisible] = useState(false);
-  const [isPreparingPresent, setIsPreparingPresent] = useState(false);
 
   const pptTheme = getTheme(editor.presentation.themeId);
   // Theme chip uses PPT theme color — gives a "pro" feel showing current theme
@@ -107,6 +104,48 @@ export const PPTCreatorScreen: React.FC<PPTCreatorScreenProps> = ({ onGoBack, in
     setActiveField(fields[0] ?? null);
     // Reset only when the slide or its layout changes, not on every keystroke.
   }, [selIdx, selectedSlide?.layout]);
+
+  // ── Keyboard-aware editing ──
+  // While typing: the thumbnail strip is hidden (frees ~88px so the canvas +
+  // composer both stay on screen) and the scroll view auto-seeks to keep the
+  // composer above the keyboard.
+  const [keyboardVisible, setKeyboardVisible] = useState(false);
+  const scrollRef = useRef<ScrollView>(null);
+  const editorY = useRef(0);
+
+  useEffect(() => {
+    const showEvt = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvt = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+    const show = Keyboard.addListener(showEvt, () => setKeyboardVisible(true));
+    const hide = Keyboard.addListener(hideEvt, () => setKeyboardVisible(false));
+    return () => {
+      show.remove();
+      hide.remove();
+    };
+  }, []);
+
+  const scrollToEditor = useCallback(() => {
+    // Small delay lets the keyboard animation start and layout settle first.
+    setTimeout(() => {
+      scrollRef.current?.scrollTo({
+        y: Math.max(0, editorY.current - 12),
+        animated: true,
+      });
+    }, 120);
+  }, []);
+
+  useEffect(() => {
+    if (keyboardVisible && activeField) scrollToEditor();
+  }, [keyboardVisible, activeField, scrollToEditor]);
+
+  // Tapping a slide region focuses that field AND brings the composer up.
+  const handleFieldFocus = useCallback(
+    (f: FieldId) => {
+      setActiveField(f);
+      scrollToEditor();
+    },
+    [scrollToEditor],
+  );
 
   // Subtle fade when switching slides — gives the canvas a "live" feel.
   const canvasOpacity = useRef(new Animated.Value(1)).current;
@@ -142,9 +181,11 @@ export const PPTCreatorScreen: React.FC<PPTCreatorScreenProps> = ({ onGoBack, in
           ? res.filePath
           : `file://${res.filePath}`;
         await markFileAsCreated(fileUri, title, 'pptx');
-        Alert.alert('PPT Created', 'Your PPT file has been created successfully!', [
-          { text: 'OK' },
-        ]);
+        Alert.alert(
+          'PPT Created',
+          'Your PPT file has been created successfully! Find it in your library.',
+          [{ text: 'OK' }],
+        );
       } else {
         Alert.alert('Error', res?.error ?? 'Failed to create presentation.');
       }
@@ -155,57 +196,6 @@ export const PPTCreatorScreen: React.FC<PPTCreatorScreenProps> = ({ onGoBack, in
       exporter.reset();
     }
   }, [editor.presentation, exporter, isCreating, resolveTitle]);
-
-  // ─── Present: export the live deck to a temp .pptx and open it in the
-  // high-fidelity /ppt-viewer (PDF render + offline HTML fallback). The
-  // native SlideCard renderer drops styling on round-trip, so we always
-  // view real files through the same pipeline used elsewhere in the app.
-  const handlePresent = useCallback(async () => {
-    if (isPreparingPresent) return;
-    const title = resolveTitle();
-    setIsPreparingPresent(true);
-    try {
-      const res = await exporter.exportPPTX({ ...editor.presentation, title });
-      if (res?.success && res.filePath) {
-        const uri = res.filePath.startsWith('file://')
-          ? res.filePath
-          : `file://${res.filePath}`;
-        router.push({
-          pathname: '/ppt-viewer',
-          params: {
-            uri: encodeURIComponent(uri),
-            name: title,
-          },
-        });
-      } else {
-        Alert.alert('Error', res?.error ?? 'Failed to prepare preview.');
-      }
-    } catch (e) {
-      Alert.alert('Error', e instanceof Error ? e.message : 'Failed to prepare preview.');
-    } finally {
-      setIsPreparingPresent(false);
-      exporter.reset();
-    }
-  }, [editor.presentation, exporter, isPreparingPresent, router, resolveTitle]);
-
-  // ─── Save to Device (generate silently → system share/save sheet) ──
-  const handleSaveToDevice = useCallback(async () => {
-    const title = resolveTitle();
-    const res = await exporter.exportPPTX({ ...editor.presentation, title });
-    if (res?.success && res.filePath) {
-      await saveFileToDevice({
-        sourceUri: res.filePath,
-        fileName: `${title}.pptx`,
-        mimeType: MIME_TYPES.PPTX,
-        uti: UTI_TYPES.PPTX,
-        dialogTitle: 'Save Presentation',
-      });
-      exporter.reset();
-    } else {
-      Alert.alert('Error', res?.error ?? 'Failed to generate presentation.');
-      exporter.reset();
-    }
-  }, [editor.presentation, exporter, resolveTitle]);
 
   // ─── Slide management ──
   // Adding a slide just inserts a fresh page after the current one and
@@ -312,7 +302,7 @@ export const PPTCreatorScreen: React.FC<PPTCreatorScreenProps> = ({ onGoBack, in
               </TouchableOpacity>
             </View>
 
-            {/* Row 2: Theme button · Present · Save to device */}
+            {/* Row 2: Theme button */}
             <View style={styles.headerRow2}>
               {/* Theme button — solid PPT theme color pill, clearly shows active theme */}
               <TouchableOpacity
@@ -324,33 +314,6 @@ export const PPTCreatorScreen: React.FC<PPTCreatorScreenProps> = ({ onGoBack, in
                 <View style={styles.themeBtnDot} />
                 <Text style={styles.themeBtnText}>{pptTheme.name}</Text>
               </TouchableOpacity>
-
-              <View style={styles.headerRow2Right}>
-                {/* "Present" — high-fidelity preview via /ppt-viewer */}
-                <TouchableOpacity
-                  style={[styles.gradientIconBtnSm, isPreparingPresent && { opacity: 0.6 }]}
-                  onPress={handlePresent}
-                  disabled={isPreparingPresent}
-                  hitSlop={6}
-                  activeOpacity={0.85}
-                >
-                  {isPreparingPresent ? (
-                    <ActivityIndicator size={12} color="#FFFFFF" />
-                  ) : (
-                    <Play size={14} color="#FFFFFF" strokeWidth={2.2} fill="#FFFFFF" />
-                  )}
-                </TouchableOpacity>
-
-                {/* "Save to Device" */}
-                <TouchableOpacity
-                  style={styles.gradientIconBtnSm}
-                  onPress={handleSaveToDevice}
-                  hitSlop={6}
-                  activeOpacity={0.85}
-                >
-                  <Download size={14} color="#FFFFFF" strokeWidth={2.2} />
-                </TouchableOpacity>
-              </View>
             </View>
           </GradientView>
         </AppHeaderContainer>
@@ -385,19 +348,22 @@ export const PPTCreatorScreen: React.FC<PPTCreatorScreenProps> = ({ onGoBack, in
 
         {/* ─── Main Editing Area ────────────────────── */}
         <ScrollView
+          ref={scrollRef}
           style={styles.flex}
           contentContainerStyle={styles.canvasArea}
           keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="none"
           showsVerticalScrollIndicator={false}
         >
-          {/* Interactive Slide Canvas — read-only preview, tap any region to edit */}
+          {/* Interactive Slide Canvas — WYSIWYG preview, tap any region to edit */}
           {selectedSlide ? (
             <Animated.View style={{ opacity: canvasOpacity, width: '100%', alignItems: 'center' }}>
               <InteractiveSlideCanvas
                 slide={selectedSlide}
                 theme={pptTheme}
                 activeField={activeField}
-                onFieldFocus={setActiveField}
+                onFieldFocus={handleFieldFocus}
+                slideNumber={selIdx + 1}
               />
             </Animated.View>
           ) : (
@@ -408,16 +374,23 @@ export const PPTCreatorScreen: React.FC<PPTCreatorScreenProps> = ({ onGoBack, in
 
           {/* Field editor drawer — comfortable composer for the active field */}
           {selectedSlide ? (
-            <SlideFieldEditor
-              slide={selectedSlide}
-              theme={pptTheme}
-              activeField={activeField}
-              onActiveFieldChange={setActiveField}
-              onChange={content =>
-                editor.updateSlideContent(editor.selectedSlideIndex, content)
-              }
-              accent={uiAccent}
-            />
+            <View
+              style={styles.editorWrap}
+              onLayout={e => {
+                editorY.current = e.nativeEvent.layout.y;
+              }}
+            >
+              <SlideFieldEditor
+                slide={selectedSlide}
+                theme={pptTheme}
+                activeField={activeField}
+                onActiveFieldChange={setActiveField}
+                onChange={content =>
+                  editor.updateSlideContent(editor.selectedSlideIndex, content)
+                }
+                accent={uiAccent}
+              />
+            </View>
           ) : null}
 
           {/* ─── Slide Action Bar ─── */}
@@ -543,21 +516,24 @@ export const PPTCreatorScreen: React.FC<PPTCreatorScreenProps> = ({ onGoBack, in
           </View>
         </ScrollView>
 
-        {/* ─── Thumbnail Strip (+ button inline at end of scroll) ──────── */}
-        <SlideThumbnailStrip
-          slides={editor.presentation.slides}
-          selectedIndex={editor.selectedSlideIndex}
-          theme={pptTheme}
-          onSelect={editor.selectSlide}
-          onDelete={handleDeleteSlide}
-          onDuplicate={handleDuplicate}
-          onMove={handleMove}
-          onAddAfter={index => {
-            editor.addSlide('titleContent', index);
-            editor.selectSlide(index + 1);
-          }}
-          onAdd={handleAddSlide}
-        />
+        {/* ─── Thumbnail Strip (+ button inline at end of scroll) ────────
+            Hidden while typing so the canvas and composer keep the room. */}
+        {!keyboardVisible && (
+          <SlideThumbnailStrip
+            slides={editor.presentation.slides}
+            selectedIndex={editor.selectedSlideIndex}
+            theme={pptTheme}
+            onSelect={editor.selectSlide}
+            onDelete={handleDeleteSlide}
+            onDuplicate={handleDuplicate}
+            onMove={handleMove}
+            onAddAfter={index => {
+              editor.addSlide('titleContent', index);
+              editor.selectSlide(index + 1);
+            }}
+            onAdd={handleAddSlide}
+          />
+        )}
       </KeyboardAvoidingView>
 
       {/* ─── Theme Selection Modal ────────────────── */}
@@ -643,14 +619,6 @@ const styles = StyleSheet.create({
     letterSpacing: -0.2,
     color: '#FFFFFF',
   },
-  gradientIconBtnSm: {
-    width: 28,
-    height: 28,
-    borderRadius: 8,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: 'rgba(255,255,255,0.18)',
-  },
   headerActions: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -701,13 +669,6 @@ const styles = StyleSheet.create({
     color: 'rgba(255,255,255,0.7)',
     marginLeft: 'auto',
   },
-  headerRow2Right: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    marginLeft: 'auto',
-  },
-
   // ── Sub-bar (undo/redo + slide count, below gradient header) ──
   subBar: {
     flexDirection: 'row',
@@ -746,6 +707,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   emptyMsg: { fontSize: 14 },
+  editorWrap: { width: '100%' },
 
   // ── Slide action bar ──
   actionBar: {

@@ -3,7 +3,7 @@ export type { AIProvider } from "./ai.provider";
 export {
     analyze,
     askPdfQuestion,
-    classifyDocument,
+    checkNarrativeArc,
     clearAllSessions,
     convertHighlightToTask,
     copyToClipboard,
@@ -21,6 +21,7 @@ export {
     initAIProvider,
     loadSessions,
     pickDocument,
+    runDevilsAdvocate,
     saveSession,
     sendChat,
     setAIProvider,

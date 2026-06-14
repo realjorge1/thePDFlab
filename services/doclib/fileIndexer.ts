@@ -73,74 +73,7 @@ class FileIndexer {
         return;
       }
 
-      const existingMap = await db.getExistingUrisWithModified();
-      const allScanned: ScannedFile[] = [];
-
-      for (const folder of validFolders) {
-        this.emit({
-          phase: "scanning",
-          folder: folder.displayName,
-          found: allScanned.length,
-        });
-        try {
-          const files = await SAF.scanDirectory(folder.uri);
-          allScanned.push(...files);
-          this.emit({
-            phase: "scanning",
-            folder: folder.displayName,
-            found: allScanned.length,
-          });
-        } catch (e: any) {
-          console.warn(
-            `[FileIndexer] Failed to scan folder ${folder.displayName}:`,
-            e,
-          );
-        }
-      }
-
-      this.emit({ phase: "saving", total: allScanned.length });
-
-      const toUpsert: DocumentRecord[] = [];
-      let skipped = 0;
-
-      for (const file of allScanned) {
-        const existingModified = existingMap.get(file.uri);
-        if (
-          existingModified !== undefined &&
-          existingModified === file.lastModified
-        ) {
-          skipped++;
-          continue;
-        }
-
-        toUpsert.push({
-          name: file.name,
-          uri: file.uri,
-          type: file.type as DocumentRecord["type"],
-          mimeType: file.mimeType,
-          size: file.size,
-          lastModified: file.lastModified,
-          lastOpened: null,
-          readingProgress: 0,
-          folder: file.parentFolder,
-        });
-      }
-
-      const added = toUpsert.filter((d) => !existingMap.has(d.uri)).length;
-      const updated = toUpsert.length - added;
-
-      const CHUNK_SIZE = 100;
-      for (let i = 0; i < toUpsert.length; i += CHUNK_SIZE) {
-        await db.upsertDocumentsBatch(toUpsert.slice(i, i + CHUNK_SIZE));
-      }
-
-      this.emit({
-        phase: "done",
-        total: allScanned.length,
-        added,
-        updated,
-        skipped,
-      });
+      await this.scanFolders(validFolders);
     } catch (e: any) {
       this.emit({
         phase: "error",
@@ -149,6 +82,85 @@ class FileIndexer {
     } finally {
       this.isScanning = false;
     }
+  }
+
+  /**
+   * Scan a specific set of folders and batch-upsert their new/changed files.
+   *
+   * Deliberately independent of the `isScanning` guard so that a freshly
+   * connected folder can be indexed immediately, even while a background full
+   * scan (whose folder list was captured *before* this folder existed) is still
+   * running. Upserts are keyed by URI, so concurrent scans merge safely.
+   */
+  private async scanFolders(folders: FolderRecord[]): Promise<void> {
+    const existingMap = await db.getExistingUrisWithModified();
+    const allScanned: ScannedFile[] = [];
+
+    for (const folder of folders) {
+      this.emit({
+        phase: "scanning",
+        folder: folder.displayName,
+        found: allScanned.length,
+      });
+      try {
+        const files = await SAF.scanDirectory(folder.uri);
+        allScanned.push(...files);
+        this.emit({
+          phase: "scanning",
+          folder: folder.displayName,
+          found: allScanned.length,
+        });
+      } catch (e: any) {
+        console.warn(
+          `[FileIndexer] Failed to scan folder ${folder.displayName}:`,
+          e,
+        );
+      }
+    }
+
+    this.emit({ phase: "saving", total: allScanned.length });
+
+    const toUpsert: DocumentRecord[] = [];
+    let skipped = 0;
+
+    for (const file of allScanned) {
+      const existingModified = existingMap.get(file.uri);
+      if (
+        existingModified !== undefined &&
+        existingModified === file.lastModified
+      ) {
+        skipped++;
+        continue;
+      }
+
+      toUpsert.push({
+        name: file.name,
+        uri: file.uri,
+        type: file.type as DocumentRecord["type"],
+        mimeType: file.mimeType,
+        size: file.size,
+        lastModified: file.lastModified,
+        lastOpened: null,
+        readingProgress: 0,
+        folder: file.parentFolder,
+      });
+    }
+
+    const added = toUpsert.filter((d) => !existingMap.has(d.uri)).length;
+    const updated = toUpsert.length - added;
+
+    const CHUNK_SIZE = 100;
+    for (let i = 0; i < toUpsert.length; i += CHUNK_SIZE) {
+      await db.upsertDocumentsBatch(toUpsert.slice(i, i + CHUNK_SIZE));
+    }
+
+    this.emit({
+      phase: "done",
+      total: allScanned.length,
+      added,
+      updated,
+      skipped,
+    });
   }
 
   /** Debounced background scan — safe to call on app launch. */
@@ -169,7 +181,15 @@ class FileIndexer {
       addedAt: Date.now(),
     };
     await db.addFolder(folder);
-    await this.runFullScan();
+    // Index this folder directly rather than via runFullScan(): a background
+    // scan already in flight would make runFullScan() a no-op (its `isScanning`
+    // guard) and would never see this just-added folder, leaving it unindexed
+    // and its app folder empty. Scanning only the new folder is also faster.
+    try {
+      await this.scanFolders([folder]);
+    } catch (e) {
+      console.warn("[FileIndexer] addFolder scan failed:", e);
+    }
   }
 
   /** Stop watching a folder and drop all of its indexed documents. */

@@ -4,7 +4,7 @@ import Constants from "expo-constants";
 //   1. EXPO_PUBLIC_API_URL — set per-profile in eas.json or .env (recommended
 //      for production builds; e.g. "https://your-app.onrender.com/api").
 //   2. app.json → expo.extra.apiUrl — used in local dev / Expo Go.
-//   3. https://inscribed-backend.onrender.com/api — production fallback.
+//   3. https://inscribed-backend-docker.onrender.com/api — production fallback.
 //
 // IMPORTANT: cleartext (HTTP) traffic is only permitted to the hosts listed
 // in android/app/src/main/res/xml/network_security_config.xml. If you point
@@ -13,7 +13,7 @@ import Constants from "expo-constants";
 export const API_BASE_URL =
   process.env.EXPO_PUBLIC_API_URL ||
   Constants.expoConfig?.extra?.apiUrl ||
-  "https://inscribed-backend.onrender.com/api";
+  "https://inscribed-backend-docker.onrender.com/api";
 
 export const API_ENDPOINTS = {
   // PDF Operations
@@ -80,7 +80,8 @@ export const API_ENDPOINTS = {
     ASK_PDF: `${API_BASE_URL}/ai/ask-pdf`,
     EXTRACT_DOCUMENT: `${API_BASE_URL}/ai/extract-document`,
     CHAT_DOCUMENT: `${API_BASE_URL}/ai/chat-document`,
-    CLASSIFY: `${API_BASE_URL}/ai/classify`,
+    DEVILS_ADVOCATE: `${API_BASE_URL}/ai/devils-advocate`,
+    NARRATIVE_ARC: `${API_BASE_URL}/ai/narrative-arc`,
     HIGHLIGHT: `${API_BASE_URL}/ai/highlight`,
     HIGHLIGHT_SUMMARY: `${API_BASE_URL}/ai/highlight-summary`,
     CONVERT_TO_TASK: `${API_BASE_URL}/ai/convert-to-task`,

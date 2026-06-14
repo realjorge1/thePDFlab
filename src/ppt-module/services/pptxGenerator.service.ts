@@ -55,11 +55,14 @@ function buildSlide(
 ) {
   const pSlide = pptx.addSlide();
   const { colors, fonts } = theme;
+  // Layouts rendered on the dark background. statHighlight belongs here too —
+  // its text colors (secondary / textOnDark) are designed for the dark bg.
   const isTitle =
     slide.layout === 'title' ||
     slide.layout === 'closing' ||
     slide.layout === 'sectionDivider' ||
-    slide.layout === 'quote';
+    slide.layout === 'quote' ||
+    slide.layout === 'statHighlight';
   const bgColor = isTitle
     ? hex(colors.backgroundDark)
     : hex(colors.background);
@@ -227,7 +230,7 @@ function buildSlide(
           y: 1.8,
           w: W - 1.1,
           h: 4.6,
-          fontSize: 15,
+          fontSize: 22,
           fontFace: fonts.body,
           color: textColor,
           wrap: true,
@@ -245,7 +248,7 @@ function buildSlide(
             y: 1.8,
             w: W - 1.1,
             h: 4.6,
-            fontSize: 15,
+            fontSize: 22,
             fontFace: fonts.body,
             color: textColor,
             lineSpacingMultiple: 1.4,
@@ -305,7 +308,7 @@ function buildSlide(
         y: 1.6,
         w: W / 2 - 0.9,
         h: H - 2.3,
-        fontSize: 14,
+        fontSize: 20,
         fontFace: fonts.body,
         color: textColor,
         wrap: true,
@@ -318,7 +321,7 @@ function buildSlide(
         y: 1.6,
         w: W / 2 - 0.9,
         h: H - 2.3,
-        fontSize: 14,
+        fontSize: 20,
         fontFace: fonts.body,
         color: textColor,
         wrap: true,
@@ -402,7 +405,7 @@ function buildSlide(
         y: 5.2,
         w: W - 2.0,
         h: 0.8,
-        fontSize: 20,
+        fontSize: 24,
         fontFace: fonts.body,
         color: hex(colors.textOnDark),
         align: 'center',
@@ -414,7 +417,7 @@ function buildSlide(
           y: H - 0.55,
           w: W - 1.0,
           h: 0.35,
-          fontSize: 10,
+          fontSize: 13,
           fontFace: fonts.body,
           color: mutedColor,
           align: 'center',
@@ -480,7 +483,7 @@ function buildSlide(
         y: 2.05,
         w: 6.6,
         h: 4.2,
-        fontSize: 14,
+        fontSize: 20,
         fontFace: fonts.body,
         color: textColor,
         wrap: true,
@@ -528,7 +531,7 @@ function buildSlide(
         y: 2.05,
         w: 6.4,
         h: 4.2,
-        fontSize: 14,
+        fontSize: 20,
         fontFace: fonts.body,
         color: textColor,
         wrap: true,
@@ -633,7 +636,7 @@ function buildSlide(
           y: 2.32,
           w: 1.2,
           h: 0.4,
-          fontSize: 13,
+          fontSize: 16,
           bold: true,
           fontFace: fonts.heading,
           color: hex(colors.primary),
@@ -645,7 +648,7 @@ function buildSlide(
           y: 2.8,
           w: step - 0.2,
           h: 3.5,
-          fontSize: 12,
+          fontSize: 17,
           fontFace: fonts.body,
           color: textColor,
           align: 'center',
@@ -793,7 +796,7 @@ function buildSlide(
           y: 5.5,
           w: W - 3.0,
           h: 0.7,
-          fontSize: 16,
+          fontSize: 18,
           fontFace: fonts.body,
           color: hex(colors.secondary),
           align: 'center',
@@ -902,7 +905,7 @@ function buildSlide(
         });
         pSlide.addText(item, {
           x: 1.5, y: yy, w: W - 2.2, h: 0.55,
-          fontSize: 17, fontFace: fonts.body,
+          fontSize: 22, fontFace: fonts.body,
           color: textColor, valign: 'middle', wrap: true,
         });
       });
@@ -942,7 +945,7 @@ function buildSlide(
       });
       pSlide.addText(content.leftContent ?? '', {
         x: 0.8, y: cardY + 1.0, w: cardW - 0.6, h: cardH - 1.2,
-        fontSize: 14, fontFace: fonts.body, color: textColor,
+        fontSize: 20, fontFace: fonts.body, color: textColor,
         valign: 'top', wrap: true, lineSpacingMultiple: 1.3,
       });
 
@@ -960,7 +963,7 @@ function buildSlide(
       });
       pSlide.addText(content.rightContent ?? '', {
         x: rightX + 0.1, y: cardY + 1.0, w: cardW - 0.6, h: cardH - 1.2,
-        fontSize: 14, fontFace: fonts.body, color: textColor,
+        fontSize: 20, fontFace: fonts.body, color: textColor,
         valign: 'top', wrap: true, lineSpacingMultiple: 1.3,
       });
 
@@ -1033,7 +1036,7 @@ function buildSlide(
         pSlide.addText(step, {
           x: cx - colW / 2 + 0.15, y: circleY + circleD + 0.25,
           w: colW - 0.3, h: 1.6,
-          fontSize: 13, fontFace: fonts.body, color: textColor,
+          fontSize: 18, fontFace: fonts.body, color: textColor,
           align: 'center', valign: 'top', wrap: true, lineSpacingMultiple: 1.15,
         });
       });

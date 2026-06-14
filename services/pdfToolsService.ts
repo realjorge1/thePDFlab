@@ -748,7 +748,23 @@ export async function processWithTool(
       let errorMessage = `Server error: ${response.status}`;
       try {
         const errorData = await response.json();
-        errorMessage = errorData.error || errorData.message || errorMessage;
+        // LibreOffice-backed converters return { error, code, details, hint }.
+        // 503 = engine down or conversion failed/timed out (transient);
+        // 400 INVALID_INPUT = bad extension, empty file, or over the size cap.
+        if (
+          errorData.code === "ENGINE_UNAVAILABLE" ||
+          errorData.code === "CONVERSION_FAILED"
+        ) {
+          errorMessage =
+            "Conversion is temporarily unavailable. Please try again in a few minutes.";
+        } else if (errorData.code === "INVALID_INPUT") {
+          errorMessage =
+            errorData.details ||
+            errorData.error ||
+            "This file can't be converted. Check the file type and size.";
+        } else {
+          errorMessage = errorData.error || errorData.message || errorMessage;
+        }
       } catch {
         // Use default error message
       }

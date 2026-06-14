@@ -20,6 +20,7 @@ import {
   shareFile,
 } from "@/services/fileService";
 import { cleanFileName } from "@/services/safFolderSync";
+import { useNoir } from "@/services/NoirProvider";
 import { useSettings } from "@/services/settingsService";
 import { useTheme } from "@/services/ThemeProvider";
 import { perfMark } from "@/utils/perfLogger";
@@ -94,6 +95,16 @@ const ACTIVITY_ACCENTS = {
   folders: "#8B5E3C",
   workspace: "#10B981",
   premium: "#DAA520",
+} as const;
+
+// Neutral-gray stand-ins used while "noir" mode is active. Older Android can't
+// run the whole-app grayscale filter, so the home screen — where the secret
+// toggle lives — neutralizes its accent chips explicitly to stay monochrome.
+const NOIR_ACCENTS = {
+  create: "#6B7280",
+  folders: "#6B7280",
+  workspace: "#6B7280",
+  premium: "#9CA3AF",
 } as const;
 
 // Combined file type for display - allows both FileInfo and UnifiedFileRecord
@@ -197,11 +208,14 @@ export default function HomeScreen() {
   const { colors: t, mode } = useTheme();
   const { settings } = useSettings();
   const { isPremium } = useSubscription();
+  // Secret "noir" mode — tapping the "Activity" header toggles it app-wide.
+  const { noir, toggleNoir } = useNoir();
+  const activityAccents = noir ? NOIR_ACCENTS : ACTIVITY_ACCENTS;
   const backgroundColor = t.background;
   const textColor = t.text;
   // Theme-aware container outline: light in dark mode, darker in light mode
   const containerBorderColor =
-    mode === "dark" ? "rgba(255,255,255,0.18)" : "#B0B0B0";
+    mode === "dark" ? "rgba(255,255,255,0.28)" : "#B0B0B0";
 
   // ── Experiment: monochrome home screen ──────────────────────────────────
   // Everything below the screen header is rendered colorless. Surfaces follow
@@ -570,7 +584,7 @@ export default function HomeScreen() {
 
           {/* Modern Search Bar */}
           <View style={styles.searchContainer}>
-            <View style={[styles.searchBar, { backgroundColor: t.card }]}>
+            <View style={[styles.searchBar, { backgroundColor: t.card, borderColor: containerBorderColor }]}>
               <Search color={t.primary} size={20} strokeWidth={2.5} />
               <TextInput
                 placeholder="Search documents..."
@@ -638,9 +652,18 @@ export default function HomeScreen() {
             pointerEvents={isSearching ? "none" : "auto"}
           >
             <View style={styles.activityHeaderContainer}>
-              <Text style={[styles.sectionTitle, { color: textColor }]}>
-                Activity
-              </Text>
+              {/* Secret button: tapping "Activity" toggles app-wide noir mode.
+                  activeOpacity={1} keeps it disguised as a plain header. */}
+              <TouchableOpacity
+                activeOpacity={1}
+                onPress={toggleNoir}
+                accessibilityRole="button"
+                accessibilityLabel="Activity"
+              >
+                <Text style={[styles.sectionTitle, { color: textColor }]}>
+                  Activity
+                </Text>
+              </TouchableOpacity>
             </View>
             <View style={styles.bentoSectionContainer}>
               {/* Bento Grid Layout */}
@@ -655,7 +678,7 @@ export default function HomeScreen() {
                   <View style={styles.bentoRow}>
                     {/* Large Create Card - spans 2 rows height */}
                     <PressableScale
-                      style={styles.bentoCardLarge}
+                      style={[styles.bentoCardLarge, { borderColor: containerBorderColor }]}
                       onPress={() => router.push("/create-file")}
                       scaleTo={0.97}
                     >
@@ -668,7 +691,7 @@ export default function HomeScreen() {
                         <View
                           style={[
                             styles.bentoLargeIconContainer,
-                            { backgroundColor: ACTIVITY_ACCENTS.create },
+                            { backgroundColor: activityAccents.create },
                           ]}
                         >
                           <PencilLine
@@ -694,7 +717,7 @@ export default function HomeScreen() {
                     <View style={styles.bentoStackedColumn}>
                       {/* AI Card */}
                       <PressableScale
-                        style={styles.bentoCardMedium}
+                        style={[styles.bentoCardMedium, { borderColor: containerBorderColor }]}
                         onPress={() => router.push("/gozlin")}
                         scaleTo={0.96}
                       >
@@ -721,7 +744,7 @@ export default function HomeScreen() {
 
                       {/* Folders Card */}
                       <PressableScale
-                        style={styles.bentoCardMedium}
+                        style={[styles.bentoCardMedium, { borderColor: containerBorderColor }]}
                         onPress={() => router.push("/folders")}
                         scaleTo={0.96}
                       >
@@ -735,7 +758,7 @@ export default function HomeScreen() {
                             <View
                               style={[
                                 styles.bentoMediumIconBg,
-                                { backgroundColor: ACTIVITY_ACCENTS.folders },
+                                { backgroundColor: activityAccents.folders },
                               ]}
                             >
                               <FolderOpen
@@ -762,7 +785,7 @@ export default function HomeScreen() {
                   <View style={styles.bentoRowTwo}>
                     {/* Workspace Card - Wide */}
                     <PressableScale
-                      style={styles.bentoCardWide}
+                      style={[styles.bentoCardWide, { borderColor: containerBorderColor }]}
                       onPress={() => router.push("/gozlin-workspace" as any)}
                       scaleTo={0.97}
                     >
@@ -776,7 +799,7 @@ export default function HomeScreen() {
                           <View
                             style={[
                               styles.bentoWideIconBg,
-                              { backgroundColor: ACTIVITY_ACCENTS.workspace },
+                              { backgroundColor: activityAccents.workspace },
                             ]}
                           >
                             <LayoutDashboard
@@ -808,7 +831,7 @@ export default function HomeScreen() {
 
                     {/* Premium Card */}
                     <PressableScale
-                      style={styles.bentoCardSmall}
+                      style={[styles.bentoCardSmall, { borderColor: containerBorderColor }]}
                       onPress={() => router.push("/premium" as any)}
                       scaleTo={0.95}
                     >
@@ -821,7 +844,7 @@ export default function HomeScreen() {
                         <View
                           style={[
                             styles.bentoSmallIconBg,
-                            { backgroundColor: ACTIVITY_ACCENTS.premium },
+                            { backgroundColor: activityAccents.premium },
                           ]}
                         >
                           <Crown
@@ -1293,11 +1316,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 5,
     gap: 8,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.08,
-    shadowRadius: 12,
-    elevation: 4,
+    borderWidth: 1,
   },
   searchInput: {
     flex: 1,
@@ -1430,11 +1449,7 @@ const styles = StyleSheet.create({
     flex: 0.9,
     borderRadius: 15,
     overflow: "hidden",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.35,
-    shadowRadius: 16,
-    elevation: 8,
+    borderWidth: 1,
   },
   bentoCardLargeGradient: {
     flex: 1,
@@ -1493,11 +1508,7 @@ const styles = StyleSheet.create({
     flex: 1,
     borderRadius: 13,
     overflow: "hidden",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.15,
-    shadowRadius: 10,
-    elevation: 5,
+    borderWidth: 1,
   },
   bentoCardMediumGradient: {
     flex: 1,
@@ -1567,11 +1578,7 @@ const styles = StyleSheet.create({
     flex: 0.8,
     borderRadius: 15,
     overflow: "hidden",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.1,
-    shadowRadius: 8,
-    elevation: 4,
+    borderWidth: 1,
   },
   bentoCardSmallGradient: {
     flex: 1,
@@ -1609,11 +1616,7 @@ const styles = StyleSheet.create({
     flex: 2.0,
     borderRadius: 10,
     overflow: "hidden",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.25,
-    shadowRadius: 12,
-    elevation: 6,
+    borderWidth: 1,
   },
   bentoCardWideGradient: {
     flex: 1,
@@ -1684,13 +1687,7 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     padding: 16,
     alignItems: "center",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.08,
-    shadowRadius: 10,
-    elevation: 3,
     borderWidth: 1,
-    borderColor: colors.borderLight,
   },
   modernActionIcon: {
     width: 52,
@@ -1699,11 +1696,6 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     alignItems: "center",
     marginBottom: 10,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.2,
-    shadowRadius: 10,
-    elevation: 5,
   },
   modernActionTitle: {
     fontSize: 14,

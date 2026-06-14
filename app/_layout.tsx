@@ -51,9 +51,9 @@ import { runImportedFileRetentionCheck } from "@/services/fileRetentionService";
 import { purgeExpired } from "@/services/recycleBinService";
 import { loadSettings } from "@/services/settingsService";
 import { ThemeProvider } from "@/services/ThemeProvider";
+import { NoirLayer, NoirProvider, NoirStatusBar } from "@/services/NoirProvider";
 import { setAutoDetectLanguage, setRate } from "@/services/ttsService";
 import { Stack } from "expo-router";
-import { StatusBar } from "expo-status-bar";
 import * as SplashScreen from "expo-splash-screen";
 import { useCallback, useEffect, useState } from "react";
 import { StyleSheet } from "react-native";
@@ -155,17 +155,23 @@ export default function RootLayout() {
   }
 
   return (
+    <NoirProvider>
     <ThemeProvider>
       <SubscriptionProvider>
       <GestureHandlerRootView style={styles.container} onLayout={onLayoutReady}>
+      {/* NoirLayer applies a whole-app grayscale filter when noir mode is on and
+          hosts the noir toast overlay. It's a transparent flex pass-through when
+          noir is off, so it never affects normal rendering. */}
+      <NoirLayer>
       {/* Cold-start fade-in: RootLayout only mounts on a fresh process launch
           ("first open after being closed"), so this entrance plays exactly once. */}
       <Animated.View style={styles.container} entering={FadeIn.duration(450)}>
         {/* Edge-to-edge is mandatory on Android (SDK 54): the app draws behind a
             transparent status bar. This only controls icon contrast app-wide —
-            "auto" = dark icons in light mode, light icons in dark mode. Screens
-            reserve the bar's height via SafeAreaView / useSafeAreaInsets. */}
-        <StatusBar style="auto" />
+            "auto" = dark icons in light mode, light icons in dark mode; noir mode
+            forces light icons over its dark-gray base. Screens reserve the bar's
+            height via SafeAreaView / useSafeAreaInsets. */}
+        <NoirStatusBar />
         <Stack
           screenOptions={{
             headerShown: false,
@@ -235,9 +241,11 @@ export default function RootLayout() {
       <SafeBoundary label="activity">
         <ActivityOverlay />
       </SafeBoundary>
+      </NoirLayer>
       </GestureHandlerRootView>
       </SubscriptionProvider>
     </ThemeProvider>
+    </NoirProvider>
   );
 }
 

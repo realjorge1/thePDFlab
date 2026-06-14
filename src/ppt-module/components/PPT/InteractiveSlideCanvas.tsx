@@ -1,7 +1,13 @@
 // ─────────────────────────────────────────────
 //  PPT Module — InteractiveSlideCanvas
-//  Read-only slide preview where each region is tappable.
+//  WYSIWYG slide preview where each region is tappable.
 //  Editing happens in the SlideFieldEditor drawer below.
+//
+//  IMPORTANT: this canvas mirrors pptxGenerator.service.ts geometry 1:1.
+//  The generator lays slides out in inches on a 13.33 × 7.5 canvas; every
+//  rect here uses those same coordinates scaled to screen pixels, so the
+//  exported .pptx looks exactly like the preview. If you change a layout
+//  in the generator, change it here too (and vice-versa).
 // ─────────────────────────────────────────────
 
 import React from 'react';
@@ -12,6 +18,7 @@ import {
   Dimensions,
   Pressable,
   StyleProp,
+  TextStyle,
   ViewStyle,
 } from 'react-native';
 import { Image } from 'expo-image';
@@ -21,24 +28,20 @@ import { FieldId, fieldKey } from './SlideFieldEditor';
 
 const { width: SCREEN_W } = Dimensions.get('window');
 const H_PAD = 16;
-const CANVAS_W = SCREEN_W - H_PAD * 2;
-const CANVAS_H = Math.round((CANVAS_W * 9) / 16);
-const ACCENT_W = 4;
-const INNER_PAD = 11;
 
-// Font sizes — proportional to canvas dimensions
-const FS_TITLE_HERO = Math.round(CANVAS_H * 0.13);
-const FS_SUBTITLE = Math.round(CANVAS_H * 0.085);
-const FS_TITLE = Math.round(CANVAS_H * 0.088);
-const FS_BODY = Math.round(CANVAS_H * 0.068);
-const FS_SMALL = Math.round(CANVAS_H * 0.057);
-const FS_STAT = Math.round(CANVAS_H * 0.38);
+// Generator slide dimensions (inches) — keep in sync with pptxGenerator.
+const W = 13.33;
+const H = 7.5;
 
 interface InteractiveSlideCanvasProps {
   slide: Slide;
   theme: PPTTheme;
   activeField: FieldId | null;
   onFieldFocus: (f: FieldId) => void;
+  /** 1-based slide number, rendered exactly where the export renders it. */
+  slideNumber?: number;
+  /** Canvas width in px. Defaults to full screen minus page padding. */
+  width?: number;
 }
 
 export const InteractiveSlideCanvas: React.FC<InteractiveSlideCanvasProps> = ({
@@ -46,525 +49,804 @@ export const InteractiveSlideCanvas: React.FC<InteractiveSlideCanvasProps> = ({
   theme,
   activeField,
   onFieldFocus,
+  slideNumber,
+  width,
 }) => {
   const { layout, content } = slide;
   const c = theme.colors;
 
-  const isOnDark =
+  const CANVAS_W = width ?? SCREEN_W - H_PAD * 2;
+  const CANVAS_H = Math.round((CANVAS_W * H) / W);
+  const S = CANVAS_W / W; // px per inch
+  const fs = (pt: number) => (pt / 72) * S; // pptx points → px
+  const op = (transparency: number) => (100 - transparency) / 100;
+
+  // Absolute rect in generator inches → px style. Typed as the intersection
+  // so the same rect can style Views and Texts.
+  const rc = (x: number, y: number, w: number, h: number): ViewStyle & TextStyle => ({
+    position: 'absolute',
+    left: x * S,
+    top: y * S,
+    width: w * S,
+    height: h * S,
+  });
+
+  const isDarkSlide =
     layout === 'title' ||
     layout === 'closing' ||
-    layout === 'statHighlight' ||
+    layout === 'sectionDivider' ||
     layout === 'quote' ||
-    layout === 'sectionDivider';
+    layout === 'statHighlight';
 
-  const bgColor = isOnDark ? c.backgroundDark : c.background;
-  const phColor = isOnDark ? 'rgba(255,255,255,0.32)' : 'rgba(0,0,0,0.28)';
-  const titleColor = isOnDark ? c.textOnDark : c.primary;
-  const bodyColor = isOnDark ? c.textOnDark : c.text;
+  const bgColor = isDarkSlide ? c.backgroundDark : c.background;
+  const textColor = isDarkSlide ? c.textOnDark : c.text;
+  const phColor = isDarkSlide ? 'rgba(255,255,255,0.35)' : 'rgba(0,0,0,0.30)';
 
   const activeKey = activeField ? fieldKey(activeField) : null;
 
-  // Region wrapper: highlights active field & raises tap target
-  const Region: React.FC<{
+  // ── Building blocks ─────────────────────────
+
+  /** Solid / translucent shape mirroring generator addShape calls. */
+  const Shape: React.FC<{
+    x: number;
+    y: number;
+    w: number;
+    h: number;
+    color: string;
+    transparency?: number;
+    circle?: boolean;
+    radius?: number;
+    borderColor?: string;
+    borderWidth?: number;
+  }> = ({ x, y, w, h, color, transparency = 0, circle, radius, borderColor, borderWidth }) => (
+    <View
+      pointerEvents="none"
+      style={[
+        rc(x, y, w, h),
+        {
+          backgroundColor: color,
+          opacity: op(transparency),
+          borderRadius: circle ? (w * S) / 2 : (radius ?? 0),
+        },
+        borderColor
+          ? { borderColor, borderWidth: borderWidth ?? StyleSheet.hairlineWidth }
+          : null,
+      ]}
+    />
+  );
+
+  /** Tappable text region pinned to the exact generator text-box rect. */
+  const TxtRegion: React.FC<{
     field: FieldId;
-    children: React.ReactNode;
-    style?: StyleProp<ViewStyle>;
-  }> = ({ field, children, style }) => {
+    x: number;
+    y: number;
+    w: number;
+    h: number;
+    value: string | undefined;
+    placeholder: string;
+    size: number; // pt, as in the generator
+    color: string;
+    bold?: boolean;
+    italic?: boolean;
+    align?: 'left' | 'center' | 'right';
+    valign?: 'top' | 'middle';
+    lineSpacing?: number;
+    extraTextStyle?: StyleProp<TextStyle>;
+  }> = ({
+    field,
+    x,
+    y,
+    w,
+    h,
+    value,
+    placeholder,
+    size,
+    color,
+    bold,
+    italic,
+    align = 'left',
+    valign = 'top',
+    lineSpacing,
+    extraTextStyle,
+  }) => {
     const isActive = activeKey === fieldKey(field);
+    const px = fs(size);
     return (
       <Pressable
         onPress={() => onFieldFocus(field)}
         style={[
+          rc(x, y, w, h),
           styles.region,
-          style,
+          { justifyContent: valign === 'middle' ? 'center' : 'flex-start' },
           isActive && {
-            backgroundColor: (isOnDark ? '#FFFFFF' : c.primary) + '14',
-            borderColor: c.primary,
+            backgroundColor: (isDarkSlide ? '#FFFFFF' : c.primary) + '14',
+            borderColor: isDarkSlide ? '#FFFFFF' : c.primary,
           },
         ]}
-        hitSlop={4}
+        hitSlop={2}
       >
-        {children}
+        <Text
+          style={[
+            {
+              fontSize: px,
+              color: value ? color : phColor,
+              fontWeight: bold ? '700' : '400',
+              fontStyle: italic ? 'italic' : 'normal',
+              textAlign: align,
+              lineHeight: px * (lineSpacing ?? 1.15),
+            },
+            extraTextStyle,
+          ]}
+        >
+          {value && value.length > 0 ? value : placeholder}
+        </Text>
       </Pressable>
     );
   };
 
-  // Helper to render either content text or a placeholder
-  const PlaceholderText: React.FC<{
-    value: string | undefined;
-    placeholder: string;
-    style: object;
-    numberOfLines?: number;
-  }> = ({ value, placeholder, style, numberOfLines }) => (
-    <Text style={[style, !value && { color: phColor }]} numberOfLines={numberOfLines}>
-      {value && value.length > 0 ? value : placeholder}
-    </Text>
+  /** Footer line + slide number — mirrors addFooter() in the generator. */
+  const Footer = () => (
+    <>
+      <Shape x={0.4} y={H - 0.4} w={W - 0.8} h={0.02} color={c.primary} transparency={60} />
+      {slideNumber != null && (
+        <Text
+          pointerEvents="none"
+          style={[
+            rc(W - 1.0, H - 0.5, 0.6, 0.3),
+            { fontSize: fs(10), color: c.textMuted, textAlign: 'right' },
+          ]}
+        >
+          {slideNumber}
+        </Text>
+      )}
+    </>
   );
 
-  // ─── Layout renderers (all read-only Text) ────
+  // ── Layout renderers (geometry mirrors the generator) ────
 
   const renderTitle = () => (
-    <View style={styles.centered}>
-      <Region field={{ kind: 'title' }} style={styles.regionCenter}>
-        <PlaceholderText
-          value={content.title}
-          placeholder={layout === 'closing' ? 'Closing Title' : 'Presentation Title'}
-          style={{
-            fontSize: FS_TITLE_HERO,
-            fontWeight: '700',
-            color: c.textOnDark,
-            textAlign: 'center',
-          }}
-          numberOfLines={3}
-        />
-      </Region>
-      <View style={[styles.heroDivider, { backgroundColor: c.secondary }]} />
-      <Region field={{ kind: 'subtitle' }} style={styles.regionCenter}>
-        <PlaceholderText
-          value={content.subtitle}
-          placeholder={layout === 'closing' ? 'Thank You · Questions?' : 'Your subtitle here'}
-          style={{ fontSize: FS_SUBTITLE, color: c.secondary, textAlign: 'center' }}
-          numberOfLines={2}
-        />
-      </Region>
-    </View>
+    <>
+      <Shape x={9.2} y={-2.8} w={6.0} h={6.0} color={c.primary} transparency={72} circle />
+      <Shape x={11.4} y={-1.0} w={3.2} h={3.2} color={c.secondary} transparency={78} circle />
+      <Shape x={0} y={H - 0.55} w={W} h={0.55} color={c.primary} transparency={30} />
+      <Shape x={0} y={H - 0.58} w={W} h={0.04} color={c.secondary} />
+      <Shape x={0.5} y={2.1} w={0.06} h={1.9} color={c.secondary} />
+
+      <TxtRegion
+        field={{ kind: 'title' }}
+        x={0.9} y={1.8} w={9.5} h={2.0}
+        value={content.title}
+        placeholder="Presentation Title"
+        size={46} color={c.textOnDark} bold valign="middle"
+      />
+      <Shape x={0.9} y={3.95} w={3.5} h={0.04} color={c.secondary} transparency={30} />
+      <TxtRegion
+        field={{ kind: 'subtitle' }}
+        x={0.9} y={4.1} w={9.5} h={0.9}
+        value={content.subtitle}
+        placeholder="Your subtitle here"
+        size={18} color={c.secondary}
+      />
+      {slideNumber != null && (
+        <Text
+          pointerEvents="none"
+          style={[
+            rc(W - 1.2, H - 0.48, 0.7, 0.36),
+            { fontSize: fs(11), color: c.textOnDark, fontWeight: '700', textAlign: 'right' },
+          ]}
+        >
+          {slideNumber}
+        </Text>
+      )}
+    </>
   );
 
   const renderTitleContent = () => {
-    const hasBullets = (content.bullets ?? []).length > 0;
+    const bullets = content.bullets ?? [];
+    const hasBullets = bullets.length > 0;
     return (
-      <View style={styles.full}>
-        <Region field={{ kind: 'title' }}>
-          <PlaceholderText
-            value={content.title}
-            placeholder="Slide Title"
-            style={{ fontSize: FS_TITLE, fontWeight: '700', color: c.primary }}
-            numberOfLines={2}
-          />
-        </Region>
-        <View style={[styles.divider, { backgroundColor: c.primary, opacity: 0.2 }]} />
+      <>
+        <Shape x={0} y={0} w={W} h={1.5} color={c.primary} />
+        <Shape x={0} y={1.5} w={W} h={0.05} color={c.secondary} />
+        <Shape x={W - 1.2} y={-1.2} w={2.8} h={2.8} color={c.textOnDark} transparency={88} circle />
+
+        <TxtRegion
+          field={{ kind: 'title' }}
+          x={0.55} y={0.2} w={W - 1.1} h={1.1}
+          value={content.title}
+          placeholder="Slide Title"
+          size={30} color={c.textOnDark} bold valign="middle"
+        />
+
         {hasBullets ? (
-          <Region field={{ kind: 'bullets' }} style={{ flex: 1 }}>
-            <View style={{ gap: 4 }}>
-              {(content.bullets ?? []).map((b, i) => (
+          <Pressable
+            onPress={() => onFieldFocus({ kind: 'bullets' })}
+            style={[
+              rc(0.55, 1.8, W - 1.1, 4.6),
+              styles.region,
+              activeKey === 'bullets' && {
+                backgroundColor: c.primary + '14',
+                borderColor: c.primary,
+              },
+            ]}
+          >
+            <View style={{ gap: fs(22) * 0.55 }}>
+              {bullets.map((b, i) => (
                 <View key={i} style={styles.bulletRow}>
-                  <View style={[styles.bulletDot, { backgroundColor: c.primary }]} />
-                  <PlaceholderText
-                    value={b}
-                    placeholder={`Point ${i + 1}`}
-                    style={{ flex: 1, fontSize: FS_BODY, color: bodyColor }}
-                    numberOfLines={2}
+                  <View
+                    style={[
+                      styles.bulletDot,
+                      { backgroundColor: textColor, marginTop: fs(22) * 0.5 },
+                    ]}
                   />
+                  <Text
+                    style={{
+                      flex: 1,
+                      fontSize: fs(22),
+                      color: b ? textColor : phColor,
+                      lineHeight: fs(22) * 1.4,
+                    }}
+                  >
+                    {b || `Point ${i + 1}`}
+                  </Text>
                 </View>
               ))}
             </View>
-          </Region>
+          </Pressable>
         ) : (
-          <Region field={{ kind: 'body' }} style={{ flex: 1 }}>
-            <PlaceholderText
-              value={content.body}
-              placeholder="Body text or explanation…"
-              style={{ fontSize: FS_BODY, color: bodyColor, lineHeight: FS_BODY * 1.4 }}
-              numberOfLines={8}
-            />
-          </Region>
+          <TxtRegion
+            field={{ kind: 'body' }}
+            x={0.55} y={1.8} w={W - 1.1} h={4.6}
+            value={content.body}
+            placeholder="Body text or explanation…"
+            size={22} color={textColor} lineSpacing={1.3}
+          />
         )}
-      </View>
+        <Footer />
+      </>
     );
   };
 
   const renderTwoColumn = () => (
-    <View style={styles.full}>
-      <Region field={{ kind: 'title' }}>
-        <PlaceholderText
-          value={content.title}
-          placeholder="Section Title"
-          style={{ fontSize: FS_TITLE, fontWeight: '700', color: c.primary }}
-        />
-      </Region>
-      <View style={[styles.divider, { backgroundColor: c.primary, opacity: 0.2 }]} />
-      <View style={styles.columns}>
-        <Region
-          field={{ kind: 'leftContent' }}
-          style={{ flex: 1, borderRightWidth: StyleSheet.hairlineWidth, borderRightColor: c.secondary + '80', paddingRight: 6 }}
-        >
-          <PlaceholderText
-            value={content.leftContent}
-            placeholder="Left column…"
-            style={{ fontSize: FS_BODY, color: bodyColor }}
-            numberOfLines={8}
-          />
-        </Region>
-        <Region field={{ kind: 'rightContent' }} style={{ flex: 1, paddingLeft: 6 }}>
-          <PlaceholderText
-            value={content.rightContent}
-            placeholder="Right column…"
-            style={{ fontSize: FS_BODY, color: bodyColor }}
-            numberOfLines={8}
-          />
-        </Region>
-      </View>
-    </View>
+    <>
+      <Shape x={0} y={0} w={W} h={1.3} color={c.primary} />
+      <Shape x={0} y={1.3} w={W} h={0.04} color={c.secondary} />
+      <TxtRegion
+        field={{ kind: 'title' }}
+        x={0.55} y={0.15} w={W - 1.1} h={1.0}
+        value={content.title}
+        placeholder="Section Title"
+        size={28} color={c.textOnDark} bold valign="middle"
+      />
+      <Shape x={W / 2 - 0.015} y={1.55} w={0.03} h={H - 2.2} color={c.secondary} transparency={30} />
+      <TxtRegion
+        field={{ kind: 'leftContent' }}
+        x={0.55} y={1.6} w={W / 2 - 0.9} h={H - 2.3}
+        value={content.leftContent}
+        placeholder="Left column…"
+        size={20} color={textColor} lineSpacing={1.35}
+      />
+      <TxtRegion
+        field={{ kind: 'rightContent' }}
+        x={W / 2 + 0.35} y={1.6} w={W / 2 - 0.9} h={H - 2.3}
+        value={content.rightContent}
+        placeholder="Right column…"
+        size={20} color={textColor} lineSpacing={1.35}
+      />
+      <Footer />
+    </>
   );
 
-  const renderImageSide = (imageLeft: boolean) => {
-    const imageArea = (
-      <Region
-        field={{ kind: 'image' }}
-        style={[styles.imagePicker, { backgroundColor: c.secondary + '28' }]}
-      >
-        {content.imageUri ? (
-          <Image
-            source={{ uri: content.imageUri }}
-            style={StyleSheet.absoluteFill}
-            contentFit="cover"
-          />
-        ) : (
-          <View style={{ alignItems: 'center', gap: 4 }}>
-            <ImagePlus size={20} color={c.primary} strokeWidth={1.5} />
-            <Text style={[styles.imagePickerLabel, { color: c.primary }]}>Tap to add image</Text>
-          </View>
-        )}
-      </Region>
-    );
-    const textArea = (
-      <View style={{ flex: 1, gap: 5 }}>
-        <Region field={{ kind: 'title' }}>
-          <PlaceholderText
-            value={content.title}
-            placeholder="Title"
-            style={{ fontSize: FS_TITLE - 2, fontWeight: '700', color: c.primary }}
-            numberOfLines={2}
-          />
-        </Region>
-        <Region field={{ kind: 'body' }} style={{ flex: 1 }}>
-          <PlaceholderText
-            value={content.body}
-            placeholder="Description…"
-            style={{ fontSize: FS_BODY, color: bodyColor }}
-            numberOfLines={6}
-          />
-        </Region>
-      </View>
-    );
-    return (
-      <View style={[styles.full, { flexDirection: 'row', gap: 7 }]}>
-        {imageLeft ? imageArea : textArea}
-        {imageLeft ? textArea : imageArea}
-      </View>
-    );
-  };
-
   const renderStat = () => {
-    const statColor = c.accent === '#FFFFFF' ? c.secondary : c.accent;
+    const statAccent = c.accent === '#FFFFFF' ? c.secondary : c.accent;
     return (
-      <View style={styles.centered}>
-        <Region field={{ kind: 'title' }} style={styles.regionCenter}>
-          <PlaceholderText
-            value={content.title}
-            placeholder="Section Label"
-            style={{
-              fontSize: FS_SMALL,
-              color: c.secondary,
-              textAlign: 'center',
-              opacity: 0.85,
-            }}
-          />
-        </Region>
-        <Region field={{ kind: 'statValue' }} style={styles.regionCenter}>
-          <PlaceholderText
-            value={content.stat?.value}
-            placeholder="94%"
-            style={{
-              fontSize: FS_STAT,
-              fontWeight: '700',
-              color: statColor,
-              textAlign: 'center',
-              lineHeight: FS_STAT * 1.05,
-            }}
-          />
-        </Region>
-        <Region field={{ kind: 'statLabel' }} style={styles.regionCenter}>
-          <PlaceholderText
-            value={content.stat?.label}
-            placeholder="Stat label"
-            style={{ fontSize: FS_BODY, color: c.textOnDark, textAlign: 'center' }}
-          />
-        </Region>
-        <Region field={{ kind: 'footnote' }} style={styles.regionCenter}>
-          <PlaceholderText
-            value={content.footnote}
-            placeholder="Source (optional)"
-            style={{
-              fontSize: FS_SMALL,
-              color: c.secondary,
-              textAlign: 'center',
-              fontStyle: 'italic',
-              opacity: 0.7,
-            }}
-          />
-        </Region>
-      </View>
+      <>
+        <Shape x={-1.5} y={-1.5} w={5.5} h={5.5} color={c.primary} transparency={82} circle />
+        <Shape x={8.8} y={4.0} w={6.0} h={6.0} color={c.secondary} transparency={85} circle />
+        <Shape x={3.5} y={0.55} w={W - 7.0} h={0.05} color={c.secondary} />
+        <TxtRegion
+          field={{ kind: 'title' }}
+          x={1.0} y={0.65} w={W - 2.0} h={0.9}
+          value={content.title}
+          placeholder="SECTION LABEL"
+          size={22} color={c.secondary} bold align="center"
+        />
+        <TxtRegion
+          field={{ kind: 'statValue' }}
+          x={0.5} y={1.4} w={W - 1.0} h={3.4}
+          value={content.stat?.value}
+          placeholder="94%"
+          size={120} color={statAccent} bold align="center" lineSpacing={1.0}
+        />
+        <Shape x={3.5} y={5.1} w={W - 7.0} h={0.04} color={c.secondary} transparency={40} />
+        <TxtRegion
+          field={{ kind: 'statLabel' }}
+          x={1.0} y={5.2} w={W - 2.0} h={0.8}
+          value={content.stat?.label}
+          placeholder="Stat label"
+          size={24} color={c.textOnDark} align="center"
+        />
+        <TxtRegion
+          field={{ kind: 'footnote' }}
+          x={0.5} y={H - 0.55} w={W - 1.0} h={0.35}
+          value={content.footnote}
+          placeholder="Source (optional)"
+          size={13} color={c.secondary} italic align="center"
+        />
+      </>
     );
   };
 
-  const renderTimeline = () => (
-    <View style={styles.full}>
-      <Region field={{ kind: 'title' }}>
-        <PlaceholderText
+  const renderImageSide = (imageLeft: boolean) => {
+    const imgX = imageLeft ? 0.1 : 7.3;
+    const txtX = imageLeft ? 6.3 : 0.5;
+    const txtW = imageLeft ? 6.6 : 6.4;
+    return (
+      <>
+        <Shape x={0} y={0} w={W} h={0.1} color={c.primary} />
+
+        <Pressable
+          onPress={() => onFieldFocus({ kind: 'image' })}
+          style={[
+            rc(imgX, 0.1, 5.8, H - 0.3),
+            styles.region,
+            {
+              backgroundColor: content.imageUri ? 'transparent' : c.secondary + '46',
+              alignItems: 'center',
+              justifyContent: 'center',
+              overflow: 'hidden',
+            },
+            activeKey === 'image' && { borderColor: c.primary },
+          ]}
+        >
+          {content.imageUri ? (
+            <Image
+              source={{ uri: content.imageUri }}
+              style={StyleSheet.absoluteFill}
+              contentFit="cover"
+            />
+          ) : (
+            <View style={{ alignItems: 'center', gap: 4 }}>
+              <ImagePlus size={Math.max(16, fs(28))} color={c.primary} strokeWidth={1.5} />
+              <Text style={{ fontSize: fs(11), fontWeight: '600', color: c.primary }}>
+                Tap to add image
+              </Text>
+            </View>
+          )}
+        </Pressable>
+
+        <TxtRegion
+          field={{ kind: 'title' }}
+          x={txtX} y={0.7} w={txtW} h={1.1}
+          value={content.title}
+          placeholder="Title"
+          size={28} color={c.primary} bold
+        />
+        <Shape x={txtX} y={1.85} w={2.5} h={0.04} color={c.primary} transparency={40} />
+        <TxtRegion
+          field={{ kind: 'body' }}
+          x={txtX} y={2.05} w={txtW} h={4.2}
+          value={content.body}
+          placeholder="Description…"
+          size={20} color={textColor} lineSpacing={1.35}
+        />
+        <Footer />
+      </>
+    );
+  };
+
+  const renderTimeline = () => {
+    const items = content.timelineItems ?? [];
+    const step = (W - 1.0) / Math.max(items.length, 1);
+    const dotAccent = c.accent === '#FFFFFF' ? c.secondary : c.accent;
+    return (
+      <>
+        <Shape x={0} y={0} w={W} h={1.3} color={c.primary} />
+        <Shape x={0} y={1.3} w={W} h={0.04} color={c.secondary} />
+        <TxtRegion
+          field={{ kind: 'title' }}
+          x={0.55} y={0.15} w={W - 1.1} h={1.0}
           value={content.title}
           placeholder="Timeline Title"
-          style={{ fontSize: FS_TITLE, fontWeight: '700', color: c.primary }}
+          size={28} color={c.textOnDark} bold valign="middle"
         />
-      </Region>
-      <Region field={{ kind: 'timeline' }} style={{ flex: 1, marginTop: 5 }}>
-        <View style={{ gap: 4 }}>
-          {(content.timelineItems ?? []).map((item, i) => {
-            const dotColor = c.accent === '#FFFFFF' ? c.secondary : c.accent;
-            return (
-              <View key={i} style={styles.timelineRow}>
-                <View style={[styles.timelineDot, { backgroundColor: dotColor }]} />
-                <PlaceholderText
-                  value={item.year}
-                  placeholder="Year"
-                  style={{ fontSize: FS_SMALL, fontWeight: '700', color: c.primary, width: 36 }}
-                />
-                <PlaceholderText
-                  value={item.event}
-                  placeholder="Event"
-                  style={{ flex: 1, fontSize: FS_SMALL, color: bodyColor }}
-                  numberOfLines={2}
-                />
-              </View>
-            );
-          })}
-          {(content.timelineItems ?? []).length === 0 ? (
-            <Text style={{ fontSize: FS_SMALL, color: phColor }}>
-              Tap here to add timeline events
+        <Shape x={0.5} y={2.1} w={W - 1.0} h={0.05} color={c.primary} />
+
+        <Pressable
+          onPress={() => onFieldFocus({ kind: 'timeline' })}
+          style={[
+            rc(0.4, 1.7, W - 0.8, H - 2.2),
+            styles.region,
+            activeKey === 'timeline' && { borderColor: c.primary },
+          ]}
+        >
+          {items.length === 0 && (
+            <Text
+              style={{
+                fontSize: fs(14),
+                color: phColor,
+                textAlign: 'center',
+                marginTop: fs(40),
+              }}
+            >
+              Tap to add timeline events
             </Text>
-          ) : null}
-        </View>
-      </Region>
-    </View>
+          )}
+        </Pressable>
+
+        {items.map((item, i) => {
+          const cx = 0.5 + i * step + step / 2;
+          return (
+            <React.Fragment key={i}>
+              <View
+                pointerEvents="none"
+                style={[
+                  rc(cx - 0.2, 1.87, 0.4, 0.4),
+                  {
+                    backgroundColor: dotAccent,
+                    borderRadius: (0.4 * S) / 2,
+                    borderWidth: Math.max(1, fs(2)),
+                    borderColor: c.primary,
+                  },
+                ]}
+              />
+              <Text
+                pointerEvents="none"
+                style={[
+                  rc(cx - 0.6, 2.32, 1.2, 0.4),
+                  { fontSize: fs(16), fontWeight: '700', color: c.primary, textAlign: 'center' },
+                ]}
+              >
+                {item.year || 'Year'}
+              </Text>
+              <Text
+                pointerEvents="none"
+                style={[
+                  rc(cx - step / 2 + 0.1, 2.8, step - 0.2, 3.5),
+                  {
+                    fontSize: fs(17),
+                    color: item.event ? textColor : phColor,
+                    textAlign: 'center',
+                    lineHeight: fs(17) * 1.2,
+                  },
+                ]}
+              >
+                {item.event || 'Event'}
+              </Text>
+            </React.Fragment>
+          );
+        })}
+        <Footer />
+      </>
+    );
+  };
+
+  const renderClosing = () => (
+    <>
+      <Shape x={-2.0} y={H - 4.5} w={6.0} h={6.0} color={c.primary} transparency={72} circle />
+      <Shape x={W - 3.5} y={-1.5} w={5.0} h={5.0} color={c.secondary} transparency={80} circle />
+      <Shape x={W / 2 - 1.5} y={2.3} w={3.0} h={0.05} color={c.secondary} />
+      <TxtRegion
+        field={{ kind: 'title' }}
+        x={1.5} y={2.4} w={W - 3.0} h={1.5}
+        value={content.title}
+        placeholder="Thank You"
+        size={52} color={c.textOnDark} bold align="center"
+      />
+      <Shape x={W / 2 - 1.5} y={4.05} w={3.0} h={0.05} color={c.secondary} />
+      <TxtRegion
+        field={{ kind: 'subtitle' }}
+        x={1.5} y={4.2} w={W - 3.0} h={0.8}
+        value={content.subtitle}
+        placeholder="Thank You · Questions?"
+        size={18} color={c.secondary} align="center"
+      />
+      <Shape x={0} y={H - 0.5} w={W} h={0.5} color={c.primary} transparency={35} />
+      <Shape x={0} y={H - 0.52} w={W} h={0.04} color={c.secondary} />
+    </>
   );
 
   const renderQuote = () => (
-    <View style={styles.centered}>
+    <>
       <Text
-        style={{
-          fontSize: FS_STAT * 0.7,
-          color: c.secondary,
-          fontWeight: '700',
-          lineHeight: FS_STAT * 0.6,
-        }}
+        pointerEvents="none"
+        style={[
+          rc(0.5, 0.1, 3.5, 3.0),
+          { fontSize: fs(200), fontWeight: '700', color: c.secondary, lineHeight: fs(200) },
+        ]}
       >
         “
       </Text>
-      <Region field={{ kind: 'body' }} style={styles.regionCenter}>
-        <PlaceholderText
-          value={content.body}
-          placeholder="Type a memorable quote…"
-          style={{
-            fontSize: FS_SUBTITLE,
-            color: c.textOnDark,
-            textAlign: 'center',
-            fontStyle: 'italic',
-          }}
-          numberOfLines={4}
-        />
-      </Region>
-      <View style={[styles.heroDivider, { backgroundColor: c.secondary }]} />
-      <Region field={{ kind: 'subtitle' }} style={styles.regionCenter}>
-        <PlaceholderText
-          value={content.subtitle}
-          placeholder="Attribution / author"
-          style={{ fontSize: FS_SMALL, color: c.secondary, textAlign: 'center' }}
-        />
-      </Region>
-    </View>
+      <TxtRegion
+        field={{ kind: 'body' }}
+        x={1.4} y={2.1} w={W - 2.8} h={2.9}
+        value={content.body}
+        placeholder="Type a memorable quote…"
+        size={30} color={c.textOnDark} italic align="center" valign="middle" lineSpacing={1.2}
+      />
+      <Shape x={W / 2 - 0.8} y={5.3} w={1.6} h={0.04} color={c.secondary} />
+      <TxtRegion
+        field={{ kind: 'subtitle' }}
+        x={1.5} y={5.5} w={W - 3.0} h={0.7}
+        value={content.subtitle ? `— ${content.subtitle}` : undefined}
+        placeholder="— Attribution"
+        size={18} color={c.secondary} align="center"
+      />
+    </>
   );
 
   const renderSectionDivider = () => (
-    <View style={styles.full}>
-      <View style={{ flex: 1, justifyContent: 'center' }}>
-        <Region field={{ kind: 'sectionNumber' }}>
-          <PlaceholderText
-            value={content.sectionNumber}
-            placeholder="01"
-            style={{
-              fontSize: FS_STAT * 0.7,
-              fontWeight: '700',
-              color: c.secondary,
-              lineHeight: FS_STAT * 0.75,
-            }}
-          />
-        </Region>
-        <Region field={{ kind: 'title' }}>
-          <PlaceholderText
-            value={content.title}
-            placeholder="Section Title"
-            style={{
-              fontSize: FS_TITLE * 1.2,
-              fontWeight: '700',
-              color: c.textOnDark,
-            }}
-            numberOfLines={2}
-          />
-        </Region>
-        <Region field={{ kind: 'subtitle' }}>
-          <PlaceholderText
-            value={content.subtitle}
-            placeholder="Optional description"
-            style={{ fontSize: FS_SMALL, color: c.secondary }}
-          />
-        </Region>
-      </View>
-    </View>
+    <>
+      <Shape x={0} y={0} w={0.25} h={H} color={c.secondary} />
+      <Shape x={W - 3.0} y={-1.5} w={5.0} h={5.0} color={c.primary} transparency={70} circle />
+      <TxtRegion
+        field={{ kind: 'sectionNumber' }}
+        x={0.9} y={1.2} w={5.0} h={2.0}
+        value={content.sectionNumber}
+        placeholder="01"
+        size={110} color={c.secondary} bold lineSpacing={1.0}
+      />
+      <TxtRegion
+        field={{ kind: 'title' }}
+        x={0.95} y={3.5} w={W - 2.0} h={1.6}
+        value={content.title}
+        placeholder="Section Title"
+        size={44} color={c.textOnDark} bold
+      />
+      <TxtRegion
+        field={{ kind: 'subtitle' }}
+        x={0.95} y={5.2} w={W - 2.0} h={1.0}
+        value={content.subtitle}
+        placeholder="Optional description"
+        size={18} color={c.secondary}
+      />
+    </>
   );
 
-  const renderAgenda = () => (
-    <View style={styles.full}>
-      <Region field={{ kind: 'title' }}>
-        <PlaceholderText
+  const renderAgenda = () => {
+    const items = content.bullets ?? content.steps ?? [];
+    const numColor = c.accent === '#FFFFFF' ? c.secondary : c.accent;
+    const rowH = Math.min(1.0, (H - 2.2) / Math.max(items.length, 1));
+    return (
+      <>
+        <Shape x={0} y={0} w={W} h={1.4} color={c.primary} />
+        <Shape x={0} y={1.4} w={W} h={0.05} color={c.secondary} />
+        <TxtRegion
+          field={{ kind: 'title' }}
+          x={0.55} y={0.15} w={W - 1.1} h={1.1}
           value={content.title}
           placeholder="Agenda"
-          style={{ fontSize: FS_TITLE, fontWeight: '700', color: c.primary }}
+          size={30} color={c.textOnDark} bold valign="middle"
         />
-      </Region>
-      <View style={[styles.divider, { backgroundColor: c.primary, opacity: 0.2 }]} />
-      <Region field={{ kind: 'bullets' }} style={{ flex: 1 }}>
-        <View style={{ gap: 4 }}>
-          {(content.bullets ?? []).map((b, i) => (
-            <View key={i} style={styles.bulletRow}>
+
+        <Pressable
+          onPress={() => onFieldFocus({ kind: 'bullets' })}
+          style={[
+            rc(0.5, 1.8, W - 1.0, H - 2.4),
+            styles.region,
+            activeKey === 'bullets' && { borderColor: c.primary },
+          ]}
+        >
+          {items.length === 0 && (
+            <Text style={{ fontSize: fs(15), color: phColor, marginTop: fs(8) }}>
+              Tap to add agenda items
+            </Text>
+          )}
+        </Pressable>
+
+        {items.map((item, i) => {
+          const yy = 1.9 + i * rowH;
+          return (
+            <React.Fragment key={i}>
               <View
+                pointerEvents="none"
                 style={[
-                  styles.numBadge,
-                  { backgroundColor: c.accent === '#FFFFFF' ? c.secondary : c.accent },
+                  rc(0.7, yy, 0.55, 0.55),
+                  {
+                    backgroundColor: numColor,
+                    borderRadius: (0.55 * S) / 2,
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  },
                 ]}
               >
-                <Text style={styles.numBadgeText}>{i + 1}</Text>
+                <Text style={{ fontSize: fs(18), fontWeight: '700', color: c.background }}>
+                  {i + 1}
+                </Text>
               </View>
-              <PlaceholderText
-                value={b}
-                placeholder={`Item ${i + 1}`}
-                style={{ flex: 1, fontSize: FS_BODY, color: bodyColor }}
-                numberOfLines={1}
-              />
-            </View>
-          ))}
-          {(content.bullets ?? []).length === 0 ? (
-            <Text style={{ fontSize: FS_BODY, color: phColor }}>
-              Tap here to add agenda items
-            </Text>
-          ) : null}
-        </View>
-      </Region>
-    </View>
-  );
+              <View
+                pointerEvents="none"
+                style={[rc(1.5, yy, W - 2.2, 0.55), { justifyContent: 'center' }]}
+              >
+                <Text
+                  numberOfLines={1}
+                  style={{ fontSize: fs(22), color: item ? textColor : phColor }}
+                >
+                  {item || `Item ${i + 1}`}
+                </Text>
+              </View>
+            </React.Fragment>
+          );
+        })}
+        <Footer />
+      </>
+    );
+  };
 
-  const renderProcessSteps = () => (
-    <View style={styles.full}>
-      <Region field={{ kind: 'title' }}>
-        <PlaceholderText
+  const renderComparison = () => {
+    const cardY = 1.75;
+    const cardH = H - 2.4;
+    const cardW = W / 2 - 0.85;
+    const rightX = W / 2 + 0.35;
+    const vsColor = c.accent === '#FFFFFF' ? c.primary : c.accent;
+    return (
+      <>
+        <Shape x={0} y={0} w={W} h={1.3} color={c.primary} />
+        <TxtRegion
+          field={{ kind: 'title' }}
+          x={0.55} y={0.15} w={W - 1.1} h={1.0}
+          value={content.title}
+          placeholder="Comparison"
+          size={28} color={c.textOnDark} bold valign="middle"
+        />
+
+        <Shape
+          x={0.5} y={cardY} w={cardW} h={cardH}
+          color={c.secondary} transparency={55} radius={0.1 * S}
+        />
+        <Shape
+          x={rightX} y={cardY} w={cardW} h={cardH}
+          color={c.primary} transparency={88} radius={0.1 * S}
+        />
+
+        <TxtRegion
+          field={{ kind: 'leftTitle' }}
+          x={0.7} y={cardY + 0.2} w={cardW - 0.4} h={0.7}
+          value={content.leftTitle}
+          placeholder="Option A"
+          size={18} color={c.primary} bold align="center"
+        />
+        <TxtRegion
+          field={{ kind: 'leftContent' }}
+          x={0.8} y={cardY + 1.0} w={cardW - 0.6} h={cardH - 1.2}
+          value={content.leftContent}
+          placeholder="Pros / details…"
+          size={20} color={textColor} lineSpacing={1.3}
+        />
+        <TxtRegion
+          field={{ kind: 'rightTitle' }}
+          x={rightX + 0.2} y={cardY + 0.2} w={cardW - 0.4} h={0.7}
+          value={content.rightTitle}
+          placeholder="Option B"
+          size={18} color={c.primary} bold align="center"
+        />
+        <TxtRegion
+          field={{ kind: 'rightContent' }}
+          x={rightX + 0.1} y={cardY + 1.0} w={cardW - 0.6} h={cardH - 1.2}
+          value={content.rightContent}
+          placeholder="Pros / details…"
+          size={20} color={textColor} lineSpacing={1.3}
+        />
+
+        <View
+          pointerEvents="none"
+          style={[
+            rc(W / 2 - 0.45, cardY + cardH / 2 - 0.45, 0.9, 0.9),
+            {
+              backgroundColor: vsColor,
+              borderRadius: (0.9 * S) / 2,
+              borderWidth: Math.max(1.5, fs(3)),
+              borderColor: c.background,
+              alignItems: 'center',
+              justifyContent: 'center',
+            },
+          ]}
+        >
+          <Text style={{ fontSize: fs(18), fontWeight: '700', color: c.background }}>VS</Text>
+        </View>
+        <Footer />
+      </>
+    );
+  };
+
+  const renderProcessSteps = () => {
+    const steps = (content.steps ?? content.bullets ?? []).slice(0, 5);
+    const stepColor = c.accent === '#FFFFFF' ? c.secondary : c.accent;
+    const n = Math.max(steps.length, 1);
+    const colW = (W - 1.0) / n;
+    const circleD = Math.min(1.3, colW * 0.55);
+    const circleY = 2.9;
+    return (
+      <>
+        <Shape x={0} y={0} w={W} h={1.3} color={c.primary} />
+        <TxtRegion
+          field={{ kind: 'title' }}
+          x={0.55} y={0.15} w={W - 1.1} h={1.0}
           value={content.title}
           placeholder="Process"
-          style={{ fontSize: FS_TITLE, fontWeight: '700', color: c.primary }}
+          size={28} color={c.textOnDark} bold valign="middle"
         />
-      </Region>
-      <View style={[styles.divider, { backgroundColor: c.primary, opacity: 0.2 }]} />
-      <Region field={{ kind: 'steps' }} style={{ flex: 1 }}>
-        <View style={{ gap: 4 }}>
-          {(content.steps ?? []).map((s, i) => (
-            <View key={i} style={styles.bulletRow}>
+
+        <Pressable
+          onPress={() => onFieldFocus({ kind: 'steps' })}
+          style={[
+            rc(0.5, 1.7, W - 1.0, H - 2.3),
+            styles.region,
+            activeKey === 'steps' && { borderColor: c.primary },
+          ]}
+        >
+          {steps.length === 0 && (
+            <Text
+              style={{
+                fontSize: fs(15),
+                color: phColor,
+                textAlign: 'center',
+                marginTop: fs(50),
+              }}
+            >
+              Tap to add process steps
+            </Text>
+          )}
+        </Pressable>
+
+        {steps.map((step, i) => {
+          const cx = 0.5 + i * colW + colW / 2;
+          return (
+            <React.Fragment key={i}>
+              {i < steps.length - 1 && (
+                <Shape
+                  x={cx + circleD / 2 + 0.1}
+                  y={circleY + circleD / 2 - 0.12}
+                  w={colW - circleD - 0.2}
+                  h={0.24}
+                  color={c.secondary}
+                  transparency={30}
+                  radius={0.12 * S}
+                />
+              )}
               <View
+                pointerEvents="none"
                 style={[
-                  styles.numBadge,
-                  { backgroundColor: c.accent === '#FFFFFF' ? c.secondary : c.accent },
+                  rc(cx - circleD / 2, circleY, circleD, circleD),
+                  {
+                    backgroundColor: stepColor,
+                    borderRadius: (circleD * S) / 2,
+                    borderWidth: Math.max(1, fs(2)),
+                    borderColor: c.primary,
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  },
                 ]}
               >
-                <Text style={styles.numBadgeText}>{i + 1}</Text>
+                <Text style={{ fontSize: fs(30), fontWeight: '700', color: c.background }}>
+                  {i + 1}
+                </Text>
               </View>
-              <PlaceholderText
-                value={s}
-                placeholder={`Step ${i + 1}`}
-                style={{ flex: 1, fontSize: FS_BODY, color: bodyColor }}
-                numberOfLines={2}
-              />
-            </View>
-          ))}
-          {(content.steps ?? []).length === 0 ? (
-            <Text style={{ fontSize: FS_BODY, color: phColor }}>
-              Tap here to add process steps
-            </Text>
-          ) : null}
-        </View>
-      </Region>
-    </View>
-  );
-
-  const renderComparison = () => (
-    <View style={styles.full}>
-      <Region field={{ kind: 'title' }}>
-        <PlaceholderText
-          value={content.title}
-          placeholder="Comparison Title"
-          style={{ fontSize: FS_TITLE, fontWeight: '700', color: c.primary }}
-        />
-      </Region>
-      <View style={[styles.divider, { backgroundColor: c.primary, opacity: 0.2 }]} />
-      <View style={styles.columns}>
-        <View style={{ flex: 1, paddingRight: 5 }}>
-          <Region field={{ kind: 'leftTitle' }}>
-            <PlaceholderText
-              value={content.leftTitle}
-              placeholder="Option A"
-              style={{
-                fontSize: FS_SMALL,
-                fontWeight: '700',
-                color: c.primary,
-                textAlign: 'center',
-              }}
-            />
-          </Region>
-          <Region field={{ kind: 'leftContent' }} style={{ flex: 1, marginTop: 3 }}>
-            <PlaceholderText
-              value={content.leftContent}
-              placeholder="Pros / details…"
-              style={{ fontSize: FS_SMALL, color: bodyColor }}
-              numberOfLines={6}
-            />
-          </Region>
-        </View>
-        <View style={{ width: StyleSheet.hairlineWidth, backgroundColor: c.secondary + '80' }} />
-        <View style={{ flex: 1, paddingLeft: 5 }}>
-          <Region field={{ kind: 'rightTitle' }}>
-            <PlaceholderText
-              value={content.rightTitle}
-              placeholder="Option B"
-              style={{
-                fontSize: FS_SMALL,
-                fontWeight: '700',
-                color: c.primary,
-                textAlign: 'center',
-              }}
-            />
-          </Region>
-          <Region field={{ kind: 'rightContent' }} style={{ flex: 1, marginTop: 3 }}>
-            <PlaceholderText
-              value={content.rightContent}
-              placeholder="Pros / details…"
-              style={{ fontSize: FS_SMALL, color: bodyColor }}
-              numberOfLines={6}
-            />
-          </Region>
-        </View>
-      </View>
-    </View>
-  );
+              <Text
+                pointerEvents="none"
+                style={[
+                  rc(cx - colW / 2 + 0.15, circleY + circleD + 0.25, colW - 0.3, 1.6),
+                  {
+                    fontSize: fs(18),
+                    color: step ? textColor : phColor,
+                    textAlign: 'center',
+                    lineHeight: fs(18) * 1.15,
+                  },
+                ]}
+              >
+                {step || `Step ${i + 1}`}
+              </Text>
+            </React.Fragment>
+          );
+        })}
+        <Footer />
+      </>
+    );
+  };
 
   const renderBlank = () => (
-    <View style={styles.centered}>
-      <Text style={[styles.blankMsg, { color: isOnDark ? c.textOnDark : c.textMuted }]}>
+    <View style={styles.blankWrap} pointerEvents="none">
+      <Text style={[styles.blankMsg, { color: isDarkSlide ? c.textOnDark : c.textMuted }]}>
         Blank slide
       </Text>
     </View>
@@ -573,8 +855,9 @@ export const InteractiveSlideCanvas: React.FC<InteractiveSlideCanvasProps> = ({
   const renderLayout = () => {
     switch (layout) {
       case 'title':
-      case 'closing':
         return renderTitle();
+      case 'closing':
+        return renderClosing();
       case 'titleContent':
         return renderTitleContent();
       case 'twoColumn':
@@ -611,15 +894,13 @@ export const InteractiveSlideCanvas: React.FC<InteractiveSlideCanvasProps> = ({
         { width: CANVAS_W, height: CANVAS_H, backgroundColor: bgColor },
       ]}
     >
-      <View style={[styles.accentBar, { backgroundColor: c.primary }]} />
-      <View style={styles.inner}>{renderLayout()}</View>
+      {renderLayout()}
     </View>
   );
 };
 
 const styles = StyleSheet.create({
   canvas: {
-    flexDirection: 'row',
     borderRadius: 8,
     overflow: 'hidden',
     shadowColor: '#000',
@@ -628,47 +909,16 @@ const styles = StyleSheet.create({
     shadowRadius: 10,
     elevation: 5,
   },
-  accentBar: {
-    width: ACCENT_W,
-  },
-  inner: {
-    flex: 1,
-    padding: INNER_PAD,
-  },
-
-  centered: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    gap: 4,
-  },
-  regionCenter: { alignSelf: 'stretch', alignItems: 'center' },
-  full: { flex: 1 },
-  columns: { flex: 1, flexDirection: 'row', paddingTop: 5 },
 
   region: {
     borderRadius: 4,
     borderWidth: 1,
     borderColor: 'transparent',
-    paddingHorizontal: 2,
-    paddingVertical: 1,
-  },
-
-  heroDivider: {
-    width: 40,
-    height: 2,
-    borderRadius: 1,
-    marginVertical: 6,
-  },
-  divider: {
-    height: StyleSheet.hairlineWidth,
-    marginBottom: 5,
-    marginTop: 2,
   },
 
   bulletRow: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     gap: 6,
   },
   bulletDot: {
@@ -676,42 +926,12 @@ const styles = StyleSheet.create({
     height: 5,
     borderRadius: 2.5,
   },
-  numBadge: {
-    width: 16,
-    height: 16,
-    borderRadius: 8,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  numBadgeText: {
-    color: '#FFFFFF',
-    fontSize: 9,
-    fontWeight: '700',
-  },
 
-  imagePicker: {
+  blankWrap: {
     flex: 1,
-    borderRadius: 4,
-    overflow: 'hidden',
     justifyContent: 'center',
     alignItems: 'center',
   },
-  imagePickerLabel: {
-    fontSize: 9,
-    fontWeight: '600',
-  },
-
-  timelineRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  timelineDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-  },
-
   blankMsg: {
     fontSize: 11,
     fontStyle: 'italic',

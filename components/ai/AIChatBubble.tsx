@@ -8,6 +8,7 @@ import { copyToClipboard } from "@/services/ai/ai.service";
 import type {
   AIAction,
   AIChatMessage,
+  ChallengerRole,
   HighlightItem,
 } from "@/services/ai/ai.types";
 import { Check, Copy } from "lucide-react-native";
@@ -22,16 +23,10 @@ interface Props {
   onAddAllToTodos?: (tasks: any[]) => void;
   onSourceTap?: (quote: string) => void;
   onAskMore?: (prompt: string) => void;
-  onConvertToEditable?: (sections: any[]) => void;
-  onRenameFile?: (filename: string) => void;
-  onMoveToFolder?: (folder: string) => void;
-  onToggleAutoSort?: (enabled: boolean) => void;
-  autoSortEnabled?: boolean;
   onExport?: () => void;
   onAddToNotes?: () => void;
   onExtractTasks?: () => void;
-  onExplainDocParagraph?: (text: string) => void;
-  onSummarizeDocParagraph?: (text: string) => void;
+  onRerunWithRole?: (role: ChallengerRole, customRole?: string) => void;
   onJumpToHighlight?: (highlight: HighlightItem) => void;
   onConvertHighlightToTask?: (highlight: HighlightItem) => void;
   onAddHighlightToNotes?: (highlight: HighlightItem) => void;
@@ -219,16 +214,10 @@ export const AIChatBubble = React.memo(function AIChatBubble({
   onAddAllToTodos,
   onSourceTap,
   onAskMore,
-  onConvertToEditable,
-  onRenameFile,
-  onMoveToFolder,
-  onToggleAutoSort,
-  autoSortEnabled,
   onExport,
   onAddToNotes,
   onExtractTasks,
-  onExplainDocParagraph,
-  onSummarizeDocParagraph,
+  onRerunWithRole,
   onJumpToHighlight,
   onConvertHighlightToTask,
   onAddHighlightToNotes,
@@ -268,16 +257,10 @@ export const AIChatBubble = React.memo(function AIChatBubble({
             onAddAllToTodos={onAddAllToTodos}
             onSourceTap={onSourceTap}
             onAskMore={onAskMore}
-            onConvertToEditable={onConvertToEditable}
-            onRenameFile={onRenameFile}
-            onMoveToFolder={onMoveToFolder}
-            onToggleAutoSort={onToggleAutoSort}
-            autoSortEnabled={autoSortEnabled}
             onExport={onExport}
             onAddToNotes={onAddToNotes}
             onExtractTasks={onExtractTasks}
-            onExplainDocParagraph={onExplainDocParagraph}
-            onSummarizeDocParagraph={onSummarizeDocParagraph}
+            onRerunWithRole={onRerunWithRole}
             onJumpToHighlight={onJumpToHighlight}
             onConvertHighlightToTask={onConvertHighlightToTask}
             onAddHighlightToNotes={onAddHighlightToNotes}

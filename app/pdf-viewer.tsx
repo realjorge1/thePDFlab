@@ -45,6 +45,7 @@ import {
 import { PDFTextExtractor } from "@/components/DocumentViewer/PDFTextExtractor";
 import { SelectionToolbar } from "@/components/DocumentViewer/SelectionToolbar";
 import { ThreeDotsMenu } from "@/components/DocumentViewer/ThreeDotsMenu";
+import { AnalyzeSheet } from "@/components/ai/AnalyzeSheet";
 import { ViewModeToggle } from "@/components/DocumentViewer/ViewModeToggle";
 import { PageJumpModal } from "@/components/pdf/PageJumpModal";
 import { ThumbnailGrid } from "@/components/pdf/ThumbnailGrid";
@@ -291,6 +292,7 @@ export default function PdfViewerScreen() {
   });
 
   const [passwordInput, setPasswordInput] = useState("");
+  const [showAnalyze, setShowAnalyze] = useState(false);
   const [targetPage, setTargetPage] = useState<number | undefined>(undefined);
   const [showFullscreenIndicator, setShowFullscreenIndicator] = useState(false);
   const [headerHeight, setHeaderHeight] = useState(0);
@@ -899,6 +901,8 @@ export default function PdfViewerScreen() {
       params: { uri, name },
     });
   }, [uri, name]);
+
+  const handleAnalyze = useCallback(() => setShowAnalyze(true), []);
 
   // ── Lock File ────────────────────────────────────────────────────
   const handleLockFile = useCallback(() => {
@@ -2175,11 +2179,18 @@ export default function PdfViewerScreen() {
         onSearchText={handleOpenSearch}
         onReadAloud={handleReadAloud}
         onChatWithFile={handleChatWithFile}
+        onAnalyze={handleAnalyze}
         onLockFile={handleLockFile}
         onEditFile={handleEditFile}
         onDelete={handleDelete}
         onStar={handleStar}
         isStarred={state.isStarred}
+      />
+
+      <AnalyzeSheet
+        visible={showAnalyze}
+        onClose={() => setShowAnalyze(false)}
+        file={uri ? { uri, name: name || "Document.pdf", mimeType: "application/pdf" } : null}
       />
 
       {/* ── PDF Text Extractor (hidden) — feeds Read Aloud AND Search,

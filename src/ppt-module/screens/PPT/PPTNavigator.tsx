@@ -20,12 +20,21 @@ interface PPTNavigatorProps {
 export const PPTNavigator: React.FC<PPTNavigatorProps> = ({ onExit }) => {
   const [screen, setScreen] = useState<PPTScreen>('home');
   const [initialThemeId, setInitialThemeId] = useState<ThemeId | undefined>(undefined);
+  const [initialPresentation, setInitialPresentation] =
+    useState<PPTPresentation | undefined>(undefined);
   const [viewerPresentation, setViewerPresentation] =
     useState<PPTPresentation | null>(null);
 
   const goHome = useCallback(() => setScreen('home'), []);
   const goCreate = useCallback((themeId?: ThemeId) => {
+    setInitialPresentation(undefined);
     setInitialThemeId(themeId);
+    setScreen('create');
+  }, []);
+  // Open the editor on an already-built deck (e.g. from Topic-to-deck).
+  const goCreateWithPresentation = useCallback((p: PPTPresentation) => {
+    setInitialPresentation(p);
+    setInitialThemeId(p.themeId);
     setScreen('create');
   }, []);
   const goOpenEdit = useCallback(() => setScreen('openEdit'), []);
@@ -39,15 +48,17 @@ export const PPTNavigator: React.FC<PPTNavigatorProps> = ({ onExit }) => {
       {screen === 'home' && (
         <PPTHomeScreen
           onCreateNew={goCreate}
-          onOpenExisting={goOpenEdit}
+          onCreateWithPresentation={goCreateWithPresentation}
           onExit={onExit}
         />
       )}
 
       {screen === 'create' && (
         <PPTCreatorScreen
+          key={initialPresentation?.id ?? 'blank'}
           onGoBack={goHome}
           initialThemeId={initialThemeId}
+          initialPresentation={initialPresentation}
         />
       )}
 

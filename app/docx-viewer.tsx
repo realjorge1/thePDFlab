@@ -36,6 +36,7 @@ import {
 } from "@/components/DocumentViewer/MobileRenderer";
 import { SelectionToolbar } from "@/components/DocumentViewer/SelectionToolbar";
 import { ThreeDotsMenu } from "@/components/DocumentViewer/ThreeDotsMenu";
+import { AnalyzeSheet } from "@/components/ai/AnalyzeSheet";
 import { ViewModeToggle } from "@/components/DocumentViewer/ViewModeToggle";
 import DocxShareOptions from "@/components/DocxShareOptions";
 import { ReadAloudController } from "@/components/ReadAloudController";
@@ -630,6 +631,10 @@ export default function DocxViewerScreen() {
       params: { uri, name },
     });
   }, [uri, name]);
+
+  // ── Analyze (Devil's Advocate / Narrative Arc) ────────────────────
+  const [showAnalyze, setShowAnalyze] = useState(false);
+  const handleAnalyze = useCallback(() => setShowAnalyze(true), []);
 
   // ── Edit File ────────────────────────────────────────────────────
   const handleToggleEdit = useCallback(() => {
@@ -1387,10 +1392,26 @@ export default function DocxViewerScreen() {
         onSearchText={handleOpenSearch}
         onReadAloud={handleReadAloud}
         onChatWithFile={handleChatWithFile}
+        onAnalyze={handleAnalyze}
         onEditFile={handleToggleEdit}
         onDelete={handleDelete}
         onStar={handleStar}
         isStarred={state.isStarred}
+      />
+
+      <AnalyzeSheet
+        visible={showAnalyze}
+        onClose={() => setShowAnalyze(false)}
+        file={
+          uri
+            ? {
+                uri,
+                name: name || "Document.docx",
+                mimeType:
+                  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+              }
+            : null
+        }
       />
 
       {/* ── Read Aloud controller ──────────────────────────────── */}

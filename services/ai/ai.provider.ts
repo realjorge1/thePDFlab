@@ -6,10 +6,11 @@
 import type {
     AIAnalyzeRequest,
     AIChatRequest,
-    AIClassifyRequest,
+    AIDevilsAdvocateRequest,
     AIExplainRequest,
     AIGenerateDocumentRequest,
     AIHighlightRequest,
+    AINarrativeArcRequest,
     AIQuizRequest,
     AIResponse,
     AISummarizeRequest,
@@ -40,8 +41,11 @@ export interface AIProvider {
   /** Generate a document based on prompts and parameters. */
   generateDocument(req: AIGenerateDocumentRequest): Promise<AIResponse>;
 
-  /** Classify a document and suggest a descriptive filename. */
-  classify(req: AIClassifyRequest): Promise<AIResponse>;
+  /** Surface the hardest, document-grounded objections a real audience will raise. */
+  devilsAdvocate(req: AIDevilsAdvocateRequest): Promise<AIResponse>;
+
+  /** Detect the document type and judge whether its structure/story flows. */
+  narrativeArc(req: AINarrativeArcRequest): Promise<AIResponse>;
 
   /** Identify key points and critical sentences in text. */
   highlight(req: AIHighlightRequest): Promise<AIResponse>;

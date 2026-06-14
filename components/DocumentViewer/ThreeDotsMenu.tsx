@@ -46,6 +46,8 @@ export interface ThreeDotsMenuProps {
   onSearchText: () => void;
   onReadAloud: () => void;
   onChatWithFile: () => void;
+  /** Opens the Devil's Advocate / Narrative Arc analysis chooser. */
+  onAnalyze?: () => void;
   onLockFile?: () => void;
   onEditFile: () => void;
   onDelete: () => void;
@@ -65,6 +67,7 @@ export function ThreeDotsMenu({
   onSearchText,
   onReadAloud,
   onChatWithFile,
+  onAnalyze,
   onLockFile,
   onEditFile,
   onDelete,
@@ -78,6 +81,10 @@ export function ThreeDotsMenu({
     { id: "read-aloud", label: "Read Aloud", icon: "volume-up", onPress: onReadAloud },
     { id: "chat", label: "Chat with File", icon: "chat", onPress: onChatWithFile },
   ];
+
+  if (onAnalyze) {
+    items.push({ id: "analyze", label: "Analyze", icon: "auto-awesome", onPress: onAnalyze });
+  }
 
   if (fileType === "pdf" && onLockFile) {
     items.push({ id: "lock", label: "Lock File", icon: "lock", onPress: onLockFile });

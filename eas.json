@@ -1,4 +1,4 @@
-{
+﻿{
   "cli": {
     "version": ">= 16.28.0",
     "appVersionSource": "remote"
@@ -8,19 +8,19 @@
       "developmentClient": true,
       "distribution": "internal",
       "env": {
-        "EXPO_PUBLIC_API_URL": "https://inscribed-backend.onrender.com/api"
+        "EXPO_PUBLIC_API_URL": "https://inscribed-backend-docker.onrender.com/api"
       }
     },
     "preview": {
       "distribution": "internal",
       "env": {
-        "EXPO_PUBLIC_API_URL": "https://inscribed-backend.onrender.com/api"
+        "EXPO_PUBLIC_API_URL": "https://inscribed-backend-docker.onrender.com/api"
       }
     },
     "production": {
       "autoIncrement": true,
       "env": {
-        "EXPO_PUBLIC_API_URL": "https://inscribed-backend.onrender.com/api"
+        "EXPO_PUBLIC_API_URL": "https://inscribed-backend-docker.onrender.com/api"
       }
     }
   },

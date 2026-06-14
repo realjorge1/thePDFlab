@@ -1,4 +1,5 @@
 import { AppHeaderContainer } from "@/components/AppHeaderContainer";
+import { AnalyzeSheet } from "@/components/ai/AnalyzeSheet";
 import { GradientView } from "@/components/GradientView";
 import { Ionicons } from "@expo/vector-icons";
 import MaterialIcons from "@expo/vector-icons/MaterialIcons";
@@ -121,6 +122,7 @@ export default function LibraryScreen() {
   const backgroundColor = t.background;
   const textColor = t.text;
   const primaryColor = t.primary;
+  const containerBorderColor = mode === "dark" ? "rgba(255,255,255,0.35)" : "#B0B0B0";
 
   // State
   const [searchQuery, setSearchQuery] = useState("");
@@ -135,6 +137,7 @@ export default function LibraryScreen() {
 
   // ── Long-press action sheet ────────────────────────────────────────────────
   const [actionFile, setActionFile] = useState<QuickAccessFile | null>(null);
+  const [analyzeFile, setAnalyzeFile] = useState<QuickAccessFile | null>(null);
 
   // ── Toast notification ─────────────────────────────────────────────────────
   const [toastMsg, setToastMsg] = useState<string | null>(null);
@@ -1086,7 +1089,7 @@ export default function LibraryScreen() {
             styles.gridCard,
             {
               backgroundColor: isSelected ? t.primary + "18" : t.card,
-              borderColor: isSelected ? t.primary : t.borderLight,
+              borderColor: isSelected ? t.primary : containerBorderColor,
               borderWidth: isSelected ? 2 : 1,
             },
           ]}
@@ -1190,7 +1193,7 @@ export default function LibraryScreen() {
         Excel and PowerPoint file inside straight into your library.
       </Text>
       <TouchableOpacity
-        style={styles.emptyButton}
+        style={[styles.emptyButton, { borderColor: containerBorderColor }]}
         onPress={handleAccessFolder}
         activeOpacity={0.8}
       >
@@ -1224,7 +1227,7 @@ export default function LibraryScreen() {
       </Text>
       {hasActiveFilters && (
         <TouchableOpacity
-          style={styles.emptyButton}
+          style={[styles.emptyButton, { borderColor: containerBorderColor }]}
           onPress={resetFilters}
           activeOpacity={0.8}
         >
@@ -1334,7 +1337,7 @@ export default function LibraryScreen() {
           {showSearchBar && (
             <View style={styles.searchBarRow}>
               <View
-                style={[styles.searchBarExpanded, { backgroundColor: t.card }]}
+                style={[styles.searchBarExpanded, { backgroundColor: t.card, borderColor: containerBorderColor }]}
               >
                 <Search color={t.primary} size={20} strokeWidth={2.5} />
                 <TextInput
@@ -1965,7 +1968,27 @@ export default function LibraryScreen() {
             actionFile && handleMoveToFolder(actionFile)
           }
           onRename={() => actionFile && handleRenameFile(actionFile)}
+          onAnalyze={() => {
+            const f = actionFile;
+            setActionFile(null);
+            if (f) setAnalyzeFile(f);
+          }}
           onDelete={() => actionFile && handleActionDelete(actionFile)}
+        />
+
+        {/* ── Analyze chooser (Devil's Advocate / Narrative Arc) ─────────────── */}
+        <AnalyzeSheet
+          visible={analyzeFile !== null}
+          onClose={() => setAnalyzeFile(null)}
+          file={
+            analyzeFile
+              ? {
+                  uri: analyzeFile.uri,
+                  name: analyzeFile.displayName,
+                  mimeType: analyzeFile.mimeType,
+                }
+              : null
+          }
         />
 
         {/* ── Sort By Modal ────────────────────────────────────────────────── */}
@@ -1981,7 +2004,7 @@ export default function LibraryScreen() {
             activeOpacity={1}
           >
             <View
-              style={[styles.sortMenuModal, { backgroundColor: t.card }]}
+              style={[styles.sortMenuModal, { backgroundColor: t.card, borderColor: containerBorderColor }]}
               onStartShouldSetResponder={() => true}
             >
               <Text style={[styles.sortMenuTitle, { color: t.text }]}>
@@ -2037,7 +2060,7 @@ export default function LibraryScreen() {
             activeOpacity={1}
           >
             <View
-              style={[styles.folderPickerModal, { backgroundColor: t.card }]}
+              style={[styles.folderPickerModal, { backgroundColor: t.card, borderColor: containerBorderColor }]}
               onStartShouldSetResponder={() => true}
             >
               <Text style={[styles.folderPickerTitle, { color: t.text }]}>
@@ -2138,6 +2161,7 @@ interface FileActionSheetModalProps {
   onToggleFavorite: () => void;
   onMoveToFolder: () => void;
   onRename: () => void;
+  onAnalyze: () => void;
   onDelete: () => void;
 }
 
@@ -2153,8 +2177,11 @@ const FileActionSheetModal: React.FC<FileActionSheetModalProps> = ({
   onToggleFavorite,
   onMoveToFolder,
   onRename,
+  onAnalyze,
   onDelete,
 }) => {
+  const { mode: sheetMode } = useTheme();
+  const containerBorderColor = sheetMode === "dark" ? "rgba(255,255,255,0.35)" : "#B0B0B0";
   const visible = file !== null;
   const translateY = useRef(new Animated.Value(0)).current;
 
@@ -2216,7 +2243,7 @@ const FileActionSheetModal: React.FC<FileActionSheetModalProps> = ({
         <Animated.View
           style={[
             styles.actionSheet,
-            { backgroundColor: theme.card, transform: [{ translateY }] },
+            { backgroundColor: theme.card, borderColor: containerBorderColor, transform: [{ translateY }] },
           ]}
           onStartShouldSetResponder={() => true}
         >
@@ -2247,6 +2274,7 @@ const FileActionSheetModal: React.FC<FileActionSheetModalProps> = ({
               onToggleFavorite={onToggleFavorite}
               onMoveToFolder={onMoveToFolder}
               onRename={onRename}
+              onAnalyze={onAnalyze}
               onDelete={onDelete}
             />
           )}
@@ -2265,6 +2293,7 @@ interface FileActionSheetBodyProps {
   onToggleFavorite: () => void;
   onMoveToFolder: () => void;
   onRename: () => void;
+  onAnalyze: () => void;
   onDelete: () => void;
 }
 
@@ -2277,6 +2306,7 @@ const FileActionSheetBody: React.FC<FileActionSheetBodyProps> = ({
   onToggleFavorite,
   onMoveToFolder,
   onRename,
+  onAnalyze,
   onDelete,
 }) => {
   const progressEntry = useReadingProgressFor(file.uri);
@@ -2321,6 +2351,13 @@ const FileActionSheetBody: React.FC<FileActionSheetBodyProps> = ({
       label: "Rename",
       color: theme.text,
       onPress: onRename,
+    },
+    {
+      key: "analyze",
+      icon: "auto-awesome",
+      label: "Analyze",
+      color: "#0EA5E9",
+      onPress: onAnalyze,
     },
     {
       key: "delete",
@@ -2395,11 +2432,6 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   headerContainer: {
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.15,
-    shadowRadius: 16,
-    elevation: 8,
   },
   header: {
     paddingHorizontal: 20,
@@ -2463,11 +2495,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 18,
     height: 48,
     gap: 12,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.08,
-    shadowRadius: 12,
-    elevation: 4,
   },
   searchInput: {
     flex: 1,
@@ -2482,11 +2509,7 @@ const styles = StyleSheet.create({
   importButton: {
     borderRadius: 16,
     overflow: "hidden",
-    shadowColor: colors.primary,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 4,
+    borderWidth: 1,
   },
   importButtonGradient: {
     flexDirection: "row",
@@ -2530,11 +2553,7 @@ const styles = StyleSheet.create({
     padding: 12,
     width: SCREEN_WIDTH * 0.82,
     maxWidth: 380,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.22,
-    shadowRadius: 24,
-    elevation: 16,
+    borderWidth: 1,
   },
   sortMenuTitle: {
     fontSize: 16,
@@ -2574,11 +2593,6 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     borderWidth: 1,
     marginBottom: 8,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05,
-    shadowRadius: 8,
-    elevation: 2,
   },
   expiredBorder: {
     borderWidth: 2,
@@ -2643,11 +2657,7 @@ const styles = StyleSheet.create({
   emptyButton: {
     borderRadius: 16,
     overflow: "hidden",
-    shadowColor: colors.primary,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 4,
+    borderWidth: 1,
   },
   emptyButtonGradient: {
     flexDirection: "row",
@@ -2727,13 +2737,7 @@ const styles = StyleSheet.create({
     gap: 4,
     borderWidth: 1,
   },
-  filterChipActive: {
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 2,
-  },
+  filterChipActive: {},
   filterChipText: {
     fontSize: 13,
     fontWeight: "600",
@@ -2757,13 +2761,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginRight: 8,
   },
-  searchButtonActive: {
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 2,
-  },
+  searchButtonActive: {},
   searchBarRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -2779,11 +2777,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     height: 44,
     gap: 10,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.08,
-    shadowRadius: 8,
-    elevation: 3,
+    borderWidth: 1,
   },
   searchCloseButton: {
     paddingHorizontal: 8,
@@ -2871,11 +2865,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 18,
     width: "100%",
     maxWidth: 440,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: -4 },
-    shadowOpacity: 0.18,
-    shadowRadius: 16,
-    elevation: 14,
+    borderWidth: 1,
   },
   actionSheetGrabArea: {
     paddingTop: 6,
@@ -2960,12 +2950,8 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     marginBottom: 14,
     overflow: "hidden",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.04,
-    shadowRadius: 4,
-    elevation: 1,
     paddingBottom: 6,
+    borderWidth: 1,
   },
   gridIconArea: {
     width: "100%",
@@ -3018,11 +3004,7 @@ const styles = StyleSheet.create({
     width: SCREEN_WIDTH * 0.85,
     maxWidth: 400,
     maxHeight: "60%",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.25,
-    shadowRadius: 24,
-    elevation: 16,
+    borderWidth: 1,
   },
   folderPickerTitle: {
     fontSize: 18,

@@ -7,15 +7,18 @@
 import type {
   AIAction,
   AIChatMessage,
+  ChallengerRole,
+  DevilsAdvocateData,
   HighlightData,
   HighlightItem,
+  NarrativeArcData,
 } from "@/services/ai/ai.types";
 import React from "react";
-import { ClassifyRenderer, ClassifyData } from "./ClassifyRenderer";
-import { DocumentRenderer } from "./DocumentRenderer";
+import { DevilsAdvocateRenderer } from "./DevilsAdvocateRenderer";
 import { ExplainRenderer } from "./ExplainRenderer";
 import { HighlightRenderer } from "./HighlightRenderer";
 import { InsightRenderer, InsightData } from "./InsightRenderer";
+import { NarrativeArcRenderer } from "./NarrativeArcRenderer";
 import { TableRenderer, TableData } from "./TableRenderer";
 import { TaskRenderer, TaskData } from "./TaskRenderer";
 
@@ -26,16 +29,11 @@ interface Props {
   onAddAllToTodos?: (tasks: any[]) => void;
   onSourceTap?: (quote: string) => void;
   onAskMore?: (prompt: string) => void;
-  onConvertToEditable?: (sections: any[]) => void;
-  onRenameFile?: (filename: string) => void;
-  onMoveToFolder?: (folder: string) => void;
-  onToggleAutoSort?: (enabled: boolean) => void;
-  autoSortEnabled?: boolean;
   onExport?: () => void;
   onAddToNotes?: () => void;
   onExtractTasks?: () => void;
-  onExplainDocParagraph?: (text: string) => void;
-  onSummarizeDocParagraph?: (text: string) => void;
+  // Devil's Advocate: re-run as a different challenger role
+  onRerunWithRole?: (role: ChallengerRole, customRole?: string) => void;
   // Highlight-specific handlers
   onJumpToHighlight?: (highlight: HighlightItem) => void;
   onConvertHighlightToTask?: (highlight: HighlightItem) => void;
@@ -53,16 +51,10 @@ export function StructuredMessageRenderer({
   onAddAllToTodos,
   onSourceTap,
   onAskMore,
-  onConvertToEditable,
-  onRenameFile,
-  onMoveToFolder,
-  onToggleAutoSort,
-  autoSortEnabled,
   onExport,
   onAddToNotes,
   onExtractTasks,
-  onExplainDocParagraph,
-  onSummarizeDocParagraph,
+  onRerunWithRole,
   onJumpToHighlight,
   onConvertHighlightToTask,
   onAddHighlightToNotes,
@@ -91,25 +83,25 @@ export function StructuredMessageRenderer({
     );
   }
 
-  // ── Document (extract-text) shim ────────────────────────────────────────
-  if (sd?.__kind === "document") {
+  // ── Devil's Advocate ────────────────────────────────────────────────────
+  if (sd?.__kind === "devils-advocate") {
     return (
-      <DocumentRenderer
-        fullText={sd.fullText || message.content}
+      <DevilsAdvocateRenderer
+        data={sd as DevilsAdvocateData}
         documentName={documentName}
-        onConvertToEditable={onConvertToEditable}
+        onRerunWithRole={onRerunWithRole}
         onAddToNotes={onAddToNotes}
-        onExport={onExport}
-        onExplainParagraph={onExplainDocParagraph}
-        onSummarizeParagraph={onSummarizeDocParagraph}
-        onAskAboutSection={
-          onAskMore
-            ? (heading, sectionText) =>
-                onAskMore(
-                  `Tell me more about the "${heading || "section"}" section:\n\n${sectionText.slice(0, 500)}`,
-                )
-            : undefined
-        }
+      />
+    );
+  }
+
+  // ── Narrative Arc ───────────────────────────────────────────────────────
+  if (sd?.__kind === "narrative-arc") {
+    return (
+      <NarrativeArcRenderer
+        data={sd as NarrativeArcData}
+        documentName={documentName}
+        onAddToNotes={onAddToNotes}
       />
     );
   }
@@ -155,22 +147,6 @@ export function StructuredMessageRenderer({
           onAddToNotes={onAddToNotes}
           onExtractTasks={onExtractTasks}
           onExport={onExport}
-        />
-      );
-    }
-
-    if (
-      ("type" in sd && "confidence" in sd) ||
-      ("suggestedFilename" in sd && "keyEntities" in sd)
-    ) {
-      return (
-        <ClassifyRenderer
-          data={sd as ClassifyData}
-          documentName={documentName}
-          onRenameFile={onRenameFile}
-          onMoveToFolder={onMoveToFolder}
-          onToggleAutoSort={onToggleAutoSort}
-          autoSortEnabled={autoSortEnabled}
         />
       );
     }

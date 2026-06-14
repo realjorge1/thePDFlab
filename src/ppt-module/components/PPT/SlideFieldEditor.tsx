@@ -229,6 +229,9 @@ export const SlideFieldEditor: React.FC<SlideFieldEditorProps> = ({
   const meta = metaFor(activeField, layout);
 
   // ─── Single text field renderer ───
+  // Single-line fields chain with the keyboard's "next" key so a whole slide
+  // can be filled without ever leaving the keyboard.
+  const hasNext = activeIndex >= 0 && activeIndex < fields.length - 1;
   const renderTextField = (
     value: string,
     onChangeText: (v: string) => void,
@@ -242,6 +245,9 @@ export const SlideFieldEditor: React.FC<SlideFieldEditorProps> = ({
       placeholderTextColor={t.textTertiary}
       multiline={opts.multiline}
       keyboardType={opts.numeric ? 'numbers-and-punctuation' : 'default'}
+      returnKeyType={opts.multiline ? undefined : hasNext ? 'next' : 'done'}
+      blurOnSubmit={opts.multiline ? undefined : !hasNext}
+      onSubmitEditing={opts.multiline ? undefined : hasNext ? goNext : undefined}
       style={[
         styles.input,
         {

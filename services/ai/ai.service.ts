@@ -178,13 +178,13 @@ export function createSession(
     chat: "Chat",
     translate: "Translation",
     summarize: "Summary",
-    "extract-text": "Text Extraction",
     analyze: "Analysis",
     tasks: "Task Extraction",
     "fill-form": "Form Fill",
     "generate-document": "Generate Document",
     "chat-with-document": "Document Chat",
-    classify: "Classification",
+    "devils-advocate": "Devil's Advocate",
+    "narrative-arc": "Narrative Arc",
     highlight: "Highlights",
     explain: "Explanation",
     quiz: "Quiz",
@@ -342,14 +342,46 @@ export async function generateDocument(
   });
 }
 
-export async function classifyDocument(
+export async function runDevilsAdvocate(
   text: string,
-  filename?: string,
+  documentName?: string,
+  role?: import("./ai.types").ChallengerRole,
+  customRole?: string,
+  contextText?: string,
+  contextName?: string,
   signal?: AbortSignal,
 ): Promise<AIResponse> {
   assertAIPremium();
   await initAIProvider();
-  return _provider.classify({ text: prepareText(text), filename, signal });
+  return _provider.devilsAdvocate({
+    text: prepareText(text),
+    documentName,
+    role,
+    customRole,
+    contextText: contextText ? prepareText(contextText) : undefined,
+    contextName,
+    signal,
+  });
+}
+
+export async function checkNarrativeArc(
+  text: string,
+  documentName?: string,
+  format?: import("./ai.types").DocFormat,
+  contextText?: string,
+  contextName?: string,
+  signal?: AbortSignal,
+): Promise<AIResponse> {
+  assertAIPremium();
+  await initAIProvider();
+  return _provider.narrativeArc({
+    text: prepareText(text),
+    documentName,
+    format,
+    contextText: contextText ? prepareText(contextText) : undefined,
+    contextName,
+    signal,
+  });
 }
 
 export async function highlightKeyPoints(
