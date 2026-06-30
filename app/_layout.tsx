@@ -50,8 +50,8 @@ import { loadNativeFonts } from "@/services/editorFontService";
 import { runImportedFileRetentionCheck } from "@/services/fileRetentionService";
 import { purgeExpired } from "@/services/recycleBinService";
 import { loadSettings } from "@/services/settingsService";
-import { ThemeProvider } from "@/services/ThemeProvider";
-import { NoirLayer, NoirProvider, NoirStatusBar } from "@/services/NoirProvider";
+import { ThemeProvider, ThemedStatusBar } from "@/services/ThemeProvider";
+import { NoirLayer, NoirProvider } from "@/services/NoirProvider";
 import { setAutoDetectLanguage, setRate } from "@/services/ttsService";
 import { Stack } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
@@ -167,11 +167,12 @@ export default function RootLayout() {
           ("first open after being closed"), so this entrance plays exactly once. */}
       <Animated.View style={styles.container} entering={FadeIn.duration(450)}>
         {/* Edge-to-edge is mandatory on Android (SDK 54): the app draws behind a
-            transparent status bar. This only controls icon contrast app-wide —
-            "auto" = dark icons in light mode, light icons in dark mode; noir mode
-            forces light icons over its dark-gray base. Screens reserve the bar's
-            height via SafeAreaView / useSafeAreaInsets. */}
-        <NoirStatusBar />
+            transparent status bar. ThemedStatusBar sets icon contrast from the
+            app's resolved theme (light → dark icons, dark/noir → light icons) so
+            the bar stays readable even when the in-app theme differs from the
+            device's OS appearance. Screens reserve the bar's height via
+            SafeAreaView / useSafeAreaInsets. */}
+        <ThemedStatusBar />
         <Stack
           screenOptions={{
             headerShown: false,

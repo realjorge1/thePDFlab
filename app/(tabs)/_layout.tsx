@@ -2,10 +2,12 @@ import { GradientView } from "@/components/GradientView";
 import { colors as brandColors } from "@/constants/theme";
 import { useSettings } from "@/services/settingsService";
 import { useTheme } from "@/services/ThemeProvider";
-import type { BottomTabBarProps } from "@react-navigation/bottom-tabs";
-import { Tabs, useRouter } from "expo-router";
+import { createMaterialTopTabNavigator } from "@react-navigation/material-top-tabs";
+import type { MaterialTopTabBarProps } from "@react-navigation/material-top-tabs";
+import { useRouter, withLayoutContext } from "expo-router";
 import React, { useEffect, useRef } from "react";
 import {
+  ActivityIndicator,
   Animated,
   InteractionManager,
   Platform,
@@ -17,6 +19,15 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { Download, Home, Library, Wrench } from "lucide-react-native";
+
+// ─── Swipeable tab navigator ─────────────────────────────────────────────────
+// WhatsApp-style swipe-between-tabs is a horizontal pager, which bottom-tabs
+// can't do (it's tap-only). material-top-tabs is backed by the native
+// react-native-pager-view, so the swipe + page transform run entirely on the
+// UI thread (smooth even when JS is busy). We pin its bar to the bottom and
+// hand it the same CustomTabBar below, so it looks identical to before.
+const { Navigator } = createMaterialTopTabNavigator();
+const MaterialTopTabs = withLayoutContext(Navigator);
 
 // ─── Tab metadata ────────────────────────────────────────────────────────────
 const TAB_META: Record<string, { title: string; Icon: typeof Home }> = {
@@ -107,7 +118,7 @@ function TabItem({
 }
 
 // ─── Custom Tab Bar ──────────────────────────────────────────────────────────
-function CustomTabBar({ state, descriptors, navigation }: BottomTabBarProps) {
+function CustomTabBar({ state, descriptors, navigation }: MaterialTopTabBarProps) {
   const { colors: t } = useTheme();
   const insets = useSafeAreaInsets();
 
@@ -204,18 +215,51 @@ export default function TabLayout() {
   }, [isLoading, settings.defaultStartScreen]);
 
   return (
-    <Tabs
+    <MaterialTopTabs
       tabBar={(props) => <CustomTabBar {...props} />}
-      screenOptions={{ headerShown: false }}
+      // Bar sits at the bottom; the swipeable pager fills the space above it.
+      tabBarPosition="bottom"
+      screenOptions={{
+        swipeEnabled: true,
+        // Don't mount all four screens at startup — the Library tab is the
+        // heavy app/library.tsx, so eager-mounting would risk a startup hitch.
+        // Instead mount on demand but PRELOAD the adjacent tab, so the page you
+        // swipe to is already rendered before your finger reaches it.
+        lazy: true,
+        lazyPreloadDistance: 1,
+        // Guarantees we never flash a blank page: in the rare sub-second window
+        // before a not-yet-mounted screen is ready, show a placeholder painted
+        // in the exact theme background colour instead of empty white.
+        lazyPlaceholder: () => <TabLazyPlaceholder />,
+        // Keep off-screen tabs mounted but frozen (no background re-renders),
+        // matching the freezeOnBlur behaviour the rest of the app already uses.
+        freezeOnBlur: true,
+      }}
     >
+      {/* Page order = swipe order: Home → Tools → Library → Download.
+          A pager hard-stops at the ends, so swiping back past Home or
+          forward past Download does nothing (no bounce). */}
       {TAB_ORDER.map((name) => (
-        <Tabs.Screen
+        <MaterialTopTabs.Screen
           key={name}
           name={name}
           options={{ title: TAB_META[name].title }}
         />
       ))}
-    </Tabs>
+    </MaterialTopTabs>
+  );
+}
+
+// ─── Lazy placeholder ────────────────────────────────────────────────────────
+// Shown for a not-yet-mounted tab while swiping. Painted in the theme's screen
+// background colour so it's indistinguishable from a real (empty) screen — the
+// user never sees a blank white flash, in any theme.
+function TabLazyPlaceholder() {
+  const { colors: t } = useTheme();
+  return (
+    <View style={[styles.lazyPlaceholder, { backgroundColor: t.background }]}>
+      <ActivityIndicator size="small" color={t.tabActive} />
+    </View>
   );
 }
 
@@ -271,5 +315,12 @@ const styles = StyleSheet.create({
   tabLabel: {
     fontSize: 11,
     letterSpacing: 0.1,
+  },
+
+  /* ── Lazy placeholder: fills the page, theme-coloured, centred spinner ── */
+  lazyPlaceholder: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
   },
 });

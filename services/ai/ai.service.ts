@@ -6,6 +6,7 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as DocumentPicker from "expo-document-picker";
 import * as FileSystem from "expo-file-system/legacy";
+import { resilientFetch } from "@/config/api";
 
 import type { AIProvider } from "./ai.provider";
 import type {
@@ -97,11 +98,8 @@ export async function initAIProvider(): Promise<void> {
     const { API_ENDPOINTS } = require("@/config/api");
     const statusUrl = API_ENDPOINTS.AI.CHAT.replace("/chat", "/status");
 
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 5_000);
-
-    const res = await fetch(statusUrl, { signal: controller.signal });
-    clearTimeout(timeout);
+    // Probe the pool — adopts (and switches to) the first healthy backend.
+    const res = await resilientFetch(statusUrl, {}, { timeoutMs: 5_000 });
 
     if (res.ok) {
       const data = await res.json();
@@ -600,16 +598,12 @@ export async function extractDocumentText(
           name: doc.name || "document.pdf",
         } as any);
 
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 120000); // 2 min timeout for large PDFs
-
-        const response = await fetch(API_ENDPOINTS.AI.EXTRACT_PDF, {
-          method: "POST",
-          body: formData,
-          signal: controller.signal,
-        });
-
-        clearTimeout(timeout);
+        // resilientFetch fails over across the backend pool; 2 min per attempt.
+        const response = await resilientFetch(
+          API_ENDPOINTS.AI.EXTRACT_PDF,
+          { method: "POST", body: formData },
+          { timeoutMs: 120000 },
+        );
 
         if (response.ok) {
           const result = await response.json();
@@ -668,14 +662,12 @@ export async function extractDocumentText(
           name: doc.name,
         } as any);
 
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 120000);
-        const response = await fetch(API_ENDPOINTS.AI.EXTRACT_DOCUMENT, {
-          method: "POST",
-          body: formData,
-          signal: controller.signal,
-        });
-        clearTimeout(timeout);
+        // resilientFetch fails over across the backend pool; 2 min per attempt.
+        const response = await resilientFetch(
+          API_ENDPOINTS.AI.EXTRACT_DOCUMENT,
+          { method: "POST", body: formData },
+          { timeoutMs: 120000 },
+        );
 
         if (response.ok) {
           const result = await response.json();
@@ -735,7 +727,7 @@ export async function askPdfQuestion(
 
   try {
     const { API_ENDPOINTS } = require("../../config/api");
-    const resp = await fetch(API_ENDPOINTS.AI.ASK_PDF, {
+    const resp = await resilientFetch(API_ENDPOINTS.AI.ASK_PDF, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ docId, question }),

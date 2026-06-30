@@ -4201,7 +4201,7 @@ const styles = StyleSheet.create({
   },
   linkSourceText: { fontSize: 11.5, fontWeight: "600" },
 
-  body: { paddingHorizontal: 6, paddingVertical: spacing.sm, gap: 0 },
+  body: { paddingHorizontal: 0, paddingVertical: spacing.sm, gap: 0 },
   emptyWrap: { alignItems: "center", paddingVertical: 40, gap: 6 },
   emptyTitle: { fontSize: 15, fontWeight: "600" },
   emptyHint: { fontSize: 12 },

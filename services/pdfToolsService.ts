@@ -3,7 +3,7 @@
  * Handles all PDF processing operations via the backend API
  */
 
-import { API_BASE_URL, API_ENDPOINTS } from "@/config/api";
+import { API_BASE_URL, API_ENDPOINTS, resilientFetch } from "@/config/api";
 import { upsertFileRecord } from "@/services/fileIndexService";
 import * as FileSystem from "expo-file-system/legacy";
 
@@ -713,33 +713,24 @@ export async function processWithTool(
     onProgress?.(20, "Please Wait");
     console.log(`[PdfTools] Sending request to: ${toolConfig.endpoint}`);
 
-    // Use caller-provided AbortSignal if available, otherwise create timeout-only controller
-    const internalController = new AbortController();
-    const timeoutId = setTimeout(
-      () => internalController.abort(),
-      REQUEST_TIMEOUT,
-    );
-
-    // If caller passed a signal, abort internal controller when caller aborts
-    if (signal) {
-      if (signal.aborted) {
-        clearTimeout(timeoutId);
-        return { success: false, error: "Request was cancelled." };
-      }
-      signal.addEventListener("abort", () => internalController.abort(), {
-        once: true,
-      });
+    // Early-out if the caller already cancelled.
+    if (signal?.aborted) {
+      return { success: false, error: "Request was cancelled." };
     }
 
-    // NOTE: Do NOT set Content-Type header manually for FormData
-    // Let fetch automatically set it with the correct boundary
-    const response = await fetch(toolConfig.endpoint, {
-      method: "POST",
-      body: formData,
-      signal: internalController.signal,
-    });
-
-    clearTimeout(timeoutId);
+    // NOTE: Do NOT set Content-Type header manually for FormData — fetch sets the
+    // multipart boundary itself. resilientFetch re-targets the request across the
+    // backend pool (failing over on error/unavailable/suspended) and honors the
+    // caller's cancel signal; REQUEST_TIMEOUT applies per backend attempt.
+    const response = await resilientFetch(
+      toolConfig.endpoint,
+      {
+        method: "POST",
+        body: formData,
+        signal,
+      },
+      { timeoutMs: REQUEST_TIMEOUT },
+    );
 
     onProgress?.(50, "Please Wait");
 

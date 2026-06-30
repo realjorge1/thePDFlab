@@ -1,19 +1,106 @@
 import Constants from "expo-constants";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 
-// API URL resolution order:
-//   1. EXPO_PUBLIC_API_URL — set per-profile in eas.json or .env (recommended
-//      for production builds; e.g. "https://your-app.onrender.com/api").
-//   2. app.json → expo.extra.apiUrl — used in local dev / Expo Go.
-//   3. https://inscribed-backend-docker.onrender.com/api — production fallback.
+// ─── Backend pool (primary + failover backups) ───────────────────────────────
+// The app talks to a POOL of interchangeable backends, tried in priority order.
+// The first reachable one is used; the moment it errors / is unavailable /
+// suspended, the app fails over to the next one ("backup generator" behaviour).
+// The active choice is sticky and persisted, so once we land on a healthy
+// backend the whole app follows it until that one also fails.
 //
-// IMPORTANT: cleartext (HTTP) traffic is only permitted to the hosts listed
-// in android/app/src/main/res/xml/network_security_config.xml. If you point
-// the URL at a new local IP, add it there or release builds will silently
-// fail with "Network request failed".
-export const API_BASE_URL =
-  process.env.EXPO_PUBLIC_API_URL ||
-  Constants.expoConfig?.extra?.apiUrl ||
-  "https://inscribed-backend-docker.onrender.com/api";
+// Priority order (highest first):
+//   1. EXPO_PUBLIC_API_URL, then EXPO_PUBLIC_API_URL_2 / _3   (.env / eas.json)
+//   2. app.json → expo.extra.apiUrl, then expo.extra.apiUrlBackups: [ … ]
+//   3. https://inscribed-backend-docker.onrender.com/api      (final fallback)
+// Each base may end in "/api" or not — it is normalised below. Duplicates are
+// removed while preserving order.
+//
+// IMPORTANT: cleartext (HTTP) traffic is only permitted to the hosts listed in
+// android/app/src/main/res/xml/network_security_config.xml. If you add a base
+// on a new local IP, add it there too or release builds fail with
+// "Network request failed".
+function normalizeBase(url?: string | null): string | null {
+  if (!url || typeof url !== "string") return null;
+  const trimmed = url.trim().replace(/\/+$/, "");
+  if (!trimmed) return null;
+  return /\/api$/.test(trimmed) ? trimmed : `${trimmed}/api`;
+}
+
+const _extra: any = Constants.expoConfig?.extra ?? {};
+const _RAW_BASES: Array<string | undefined | null> = [
+  process.env.EXPO_PUBLIC_API_URL,
+  process.env.EXPO_PUBLIC_API_URL_2,
+  process.env.EXPO_PUBLIC_API_URL_3,
+  _extra.apiUrl,
+  ...(Array.isArray(_extra.apiUrlBackups) ? _extra.apiUrlBackups : []),
+  "https://inscribed-backend-docker.onrender.com/api",
+];
+
+/** Ordered, de-duped pool of backend bases (priority high → low). */
+export const BACKEND_BASES: string[] = (() => {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of _RAW_BASES) {
+    const b = normalizeBase(raw);
+    if (b && !seen.has(b)) {
+      seen.add(b);
+      out.push(b);
+    }
+  }
+  return out.length
+    ? out
+    : ["https://inscribed-backend-docker.onrender.com/api"];
+})();
+
+let _activeIndex = 0;
+
+/** The backend base currently in use, e.g. "https://host/api". */
+export function getActiveBaseUrl(): string {
+  return BACKEND_BASES[_activeIndex] ?? BACKEND_BASES[0];
+}
+
+// Live, mutable mirrors so legacy `${API_BASE_URL}/path` call sites follow the
+// active backend (ES-module live bindings). New code should prefer
+// getActiveBaseUrl() / resilientFetch(), which actively fail over.
+export let API_BASE_URL = getActiveBaseUrl();
+export let BACKEND_BASE = API_BASE_URL.replace(/\/api$/, "");
+export let HEALTH_URL = `${BACKEND_BASE}/health`;
+
+const _ACTIVE_KEY = "@wordsinscribed/active_backend_base";
+
+function _applyActive(index: number): void {
+  if (BACKEND_BASES.length === 0) return;
+  _activeIndex =
+    ((index % BACKEND_BASES.length) + BACKEND_BASES.length) %
+    BACKEND_BASES.length;
+  API_BASE_URL = getActiveBaseUrl();
+  BACKEND_BASE = API_BASE_URL.replace(/\/api$/, "");
+  HEALTH_URL = `${BACKEND_BASE}/health`;
+}
+
+function _persistActive(): void {
+  AsyncStorage.setItem(_ACTIVE_KEY, getActiveBaseUrl()).catch(() => {});
+}
+
+// Restore the last-known-good backend on startup (best-effort, async).
+AsyncStorage.getItem(_ACTIVE_KEY)
+  .then((saved) => {
+    if (!saved) return;
+    const idx = BACKEND_BASES.indexOf(saved);
+    if (idx > 0) _applyActive(idx);
+  })
+  .catch(() => {});
+
+/** Force a specific base (by URL) to be active and persist the choice. */
+export function setActiveBaseUrl(base: string): boolean {
+  const idx = BACKEND_BASES.indexOf(normalizeBase(base) ?? "");
+  if (idx >= 0) {
+    _applyActive(idx);
+    _persistActive();
+    return true;
+  }
+  return false;
+}
 
 export const API_ENDPOINTS = {
   // PDF Operations
@@ -135,99 +222,174 @@ export const API_ENDPOINTS = {
   HEALTH: `${API_BASE_URL.replace("/api", "")}/health`,
 };
 
-export const BACKEND_BASE = API_BASE_URL.replace("/api", "");
-export const HEALTH_URL = `${BACKEND_BASE}/health`;
+// ─── Failover engine ─────────────────────────────────────────────────────────
 
-// Render free-tier cold starts can take up to 60s.
-// We poll /health with short individual timeouts rather than one long request,
-// so the OS can surface network errors quickly between attempts.
+// Response statuses that mean "this backend can't serve the request right now"
+// (gateway / unavailable / suspended) → fail over to the next backend.
+const FAILOVER_STATUSES = new Set([502, 503, 504, 521, 522, 523, 524]);
+
+/** Indices of the pool, active first, then the rest in priority order. */
+function _backendOrder(): number[] {
+  const n = BACKEND_BASES.length;
+  const order: number[] = [];
+  for (let k = 0; k < n; k++) order.push((_activeIndex + k) % n);
+  return order;
+}
+
+/** Reduce any endpoint (full URL or "/path") to the path AFTER "/api". */
+function _toApiPath(input: string): string {
+  let path = input;
+  const m = input.match(/^https?:\/\/[^/]+(\/.*)?$/i);
+  if (m) path = m[1] || "/";
+  // Drop a single leading "/api" segment — each base re-adds its own.
+  path = path.replace(/^\/api(?=\/|$)/, "");
+  if (!path.startsWith("/")) path = `/${path}`;
+  return path;
+}
+
+export interface ResilientFetchOptions {
+  /** Per-attempt timeout in ms (each backend gets a fresh timeout). */
+  timeoutMs?: number;
+  /** Response statuses that should trigger failover (default: gateway 5xx). */
+  retryStatuses?: Set<number>;
+}
+
+/**
+ * fetch() with automatic backend failover — the "backup generator".
+ *
+ * The host in `input` is ignored: the request is re-targeted to the ACTIVE
+ * backend and, on a network error or a failover status, to each remaining
+ * backend in priority order. The first backend that responds becomes the new
+ * active backend (sticky + persisted), so the rest of the app follows it.
+ *
+ * Cancellation: pass an AbortSignal via `init.signal`. A caller-initiated abort
+ * cancels WITHOUT failover; only per-attempt timeouts (opts.timeoutMs) and
+ * network/gateway failures trigger failover.
+ */
+export async function resilientFetch(
+  input: string,
+  init: RequestInit = {},
+  opts: ResilientFetchOptions = {},
+): Promise<Response> {
+  const path = _toApiPath(input);
+  const order = _backendOrder();
+  const retryStatuses = opts.retryStatuses ?? FAILOVER_STATUSES;
+  const callerSignal = init.signal as AbortSignal | null | undefined;
+  let lastErr: unknown;
+
+  for (let i = 0; i < order.length; i++) {
+    const idx = order[i];
+    const url = `${BACKEND_BASES[idx]}${path}`;
+    const isLast = i === order.length - 1;
+
+    // Per-attempt controller, chained to the caller's cancel signal.
+    const controller = new AbortController();
+    const onCallerAbort = () => controller.abort();
+    if (callerSignal) {
+      if (callerSignal.aborted) controller.abort();
+      else callerSignal.addEventListener("abort", onCallerAbort);
+    }
+    const timer =
+      opts.timeoutMs && opts.timeoutMs > 0
+        ? setTimeout(() => controller.abort(), opts.timeoutMs)
+        : null;
+
+    try {
+      const res = await fetch(url, { ...init, signal: controller.signal });
+      if (timer) clearTimeout(timer);
+      callerSignal?.removeEventListener("abort", onCallerAbort);
+
+      if (!res.ok && retryStatuses.has(res.status) && !isLast) {
+        lastErr = new Error(`Backend ${BACKEND_BASES[idx]} → ${res.status}`);
+        continue; // unavailable / suspended → try the next backend
+      }
+      // Reachable backend (any non-failover status, incl. 200/4xx) → adopt it.
+      _applyActive(idx);
+      _persistActive();
+      return res;
+    } catch (e) {
+      if (timer) clearTimeout(timer);
+      callerSignal?.removeEventListener("abort", onCallerAbort);
+      // Caller cancelled → propagate, never fail over.
+      if (callerSignal?.aborted) throw e;
+      lastErr = e;
+      if (isLast) break;
+      // Network error / per-attempt timeout → try the next backend.
+    }
+  }
+  throw lastErr instanceof Error
+    ? lastErr
+    : new Error("All backends are unavailable. Please try again shortly.");
+}
+
+// Probes each backend's /health and adopts the first healthy one as active.
+// Render free-tier cold starts can take up to ~60s, so we keep cycling the pool
+// until one answers or the deadline passes. A suspended/unavailable backend
+// (non-OK health) is skipped immediately so we don't waste the budget on it.
 export async function wakeUpBackend(
   onStatus?: (msg: string) => void,
   maxWaitMs = 65_000,
 ): Promise<boolean> {
   const deadline = Date.now() + maxWaitMs;
-  let attempt = 0;
 
   while (Date.now() < deadline) {
-    attempt++;
-    const remaining = deadline - Date.now();
-    if (remaining <= 0) break;
-
-    const timeoutMs = Math.min(10_000, remaining);
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-
-    try {
-      // Neutral status — never expose "server" / "backend" wording in UI.
-      onStatus?.("Please wait…");
-
-      const res = await fetch(HEALTH_URL, {
-        method: "GET",
-        signal: controller.signal,
-        cache: "no-store",
-      });
-      clearTimeout(timer);
-
-      if (res.ok) {
-        return true;
+    for (const idx of _backendOrder()) {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) break;
+      const healthUrl = `${BACKEND_BASES[idx].replace(/\/api$/, "")}/health`;
+      const controller = new AbortController();
+      const timer = setTimeout(
+        () => controller.abort(),
+        Math.min(8_000, remaining),
+      );
+      try {
+        // Neutral status — never expose "server" / "backend" wording in UI.
+        onStatus?.("Please wait…");
+        const res = await fetch(healthUrl, {
+          method: "GET",
+          signal: controller.signal,
+          cache: "no-store",
+        });
+        clearTimeout(timer);
+        if (res.ok) {
+          _applyActive(idx);
+          _persistActive();
+          return true;
+        }
+        // Non-OK (e.g. 503 suspended) → move to the next backend right away.
+      } catch {
+        clearTimeout(timer);
+        // Network error → next backend.
       }
-    } catch {
-      clearTimeout(timer);
     }
-
-    // Short pause before retry
-    const retryDelay = Math.min(3_000, deadline - Date.now());
-    if (retryDelay > 0) {
-      await new Promise<void>((r) => setTimeout(r, retryDelay));
-    }
+    // No backend healthy this pass — brief pause, then retry (covers cold starts).
+    const pause = Math.min(2_500, deadline - Date.now());
+    if (pause > 0) await new Promise<void>((r) => setTimeout(r, pause));
   }
 
   return false;
 }
 
-// Helper function for API calls with error handling and timeout
+// Helper for API calls with error handling, timeout, and backend failover.
 export async function apiCall<T>(
   endpoint: string,
   options: RequestInit = {},
   timeoutMs: number = 30000,
 ): Promise<T> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const response = await fetch(endpoint, {
-      ...options,
-      signal: controller.signal,
-      headers: {
-        ...options.headers,
-      },
-    });
-
-    if (!response.ok) {
-      throw new Error(`API Error: ${response.status} ${response.statusText}`);
-    }
-
-    return await response.json();
-  } catch (error) {
-    if (error instanceof Error && error.name === "AbortError") {
-      throw new Error(`Request to ${endpoint} timed out after ${timeoutMs}ms`);
-    }
-    console.error(`API call failed to ${endpoint}:`, error);
-    throw error;
-  } finally {
-    clearTimeout(timer);
+  const response = await resilientFetch(endpoint, options, { timeoutMs });
+  if (!response.ok) {
+    throw new Error(`API Error: ${response.status} ${response.statusText}`);
   }
+  return (await response.json()) as T;
 }
 
-// Helper for file uploads (with 120s timeout for large files)
+// Helper for file uploads (120s per-attempt timeout) with backend failover.
 export async function uploadFile(
   endpoint: string,
   file: any,
   fieldName: string = "file",
   additionalData?: Record<string, any>,
 ): Promise<Response> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 120000);
-
   const formData = new FormData();
 
   formData.append(fieldName, {
@@ -245,27 +407,15 @@ export async function uploadFile(
     });
   }
 
-  try {
-    const response = await fetch(endpoint, {
-      method: "POST",
-      body: formData,
-      signal: controller.signal,
-      // Do NOT set Content-Type manually — fetch auto-generates it with the correct boundary
-    });
-
-    if (!response.ok) {
-      throw new Error(
-        `Upload failed: ${response.status} ${response.statusText}`,
-      );
-    }
-
-    return response;
-  } catch (error) {
-    if (error instanceof Error && error.name === "AbortError") {
-      throw new Error(`Upload to ${endpoint} timed out`);
-    }
-    throw error;
-  } finally {
-    clearTimeout(timer);
+  // Do NOT set Content-Type manually — fetch auto-generates the multipart
+  // boundary. resilientFetch re-targets + fails over across the backend pool.
+  const response = await resilientFetch(
+    endpoint,
+    { method: "POST", body: formData },
+    { timeoutMs: 120000 },
+  );
+  if (!response.ok) {
+    throw new Error(`Upload failed: ${response.status} ${response.statusText}`);
   }
+  return response;
 }

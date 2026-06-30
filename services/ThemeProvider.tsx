@@ -7,6 +7,7 @@
 import { colors as brandColors } from "@/constants/theme";
 import { useNoir } from "@/services/NoirProvider";
 import { useSettings } from "@/services/settingsService";
+import { StatusBar } from "expo-status-bar";
 import React, { createContext, useContext, useMemo } from "react";
 import { useColorScheme as useSystemColorScheme } from "react-native";
 
@@ -193,6 +194,29 @@ const ThemeContext = createContext<ThemeTokens>(lightTheme);
 
 export function useTheme(): ThemeTokens {
   return useContext(ThemeContext);
+}
+
+// ─── Status bar ───────────────────────────────────────────────────────────────
+
+/**
+ * App-wide status bar whose icon contrast follows the app's *resolved* theme
+ * (light/dark/noir) — NOT the device color scheme.
+ *
+ * Why this matters: under Android edge-to-edge (mandatory in SDK 54) the app
+ * draws behind a transparent status bar, so the bar's icons sit directly on the
+ * screen background. expo-status-bar's `style="auto"` picks icon color from the
+ * OS appearance, which desyncs the moment the in-app theme differs from the
+ * device — e.g. the app forced to Light while the phone is in Dark mode renders
+ * white clock/battery icons on the light background, so they vanish and the
+ * notification bar looks "covered" (only noticeable in light mode).
+ *
+ * `useTheme().mode` already folds in noir + settings.themeMode + system scheme,
+ * making it the single source of truth: dark background → light icons; light
+ * background → dark icons. Must render inside <ThemeProvider/>.
+ */
+export function ThemedStatusBar() {
+  const { mode } = useTheme();
+  return <StatusBar style={mode === "dark" ? "light" : "dark"} animated />;
 }
 
 // ─── Provider ─────────────────────────────────────────────────────────────────

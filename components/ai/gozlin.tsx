@@ -96,7 +96,6 @@ import {
   BackHandler,
   Dimensions,
   FlatList,
-  Keyboard,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -107,7 +106,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
+import { SafeAreaView } from "react-native-safe-area-context";
 import Animated from "react-native-reanimated";
 import { useIsFocused } from "@react-navigation/native";
 import { AISkyBackground } from "@/components/ai/AISkyBackground";
@@ -242,28 +241,6 @@ export default function AIScreen() {
   const { colors: t, mode } = useTheme();
   const router = useRouter();
   const isFocused = useIsFocused();
-  // Bottom safe-area inset. With Android edge-to-edge (app.json) the screen draws
-  // behind the system navigation bar, so the composer must be lifted above it —
-  // otherwise the home/back/recents buttons overlap the chat input on devices
-  // with on-screen (3-button) navigation.
-  const insets = useSafeAreaInsets();
-  // While the keyboard is open it already covers the nav bar, so the inset gap is
-  // unnecessary — track visibility to drop it and keep the composer flush.
-  const [keyboardVisible, setKeyboardVisible] = useState(false);
-  useEffect(() => {
-    const showSub = Keyboard.addListener(
-      Platform.OS === "ios" ? "keyboardWillShow" : "keyboardDidShow",
-      () => setKeyboardVisible(true),
-    );
-    const hideSub = Keyboard.addListener(
-      Platform.OS === "ios" ? "keyboardWillHide" : "keyboardDidHide",
-      () => setKeyboardVisible(false),
-    );
-    return () => {
-      showSub.remove();
-      hideSub.remove();
-    };
-  }, []);
   // Composer glow: the input softly lights up with the accent while typing.
   const { glowStyle, onType } = useTypingGlow(ACCENT);
   // "Ask gozlin" deep-link: viewers pass selected text (and optionally a target
@@ -1717,9 +1694,6 @@ export default function AIScreen() {
             menuOpen={showFeaturesDropdown}
           />
 
-          {/* Hairline gap so content never sits flush against the header */}
-          <View style={styles.headerGap} />
-
           {/* ─── Dropdown Features Panel (slides down from header) ── */}
           {showFeaturesDropdown && (
             <>
@@ -2085,19 +2059,7 @@ export default function AIScreen() {
               </ScrollView>
 
               {/* Bottom dock */}
-              <View
-                style={[
-                  styles.translateDock,
-                  {
-                    backgroundColor: t.card,
-                    borderColor: t.border,
-                    // Lift the dock above the Android nav bar (edge-to-edge), the
-                    // same way the chat composer does. Margin (not padding) keeps
-                    // the rounded card intact and just raises it off the nav bar.
-                    marginBottom: keyboardVisible ? 0 : insets.bottom,
-                  },
-                ]}
-              >
+              <View style={[styles.translateDock, { backgroundColor: t.card, borderColor: t.border }]}>
 
                 {/* Output mode selector */}
                 <View style={[styles.translateOutputModeRow, { backgroundColor: mode === "dark" ? "#0F172A" : "#F1F5F9", borderColor: t.border }]}>
@@ -2286,18 +2248,7 @@ export default function AIScreen() {
             )}
 
             {/* ─── Input area ──────────────────────────────────────── */}
-            <View
-              style={[
-                styles.inputRow,
-                {
-                  borderTopColor: t.border,
-                  // Lift the composer above the Android nav bar (edge-to-edge).
-                  // spacing.sm + 2 is the row's existing bottom padding.
-                  paddingBottom:
-                    spacing.sm + 2 + (keyboardVisible ? 0 : insets.bottom),
-                },
-              ]}
-            >
+            <View style={[styles.inputRow, { borderTopColor: t.border }]}>
               <AnimatedTextInput
                 value={inputText}
                 onChangeText={(v) => {
@@ -2549,10 +2500,6 @@ const styles = StyleSheet.create({
   flex: {
     flex: 1,
   },
-  // Thin breathing space between the header and the content below it.
-  headerGap: {
-    height: 8,
-  },
   // ─── Feature Grid ───
   dropdownBackdrop: {
     ...StyleSheet.absoluteFillObject,
@@ -2636,7 +2583,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
-    marginHorizontal: 6,
+    marginHorizontal: 0,
     marginTop: 8,
     marginBottom: 6,
     paddingHorizontal: spacing.sm + 4,
@@ -2654,7 +2601,6 @@ const styles = StyleSheet.create({
   analysisControls: {
     marginTop: 4,
     marginBottom: 6,
-    marginHorizontal: 12,
     gap: 8,
   },
   analysisLabel: {
@@ -2710,7 +2656,7 @@ const styles = StyleSheet.create({
   // ─── Chat Area ───
   chatContainer: {
     flex: 1,
-    marginHorizontal: 6,
+    marginHorizontal: 0,
     marginBottom: spacing.sm,
     borderRadius: 16,
     borderWidth: 0,
@@ -2753,7 +2699,7 @@ const styles = StyleSheet.create({
   // ─── Translate UI (document-based) ───
   translateContainer: {
     flex: 1,
-    marginHorizontal: 6,
+    marginHorizontal: 0,
     marginBottom: spacing.sm,
     marginTop: 6,
     gap: 8,

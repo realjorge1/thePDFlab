@@ -46,7 +46,8 @@ import { PDFTextExtractor } from "@/components/DocumentViewer/PDFTextExtractor";
 import { SelectionToolbar } from "@/components/DocumentViewer/SelectionToolbar";
 import { ThreeDotsMenu } from "@/components/DocumentViewer/ThreeDotsMenu";
 import { AnalyzeSheet } from "@/components/ai/AnalyzeSheet";
-import { ViewModeToggle } from "@/components/DocumentViewer/ViewModeToggle";
+// ViewModeToggle (Mobile/Normal "Fit-To-Screen") is intentionally not rendered
+// for now; the view-mode logic stays wired in this screen for a future upgrade.
 import { PageJumpModal } from "@/components/pdf/PageJumpModal";
 import { ThumbnailGrid } from "@/components/pdf/ThumbnailGrid";
 import {
@@ -217,6 +218,41 @@ function getReadingModeConfig(mode: ReadingMode) {
     case "facing":
       return { enablePaging: true, horizontal: true, spacing: 10 };
   }
+}
+
+// ============================================================================
+// IN-PLACE SELECTABLE RENDERER (pdf.js canvas + text layer) GATING
+// ============================================================================
+// The text-layer renderer gives WPS-style in-place text selection AND on-page
+// search highlighting (the native react-native-pdf renderer can do neither —
+// it can only jump to a matching page, leaving the match itself unmarked).
+// It is used only in continuous mode, for file:// URIs (content:// can't be
+// read as bytes), and for files within the size ceiling.
+//
+// DISABLED: mounting it on PDF open inlines the whole file (base64) + pdf.js +
+// worker into one WebView document. Building/holding that multi-MB string and
+// loading it OOM-crashes the *app process* on open — a native crash the JS-side
+// onError / onRenderProcessGone fallbacks cannot catch (they only handle the
+// WebView render process dying, not the app running out of memory). The native
+// renderer is the safe default. Keep the feature in the tree (staging + search
+// are wired) but gated off until it loads the PDF from a cache file instead of
+// a multi-MB inline string.
+const ENABLE_INPLACE_PDF_SELECTION = false;
+const MAX_TEXTLAYER_BYTES = 25 * 1024 * 1024; // 25 MB ceiling
+
+/** Whether the in-place selectable (pdf.js text-layer) renderer is active for
+ *  the current viewer state. Mirrors the `usePageView` derivation in render so
+ *  the search handlers can route correctly. */
+function isPageViewActive(s: ViewerState): boolean {
+  return (
+    ENABLE_INPLACE_PDF_SELECTION &&
+    s.viewMode !== "mobile" &&
+    s.readingMode === "continuous" &&
+    !s.pageViewFailed &&
+    !!s.normalizedUri &&
+    !s.normalizedUri.startsWith("content://") &&
+    (s.fileSize == null || s.fileSize <= MAX_TEXTLAYER_BYTES)
+  );
 }
 
 // ============================================================================
@@ -806,6 +842,15 @@ export default function PdfViewerScreen() {
         return;
       }
 
+      // ── In-place text-layer view: highlight matches on the page itself ──
+      if (isPageViewActive(state)) {
+        pageViewRef.current?.search(query);
+        if (!query.trim()) {
+          setState((prev) => ({ ...prev, searchMobileCount: 0, searchMobileCurrent: 0 }));
+        }
+        return;
+      }
+
       // ── Original view: page-text search ──────────────────────────
       if (!query.trim()) {
         setState((prev) => ({
@@ -845,11 +890,19 @@ export default function PdfViewerScreen() {
         }));
       }
     },
-    [state.viewMode, state.readAloudPageTexts],
+    [
+      state.viewMode,
+      state.readAloudPageTexts,
+      state.readingMode,
+      state.pageViewFailed,
+      state.normalizedUri,
+      state.fileSize,
+    ],
   );
 
   const handleCloseSearch = useCallback(() => {
     pendingSearchQueryRef.current = null;
+    pageViewRef.current?.clearSearch();
     setState((prev) => ({
       ...prev,
       showSearch: false,
@@ -868,15 +921,31 @@ export default function PdfViewerScreen() {
       mobileRendererRef.current?.searchNext();
       return;
     }
+    if (isPageViewActive(state)) {
+      pageViewRef.current?.searchNext();
+      return;
+    }
     if (state.searchMatchPages.length === 0) return;
     const next = (state.searchPageIndex + 1) % state.searchMatchPages.length;
     setState((prev) => ({ ...prev, searchPageIndex: next }));
     setTargetPage(state.searchMatchPages[next]);
-  }, [state.viewMode, state.searchMatchPages, state.searchPageIndex]);
+  }, [
+    state.viewMode,
+    state.searchMatchPages,
+    state.searchPageIndex,
+    state.readingMode,
+    state.pageViewFailed,
+    state.normalizedUri,
+    state.fileSize,
+  ]);
 
   const handleSearchPrev = useCallback(() => {
     if (state.viewMode === "mobile") {
       mobileRendererRef.current?.searchPrev();
+      return;
+    }
+    if (isPageViewActive(state)) {
+      pageViewRef.current?.searchPrev();
       return;
     }
     if (state.searchMatchPages.length === 0) return;
@@ -885,7 +954,15 @@ export default function PdfViewerScreen() {
       state.searchMatchPages.length;
     setState((p) => ({ ...p, searchPageIndex: prev }));
     setTargetPage(state.searchMatchPages[prev]);
-  }, [state.viewMode, state.searchMatchPages, state.searchPageIndex]);
+  }, [
+    state.viewMode,
+    state.searchMatchPages,
+    state.searchPageIndex,
+    state.readingMode,
+    state.pageViewFailed,
+    state.normalizedUri,
+    state.fileSize,
+  ]);
 
   // ── Read Aloud ───────────────────────────────────────────────────
   // Read Aloud is fully decoupled from Mobile View.
@@ -1341,6 +1418,17 @@ export default function PdfViewerScreen() {
   }, []);
 
   // ── In-place page (text-layer) view callbacks ───────────────────
+  // Search match totals reported by the text-layer WebView. Reuses the same
+  // count/current state as Mobile View so the search-bar indicator + arrows
+  // work unchanged.
+  const handlePageSearchCount = useCallback((count: number, current: number) => {
+    setState((prev) => ({
+      ...prev,
+      searchMobileCount: count,
+      searchMobileCurrent: current,
+    }));
+  }, []);
+
   const handlePageSelection = useCallback((sel: PdfTextLayerSelection) => {
     setState((prev) => ({
       ...prev,
@@ -1736,22 +1824,13 @@ export default function PdfViewerScreen() {
   const isMobileView = state.viewMode === "mobile";
 
   // ── In-place selectable renderer (pdf.js canvas + text layer) ──
-  // DISABLED by default. Mounting it on every PDF open inlined the whole file
-  // (+ pdf.js + worker) into one giant WebView HTML string, which froze/crashed
-  // the WebView on open. The native renderer is the safe default. The feature
-  // stays in the codebase to be re-enabled once it loads the PDF from a cache
-  // file instead of a multi-MB inline string.
-  const ENABLE_INPLACE_PDF_SELECTION = false;
-  const MAX_TEXTLAYER_BYTES = 25 * 1024 * 1024; // 25 MB ceiling when enabled
-  const canReadBytes =
-    !!state.normalizedUri && !state.normalizedUri.startsWith("content://");
-  const usePageView =
-    ENABLE_INPLACE_PDF_SELECTION &&
-    !isMobileView &&
-    state.readingMode === "continuous" &&
-    !state.pageViewFailed &&
-    canReadBytes &&
-    (state.fileSize == null || state.fileSize <= MAX_TEXTLAYER_BYTES);
+  // Enabled: provides in-place text selection + on-page search highlighting.
+  // It now (a) runs pdf.js in-thread (no Blob worker that hangs on Android) and
+  // (b) loads via a staged cache file instead of a multi-MB inline string — the
+  // two reasons it was previously disabled. On any failure it falls back to the
+  // native renderer (handlePageViewError), and it is skipped for content:// /
+  // oversized files, so display is never at risk. See isPageViewActive().
+  const usePageView = isPageViewActive(state);
 
   return (
     <SafeAreaView
@@ -1816,7 +1895,7 @@ export default function PdfViewerScreen() {
           {/* Match indicator */}
           {state.searchQuery.length > 0 && !state.searchExtracting && (
             <Text style={[styles.searchCount, { color: theme.text.secondary }]}>
-              {isMobileView
+              {isMobileView || usePageView
                 ? state.searchMobileCount > 0
                   ? `${state.searchMobileCurrent}/${state.searchMobileCount}`
                   : "0 results"
@@ -1827,7 +1906,7 @@ export default function PdfViewerScreen() {
           )}
           {/* Navigation arrows */}
           {state.searchQuery.length > 0 && !state.searchExtracting && (
-            (isMobileView
+            (isMobileView || usePageView
               ? state.searchMobileCount > 1
               : state.searchMatchPages.length > 1) && (
               <>
@@ -1866,10 +1945,12 @@ export default function PdfViewerScreen() {
         </View>
       )}
 
-      {/* ── Search results panel (original view) — shows text excerpts
-           with matched words highlighted in yellow ────────────────── */}
+      {/* ── Search results panel (native original view only) — shows text
+           excerpts with matched words highlighted in yellow. The text-layer
+           (page) view highlights matches in-place, so it skips this panel. ── */}
       {state.showSearch &&
         !isMobileView &&
+        !usePageView &&
         state.searchQuery.trim().length > 0 &&
         !state.searchExtracting &&
         state.searchMatchPages.length > 0 && (
@@ -2029,6 +2110,7 @@ export default function PdfViewerScreen() {
                 onSelection={handlePageSelection}
                 onSelectionClear={handlePageSelectionClear}
                 onAnnotationFailed={handlePageViewAnnotationFailed}
+                onSearchCount={handlePageSearchCount}
               />
               {state.fullscreen && (
                 <Pressable
@@ -2302,12 +2384,12 @@ function Header({
   onClose,
   pageInfo,
   onPagePress,
-  viewMode,
-  onViewModeChange,
+  // viewMode / onViewModeChange / mobileLoading are still received (and passed
+  // by callers) but the Mobile/Normal ("Fit-To-Screen") toggle is intentionally
+  // not rendered for now — see note in the header actions below.
   readingMode,
   onToggleReadingMode,
   onMenuPress,
-  mobileLoading,
 }: HeaderProps) {
   return (
     <View
@@ -2356,14 +2438,13 @@ function Header({
         )}
       </Pressable>
 
-      {/* ── Right: View toggle + reading mode + menu ───────────── */}
+      {/* ── Right: reading mode + menu ─────────────────────────── */}
       <View style={styles.headerActions}>
-        {/* Mobile / Normal view toggle */}
-        <ViewModeToggle
-          mode={viewMode}
-          onModeChange={onViewModeChange}
-          disabled={mobileLoading}
-        />
+        {/* Mobile / Normal ("Fit-To-Screen") view toggle is intentionally
+            hidden from the UI for now. The view-mode logic (handleViewModeChange,
+            viewMode state, MobileRenderer reflow path) is kept wired in the
+            screen so it can be re-surfaced in a future upgrade without
+            rebuilding it. */}
 
         {/* Continuous / Facing toggle */}
         <Pressable

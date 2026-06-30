@@ -5,7 +5,7 @@
 // (e.g. Gemini, Claude, OpenAI).
 // ============================================
 
-import { API_ENDPOINTS } from "@/config/api";
+import { API_ENDPOINTS, resilientFetch } from "@/config/api";
 import type { AIProvider } from "../ai.provider";
 import type {
     AIAnalyzeRequest,
@@ -355,37 +355,28 @@ async function callBackend(
   body: Record<string, unknown>,
   externalSignal?: AbortSignal,
 ) {
-  // Abort the request if EITHER the 60s timeout fires OR the caller cancels
-  // (e.g. the user pulls down on the spring activity overlay).
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 60_000);
-
-  const onExternalAbort = () => controller.abort();
-  if (externalSignal) {
-    if (externalSignal.aborted) controller.abort();
-    else externalSignal.addEventListener("abort", onExternalAbort);
-  }
-
-  try {
-    const response = await fetch(url, {
+  // resilientFetch fails over across the backend pool (60s per-attempt timeout)
+  // and honors the caller's cancel signal (e.g. the user pulling down on the
+  // spring activity overlay) without failing over.
+  const response = await resilientFetch(
+    url,
+    {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
-      signal: controller.signal,
-    });
+      signal: externalSignal,
+    },
+    { timeoutMs: 60_000 },
+  );
 
-    if (!response.ok) {
-      const errorBody = await response.text().catch(() => "");
-      throw new Error(
-        `Backend AI error (${response.status}): ${errorBody || response.statusText}`,
-      );
-    }
-
-    return await response.json();
-  } finally {
-    clearTimeout(timeout);
-    if (externalSignal) externalSignal.removeEventListener("abort", onExternalAbort);
+  if (!response.ok) {
+    const errorBody = await response.text().catch(() => "");
+    throw new Error(
+      `Backend AI error (${response.status}): ${errorBody || response.statusText}`,
+    );
   }
+
+  return await response.json();
 }
 
 // ─── /chat fallback for endpoints the backend hasn't deployed yet ─────────────

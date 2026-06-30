@@ -37,8 +37,11 @@ export const AILanguagePicker = React.memo(function AILanguagePicker({
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return SUPPORTED_LANGUAGES;
-    return SUPPORTED_LANGUAGES.filter((l) =>
-      l.name.toLowerCase().includes(q),
+    return SUPPORTED_LANGUAGES.filter(
+      (l) =>
+        l.name.toLowerCase().includes(q) ||
+        l.native.toLowerCase().includes(q) ||
+        l.code.toLowerCase().includes(q),
     );
   }, [query]);
 
@@ -69,12 +72,21 @@ export const AILanguagePicker = React.memo(function AILanguagePicker({
           }}
           activeOpacity={0.7}
         >
-          <Text style={[styles.itemText, { color: t.text }]}>{item.name}</Text>
+          <View style={styles.itemTextWrap}>
+            <Text style={[styles.itemNative, { color: t.text }]}>
+              {item.native}
+            </Text>
+            {item.native !== item.name && (
+              <Text style={[styles.itemName, { color: t.textSecondary }]}>
+                {item.name}
+              </Text>
+            )}
+          </View>
           {isActive && <Check size={18} color="#6366F1" />}
         </TouchableOpacity>
       );
     },
-    [selected, mode, t.card, t.border, t.text, onSelect, handleClose],
+    [selected, mode, t.card, t.border, t.text, t.textSecondary, onSelect, handleClose],
   );
 
   return (
@@ -198,9 +210,18 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     borderWidth: 1,
   },
-  itemText: {
-    fontSize: 15,
-    fontWeight: "500",
+  itemTextWrap: {
+    flex: 1,
+    marginRight: spacing.sm,
+  },
+  itemNative: {
+    fontSize: 16,
+    fontWeight: "600",
+  },
+  itemName: {
+    fontSize: 12.5,
+    fontWeight: "400",
+    marginTop: 2,
   },
   emptyText: {
     textAlign: "center",

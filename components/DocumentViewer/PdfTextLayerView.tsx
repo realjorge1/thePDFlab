@@ -23,7 +23,8 @@ import React, {
   useRef,
   useState,
 } from "react";
-import { ActivityIndicator, StyleSheet, Text, View } from "react-native";
+import * as FileSystem from "expo-file-system/legacy";
+import { ActivityIndicator, Platform, StyleSheet, Text, View } from "react-native";
 import { WebView } from "react-native-webview";
 
 export interface PdfTextLayerSelection {
@@ -67,6 +68,14 @@ export interface PdfTextLayerHandle {
     }[],
   ) => void;
   clearSelection: () => void;
+  /** Highlight all matches of `query`, jump to the first. */
+  search: (query: string) => void;
+  /** Advance to the next match. */
+  searchNext: () => void;
+  /** Go to the previous match. */
+  searchPrev: () => void;
+  /** Clear all search highlights. */
+  clearSearch: () => void;
 }
 
 interface Props {
@@ -85,6 +94,8 @@ interface Props {
     id: string,
     kind: "highlight" | "underline" | "strikethrough",
   ) => void;
+  /** Search match totals from the WebView: total count and 1-based current index. */
+  onSearchCount?: (count: number, current: number) => void;
 }
 
 export const PdfTextLayerView = forwardRef<PdfTextLayerHandle, Props>(
@@ -99,11 +110,20 @@ export const PdfTextLayerView = forwardRef<PdfTextLayerHandle, Props>(
       onSelection,
       onSelectionClear,
       onAnnotationFailed,
+      onSearchCount,
     },
     ref,
   ) {
     const webRef = useRef<WebView>(null);
     const [html, setHtml] = useState<string | null>(null);
+    // What the WebView actually loads: a staged file:// URI on Android (large
+    // inline HTML is truncated/choked by loadDataWithBaseURL on older System
+    // WebViews), inline HTML on iOS. Null while staging.
+    const [htmlSource, setHtmlSource] = useState<
+      { uri: string } | { html: string } | null
+    >(null);
+    const filePathRef = useRef<string | null>(null);
+    const writeSeqRef = useRef(0);
     const [genError, setGenError] = useState<string | null>(null);
     const [ready, setReady] = useState(false);
     const mountedRef = useRef(true);
@@ -123,6 +143,7 @@ export const PdfTextLayerView = forwardRef<PdfTextLayerHandle, Props>(
       let cancelled = false;
       setReady(false);
       setHtml(null);
+      setHtmlSource(null);
       setGenError(null);
       queue.current = [];
       const opts: PdfTextLayerOptions = {
@@ -142,6 +163,69 @@ export const PdfTextLayerView = forwardRef<PdfTextLayerHandle, Props>(
       };
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [uri]);
+
+    // Stage the generated HTML for the WebView. The HTML inlines pdf.js + the
+    // worker + the PDF bytes (base64), so it can be many MB. On Android that is
+    // passed via loadDataWithBaseURL, which older System WebViews truncate or
+    // choke on (the old "freezes/crashes on open" symptom). Writing it to a
+    // cache file and loading it via file:// sidesteps the limit entirely — the
+    // same approach MobileRenderer uses. iOS WebKit handles large inline HTML
+    // fine, so it keeps the inline path.
+    useEffect(() => {
+      setReady(false);
+      if (!html) {
+        setHtmlSource(null);
+        return;
+      }
+      if (Platform.OS !== "android") {
+        setHtmlSource({ html });
+        return;
+      }
+      let cancelled = false;
+      const seq = ++writeSeqRef.current;
+      (async () => {
+        try {
+          const dir = FileSystem.cacheDirectory + "pdftextlayer/";
+          try {
+            await FileSystem.makeDirectoryAsync(dir, { intermediates: true });
+          } catch {
+            // Directory already exists — fine.
+          }
+          const path = `${dir}textlayer-${seq}.html`;
+          await FileSystem.writeAsStringAsync(path, html);
+          if (cancelled || seq !== writeSeqRef.current) {
+            FileSystem.deleteAsync(path, { idempotent: true }).catch(() => {});
+            return;
+          }
+          const prev = filePathRef.current;
+          filePathRef.current = path;
+          setHtmlSource({ uri: path });
+          if (prev && prev !== path) {
+            FileSystem.deleteAsync(prev, { idempotent: true }).catch(() => {});
+          }
+        } catch {
+          // Disk write failed — fall back to inline HTML so the feature still
+          // works (just without the large-payload optimisation).
+          if (!cancelled && seq === writeSeqRef.current) {
+            setHtmlSource({ html });
+          }
+        }
+      })();
+      return () => {
+        cancelled = true;
+      };
+    }, [html]);
+
+    // Remove the staged file when the renderer unmounts.
+    useEffect(() => {
+      return () => {
+        if (filePathRef.current) {
+          FileSystem.deleteAsync(filePathRef.current, {
+            idempotent: true,
+          }).catch(() => {});
+        }
+      };
+    }, []);
 
     const inject = useCallback(
       (js: string) => {
@@ -205,6 +289,18 @@ export const PdfTextLayerView = forwardRef<PdfTextLayerHandle, Props>(
         clearSelection() {
           inject(`window.__pv_clearSelection(); true;`);
         },
+        search(query) {
+          inject(`window.__pv_search(${JSON.stringify(query)}); true;`);
+        },
+        searchNext() {
+          inject(`window.__pv_searchNext(); true;`);
+        },
+        searchPrev() {
+          inject(`window.__pv_searchPrev(); true;`);
+        },
+        clearSearch() {
+          inject(`window.__pv_clearSearch(); true;`);
+        },
       }),
       [inject],
     );
@@ -242,6 +338,9 @@ export const PdfTextLayerView = forwardRef<PdfTextLayerHandle, Props>(
           case "annotation_applied":
             if (!msg.success && msg.id) onAnnotationFailed?.(msg.id, msg.kind);
             break;
+          case "search-count":
+            onSearchCount?.(msg.count ?? 0, msg.current ?? 0);
+            break;
           case "render-error":
             onError?.(msg.message || "PDF could not be rendered");
             break;
@@ -253,6 +352,7 @@ export const PdfTextLayerView = forwardRef<PdfTextLayerHandle, Props>(
         onSelection,
         onSelectionClear,
         onAnnotationFailed,
+        onSearchCount,
         onError,
       ],
     );
@@ -262,7 +362,7 @@ export const PdfTextLayerView = forwardRef<PdfTextLayerHandle, Props>(
       return null;
     }
 
-    if (!html) {
+    if (!htmlSource) {
       return (
         <View style={styles.center}>
           <ActivityIndicator size="large" color="#4F46E5" />
@@ -274,16 +374,23 @@ export const PdfTextLayerView = forwardRef<PdfTextLayerHandle, Props>(
     return (
       <WebView
         ref={webRef}
-        source={{ html }}
+        source={htmlSource}
         style={styles.webview}
         originWhitelist={["*"]}
+        // Required so the WebView can load the staged file:// document (Android).
+        allowFileAccess
+        allowingReadAccessToURL={FileSystem.cacheDirectory ?? undefined}
         javaScriptEnabled
         domStorageEnabled
         onMessage={handleMessage}
         startInLoadingState={false}
         // Everything is inlined — block any external navigation/network.
         onShouldStartLoadWithRequest={(req) => {
-          if (req.url === "about:blank" || req.url.startsWith("data:"))
+          if (
+            req.url === "about:blank" ||
+            req.url.startsWith("data:") ||
+            req.url.startsWith("file:")
+          )
             return true;
           return !req.isTopFrame;
         }}

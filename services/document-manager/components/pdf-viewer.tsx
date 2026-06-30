@@ -153,16 +153,20 @@ function PdfViewerComponent({
       ]}
     >
       {/*
-       * key includes fitPolicy so the native view re-initialises when the
-       * user toggles between fit-width and fit-both.  On Android the
-       * underlying AndroidPdfViewer only applies pageFitPolicy during the
-       * initial configurator build, so a prop-only change has no effect.
+       * key depends ONLY on the file identity (the URI). It deliberately does
+       * NOT include fitPolicy / horizontal / enablePaging: those are passed as
+       * LIVE props and react-native-pdf re-fits in place when they change.
        *
-       * Note: We add the URI hash to ensure each PDF gets a unique instance
-       * and prevent "Already closed" crashes during rapid remounting.
+       * Including them in the key remounted the native view on every
+       * continuous⇄facing (or fit) toggle, which re-extracts the file and races
+       * the native cache — the documented "Already closed" crash on Android.
+       * The deck viewer (features/pptxViewerOnline/components/PptxPdfViewer.tsx)
+       * proved with this same library version that live props re-fit in place
+       * and never need a remount. A genuinely new file still gets a fresh
+       * instance because the URI segment of the key changes.
        */}
       <Pdf
-        key={`pdf-${uri.substring(0, 50)}-${fitPolicy}-${horizontal}-${enablePaging}`}
+        key={`pdf-${uri.substring(0, 80)}`}
         source={{ uri, cache: true }}
         style={[styles.pdf, { width: screenWidth }]}
         trustAllCerts={false}

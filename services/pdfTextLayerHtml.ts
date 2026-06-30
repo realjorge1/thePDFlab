@@ -107,13 +107,22 @@ export async function generatePdfTextLayerHtml(
     align-items:center; justify-content:center; color:#fff; font-family:sans-serif; padding:24px; text-align:center;
   }
   .pv-placeholder { display:flex; align-items:center; justify-content:center; color:rgba(255,255,255,0.20); font-family:sans-serif; font-size:12px; }
+  /* ── search highlights — translucent so the canvas glyphs underneath stay
+        crisp (the text layer itself is transparent); the active match is a
+        stronger orange. ── */
+  .textLayer .pv-sr { background:rgba(255,235,59,0.55); border-radius:2px; }
+  .textLayer .pv-sr-active { background:rgba(255,143,0,0.70); border-radius:2px; }
 </style>
 <script>${pdfMinJs}<\/script>
+<!-- Worker UMD loaded as a REAL executable script (not a Blob worker): it
+     defines globalThis.pdfjsWorker, which pdf.js uses for in-thread parsing
+     (disableWorker). A Blob-URL worker often initialises but never responds
+     inside an Android WebView, hanging getDocument() forever. -->
+<script>${pdfWorkerMinJs}<\/script>
 </head>
 <body>
 <div id="viewer"></div>
 <div id="pv-error"><div style="font-size:40px">⚠️</div><div id="pv-error-msg" style="margin-top:10px;font-size:14px;opacity:.8"></div></div>
-<script id="pv-worker" type="text/plain">${pdfWorkerMinJs}<\/script>
 <script>
 (function(){
   "use strict";
@@ -127,13 +136,11 @@ export async function generatePdfTextLayerHtml(
 
   if(typeof pdfjsLib==='undefined'){ fail('PDF engine failed to load'); return; }
 
-  try{
-    var wEl=document.getElementById('pv-worker');
-    var blob=new Blob([wEl.textContent],{type:'application/javascript'});
-    pdfjsLib.GlobalWorkerOptions.workerSrc=URL.createObjectURL(blob);
-  }catch(e){
-    try{ pdfjsLib.GlobalWorkerOptions.workerSrc=''; }catch(_){}
-  }
+  // Run pdf.js entirely in-thread (no Web Worker). The worker UMD loaded above
+  // defines globalThis.pdfjsWorker; pdf.js picks it up for in-thread parsing.
+  // A Blob-URL worker hangs forever inside an Android WebView.
+  try{ pdfjsLib.GlobalWorkerOptions.workerSrc=''; }catch(_){}
+  try{ pdfjsLib.disableWorker=true; }catch(_){}
 
   var DPR = Math.min(window.devicePixelRatio||1, 3);
   var viewer = document.getElementById('viewer');
@@ -152,7 +159,7 @@ export async function generatePdfTextLayerHtml(
     var raw=atob(${JSON.stringify(base64)});
     var u8=new Uint8Array(raw.length);
     for(var i=0;i<raw.length;i++) u8[i]=raw.charCodeAt(i);
-    pdfjsLib.getDocument({data:u8, disableWorker:!pdfjsLib.GlobalWorkerOptions.workerSrc})
+    pdfjsLib.getDocument({data:u8, disableWorker:true})
       .promise.then(onDoc).catch(function(err){ fail((err&&err.message)||'Could not open PDF'); });
   }catch(e){ fail((e&&e.message)||'Could not decode PDF'); }
 
@@ -258,6 +265,7 @@ export async function generatePdfTextLayerHtml(
         return done.then(function(){
           renderState[idx]=2;
           reapplyForPage(idx);
+          srApplyForPage(idx);   // re-paint search highlights on (re)render
         });
       }).catch(function(){
         // Canvas painted but text layer failed — page still viewable.
@@ -475,6 +483,138 @@ export async function generatePdfTextLayerHtml(
       register(a);
       applyOne(a); // applies now if its page is rendered; otherwise on render
     }
+  };
+
+  /* ──────────────────── search ────────────────────
+   * Highlights every match on the rendered pages (translucent yellow) with the
+   * current match in orange, mirroring the reflow search in selectionScripts.ts.
+   * Pages render lazily, so the active query is stored and re-applied whenever a
+   * page's text layer (re)renders (see srApplyForPage in renderPage). A one-time
+   * pre-scan of every page's text (text only, no canvas paint) builds the
+   * ordered match list used for the N/M counter and next/prev navigation. */
+  var __srQuery='';      // lowercased active query ('' = inactive)
+  var __srMatches=[];    // [{page, occ}] in document order
+  var __srActive=-1;     // index into __srMatches
+
+  function srUnwrapIn(tl){
+    var sps=tl.querySelectorAll('[data-sr]');
+    for(var i=0;i<sps.length;i++){
+      var sp=sps[i], p=sp.parentNode;
+      if(p){ p.replaceChild(document.createTextNode(sp.textContent||''), sp); p.normalize(); }
+    }
+  }
+  function srClearAll(){
+    for(var i=0;i<pageEls.length;i++){ var tl=textLayerOf(pageEls[i]); if(tl) srUnwrapIn(tl); }
+  }
+  function srClearActive(){
+    var a=document.getElementsByClassName('pv-sr-active');
+    // Live collection — convert to static list before mutating classNames.
+    var list=[]; for(var i=0;i<a.length;i++) list.push(a[i]);
+    for(var j=0;j<list.length;j++) list[j].className='pv-sr';
+  }
+  // Wrap every occurrence of the active query within a rendered page's text
+  // layer. Occurrences are counted PER text node (one per pdf.js text item), so
+  // the data-sr-occ index matches the pre-scan's per-item count.
+  function srApplyForPage(idx){
+    if(!__srQuery) return;
+    var pageEl=pageEls[idx]; if(!pageEl) return;
+    var tl=textLayerOf(pageEl); if(!tl) return;          // not rendered yet
+    if(tl.querySelector('[data-sr]')) return;            // already applied
+    var q=__srQuery;
+    var walker=document.createTreeWalker(tl, NodeFilter.SHOW_TEXT, null, false);
+    var nodes=[], n; while((n=walker.nextNode())) nodes.push(n);
+    var occ=0;
+    nodes.forEach(function(node){
+      var text=node.nodeValue||'', lower=text.toLowerCase(), i=lower.indexOf(q);
+      if(i===-1||!node.parentNode) return;
+      var frag=document.createDocumentFragment(), last=0;
+      while(i!==-1){
+        if(i>last) frag.appendChild(document.createTextNode(text.substring(last,i)));
+        var sp=document.createElement('span');
+        sp.setAttribute('data-sr','1');
+        sp.setAttribute('data-sr-occ', String(occ));
+        sp.className='pv-sr';
+        sp.textContent=text.substring(i,i+q.length);
+        frag.appendChild(sp); occ++;
+        last=i+q.length; i=lower.indexOf(q,last);
+      }
+      if(last<text.length) frag.appendChild(document.createTextNode(text.substring(last)));
+      node.parentNode.replaceChild(frag,node);
+    });
+    if(__srActive>=0 && __srMatches[__srActive] && __srMatches[__srActive].page===idx) focusActive(false);
+  }
+  function focusActive(doScroll){
+    if(__srActive<0 || !__srMatches[__srActive]) return;
+    var m=__srMatches[__srActive];
+    var tl=textLayerOf(pageEls[m.page]); if(!tl) return;
+    srClearActive();
+    var sel=tl.querySelectorAll('[data-sr]'); if(!sel.length) return;
+    var k=Math.min(m.occ, sel.length-1);
+    var el=sel[k]; if(!el) return;
+    el.className='pv-sr pv-sr-active';
+    if(doScroll){
+      var y=el.getBoundingClientRect().top + window.scrollY - (window.innerHeight*0.3);
+      window.scrollTo({top:Math.max(0,y), behavior:'smooth'});
+    }
+  }
+  function goToMatch(k){
+    if(!__srMatches.length) return;
+    __srActive=((k%__srMatches.length)+__srMatches.length)%__srMatches.length;
+    var m=__srMatches[__srActive];
+    renderPage(m.page);
+    // The page + its search spans may take a moment to render; poll briefly.
+    var tries=0;
+    (function tick(){
+      var tl=textLayerOf(pageEls[m.page]);
+      if(tl){ srApplyForPage(m.page); focusActive(true); }
+      else if(tries++<30){ setTimeout(tick,60); }
+    })();
+    post({type:'search-count',count:__srMatches.length,current:__srActive+1});
+  }
+
+  window.__pv_search=function(query){
+    srClearActive(); srClearAll();
+    __srMatches=[]; __srActive=-1;
+    __srQuery=(query||'').toLowerCase();
+    if(!__srQuery.trim()){ __srQuery=''; post({type:'search-count',count:0,current:0}); return; }
+    if(!pdfDoc){ post({type:'search-count',count:0,current:0}); return; }
+    var q=__srQuery;
+    // Pre-scan each page's text (text only) sequentially to build the ordered
+    // match list. Count per text item to align with srApplyForPage's per-node
+    // counting. Bail out if a newer query supersedes this run.
+    var chain=Promise.resolve();
+    for(var p=0;p<numPages;p++){
+      (function(idx){
+        chain=chain.then(function(){
+          if(__srQuery!==q) return;
+          return pdfDoc.getPage(idx+1)
+            .then(function(page){ return page.getTextContent(); })
+            .then(function(tc){
+              if(__srQuery!==q) return;
+              var items=tc.items||[], occ=0;
+              for(var i=0;i<items.length;i++){
+                var s=(items[i] && typeof items[i].str==='string') ? items[i].str.toLowerCase() : '';
+                var j=s.indexOf(q);
+                while(j!==-1){ __srMatches.push({page:idx,occ:occ}); occ++; j=s.indexOf(q, j+q.length); }
+              }
+            }).catch(function(){});
+        });
+      })(p);
+    }
+    chain.then(function(){
+      if(__srQuery!==q) return;
+      // Paint highlights on any already-rendered pages right away.
+      for(var i=0;i<pageEls.length;i++){ if(renderState[i]===2) srApplyForPage(i); }
+      if(__srMatches.length) goToMatch(0);
+      else post({type:'search-count',count:0,current:0});
+    });
+  };
+  window.__pv_searchNext=function(){ if(__srMatches.length) goToMatch(__srActive+1); };
+  window.__pv_searchPrev=function(){ if(__srMatches.length) goToMatch(__srActive-1); };
+  window.__pv_clearSearch=function(){
+    __srQuery=''; __srMatches=[]; __srActive=-1;
+    srClearActive(); srClearAll();
+    post({type:'search-count',count:0,current:0});
   };
 })();
 <\/script>

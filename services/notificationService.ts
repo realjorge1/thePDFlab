@@ -31,22 +31,21 @@ interface NotificationPayload {
 const ANDROID_CHANNEL_ID = "wordsinscribed-tasks";
 
 /**
- * Stable notification identifiers per type. Posting a notification with an
+ * One stable identifier shared by ALL transient status notifications
+ * (processing / download / AI / Read Aloud). Posting a notification with an
  * identifier that is already showing causes the OS to REPLACE the existing one
- * (same Android tag/iOS identifier) instead of stacking a new entry. This stops
- * notifications from piling up — the latest of each kind overwrites the last.
- * All Read Aloud states share one id so the playback status updates in place.
- * `task_reminder` is intentionally absent: scheduled reminders must each be
- * distinct so multiple can coexist and be individually cancelled.
+ * (same Android tag / iOS identifier) instead of stacking a new entry.
+ *
+ * Because every transient notification reuses this single id, the app never
+ * shows more than ONE of them at a time — each new notification overwrites the
+ * previous, so the user always sees the most recent and never a pile of 2–6
+ * stale entries.
+ *
+ * Scheduled `task_reminder`s deliberately do NOT use this id (they go through
+ * `scheduleTaskReminder`, which lets the OS assign a unique id): each reminder
+ * is a distinct future event that must coexist and be cancellable on its own.
  */
-const NOTIFICATION_IDS: Partial<Record<NotificationType, string>> = {
-  processing_complete: "wordsinscribed.processing",
-  download_complete: "wordsinscribed.download",
-  ai_complete: "wordsinscribed.ai",
-  read_aloud_playing: "wordsinscribed.read_aloud",
-  read_aloud_stopped: "wordsinscribed.read_aloud",
-  read_aloud_end_of_file: "wordsinscribed.read_aloud",
-};
+const STATUS_NOTIFICATION_ID = "wordsinscribed.status";
 
 // ─── Setup ────────────────────────────────────────────────────────────────────
 
@@ -130,9 +129,9 @@ async function sendLocalNotification(payload: NotificationPayload) {
 
   try {
     await Notifications.scheduleNotificationAsync({
-      // Reuse a stable id per type so a new notification replaces the previous
-      // one of the same kind rather than stacking a separate entry.
-      identifier: NOTIFICATION_IDS[payload.type],
+      // Reuse one stable id for every transient notification so a new one always
+      // replaces whatever is currently showing instead of stacking up.
+      identifier: STATUS_NOTIFICATION_ID,
       content: {
         title: payload.title,
         body: payload.body,

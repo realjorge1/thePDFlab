@@ -30,6 +30,10 @@ const FONT_ASSETS = {
   Merriweather_700Bold: require("@/assets/fonts/Merriweather_700Bold.ttf"),
   Poppins_400Regular: require("@/assets/fonts/Poppins_400Regular.ttf"),
   Poppins_700Bold: require("@/assets/fonts/Poppins_700Bold.ttf"),
+  GeneralSans_400Regular: require("@/assets/fonts/GeneralSans_400Regular.ttf"),
+  GeneralSans_700Bold: require("@/assets/fonts/GeneralSans_700Bold.ttf"),
+  Satoshi_400Regular: require("@/assets/fonts/Satoshi_400Regular.ttf"),
+  Satoshi_700Bold: require("@/assets/fonts/Satoshi_700Bold.ttf"),
 };
 
 /** Map of CSS font-family name → asset keys (regular + bold). */
@@ -50,6 +54,11 @@ const FONT_FAMILY_MAP: Record<
     bold: "Merriweather_700Bold",
   },
   Poppins: { regular: "Poppins_400Regular", bold: "Poppins_700Bold" },
+  "General Sans": {
+    regular: "GeneralSans_400Regular",
+    bold: "GeneralSans_700Bold",
+  },
+  Satoshi: { regular: "Satoshi_400Regular", bold: "Satoshi_700Bold" },
 };
 
 // ── Native font loading (for RN UI font picker previews) ─────────────────

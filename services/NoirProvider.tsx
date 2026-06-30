@@ -29,7 +29,6 @@ import React, {
 } from "react";
 import { StyleSheet, Text, View, type ViewStyle } from "react-native";
 import Animated, { FadeInUp, FadeOut } from "react-native-reanimated";
-import { StatusBar } from "expo-status-bar";
 
 interface NoirContextValue {
   noir: boolean;
@@ -97,12 +96,6 @@ export function NoirLayer({ children }: { children: React.ReactNode }) {
       <NoirToast />
     </View>
   );
-}
-
-/** StatusBar that flips to light icons in noir (dark-gray) mode. */
-export function NoirStatusBar() {
-  const { noir } = useNoir();
-  return <StatusBar style={noir ? "light" : "auto"} />;
 }
 
 function NoirToast() {

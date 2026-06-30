@@ -103,14 +103,25 @@ export function OnboardingScreen({ onFinish }: Props) {
       >
         {phase === 'brand' && (
           <View style={styles.brandContainer}>
-            <Text style={styles.wordsText}>words</Text>
-            <Text style={styles.inscribedText}>Inscribed</Text>
+            <Text
+              style={styles.brandText}
+              numberOfLines={1}
+              adjustsFontSizeToFit
+            >
+              words Inscribed
+            </Text>
           </View>
         )}
 
         {phase === 'welcome' && (
           <View style={styles.welcomeContainer}>
-            <Text style={styles.welcomeText}>welcome</Text>
+            <Text
+              style={styles.welcomeText}
+              numberOfLines={1}
+              adjustsFontSizeToFit
+            >
+              welcome
+            </Text>
           </View>
         )}
 
@@ -179,23 +190,19 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  wordsText: {
-    // Match the home-screen "words Inscribed" branding: system sans-serif,
-    // upright (no italic, no serif). Size/weight/spacing kept as designed.
-    fontSize: 34,
-    fontWeight: '400',
-    color: 'rgba(255,255,255,0.90)',
-    letterSpacing: 1,
-    includeFontPadding: false,
-    lineHeight: 40,
-  },
-  inscribedText: {
-    fontSize: 52,
-    fontWeight: '800',
+  // Brand wordmark — geometric sans (General Sans), bold, upright, pure white.
+  // Single line: "words Inscribed". The fontFamily is the bold variant registered
+  // at startup (editorFontService), so we don't set fontWeight — that would
+  // trigger faux-bold synthesis on Android on top of an already-bold file.
+  brandText: {
+    fontFamily: 'GeneralSans_700Bold',
+    fontStyle: 'normal',
+    fontSize: 36,
     color: '#FFFFFF',
-    letterSpacing: -1,
+    letterSpacing: 0,
+    textAlign: 'center',
     includeFontPadding: false,
-    lineHeight: 58,
+    lineHeight: 36, // line-height: 1
   },
 
   welcomeContainer: {
@@ -203,12 +210,16 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  // Same typeface/weight/style as the wordmark, larger for the single word.
   welcomeText: {
-    fontSize: 50,
-    fontWeight: '400',
-    color: 'rgba(255,255,255,0.92)',
-    letterSpacing: 1,
+    fontFamily: 'GeneralSans_700Bold',
+    fontStyle: 'normal',
+    fontSize: 44,
+    color: '#FFFFFF',
+    letterSpacing: 0,
+    textAlign: 'center',
     includeFontPadding: false,
+    lineHeight: 44, // line-height: 1
   },
 
   privacyCard: {
