@@ -14,7 +14,7 @@
 
 import { PremiumGate } from "@/components/PremiumGate";
 import { usePermissionPrimer } from "@/components/PermissionPrimer";
-import { API_ENDPOINTS } from "@/config/api";
+import { API_ENDPOINTS, resilientFetch } from "@/config/api";
 import { markFileAsCreated } from "@/services/fileService";
 import {
   createDocxFromBlank,
@@ -181,19 +181,11 @@ export default function ScanToTextScreen() {
         } as any);
         formData.append("mode", mode);
 
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 120_000);
-
-        let response: Response;
-        try {
-          response = await fetch(API_ENDPOINTS.AI.OCR_SCAN, {
-            method: "POST",
-            body: formData,
-            signal: controller.signal,
-          });
-        } finally {
-          clearTimeout(timeoutId);
-        }
+        const response = await resilientFetch(
+          API_ENDPOINTS.AI.OCR_SCAN,
+          { method: "POST", body: formData },
+          { timeoutMs: 120_000 },
+        );
 
         const result = await response.json();
 

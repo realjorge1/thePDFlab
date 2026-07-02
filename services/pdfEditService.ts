@@ -15,7 +15,7 @@
  * basic formatting survive cleanly.
  */
 
-import { API_BASE_URL } from "@/config/api";
+import { API_BASE_URL, resilientFetch } from "@/config/api";
 import * as FileSystem from "expo-file-system/legacy";
 
 /**
@@ -36,11 +36,11 @@ export async function fetchPdfAsHtml(
     type: "application/pdf",
   } as any);
 
-  const resp = await fetch(`${API_BASE_URL}/convert/pdf-to-html`, {
-    method: "POST",
-    body: form,
-    signal,
-  });
+  const resp = await resilientFetch(
+    `${API_BASE_URL}/convert/pdf-to-html`,
+    { method: "POST", body: form, signal },
+    { timeoutMs: 120000 },
+  );
 
   if (!resp.ok) {
     let message = "Could not convert PDF to editable form.";
@@ -176,11 +176,15 @@ export async function savePdfFromHtml(
 <body>${htmlContent}</body>
 </html>`;
 
-  const resp = await fetch(`${API_BASE_URL}/convert/html-to-pdf`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ html: fullHtml }),
-  });
+  const resp = await resilientFetch(
+    `${API_BASE_URL}/convert/html-to-pdf`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ html: fullHtml }),
+    },
+    { timeoutMs: 120000 },
+  );
 
   if (!resp.ok) {
     let message = "Could not save PDF.";

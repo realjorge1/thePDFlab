@@ -1,4 +1,4 @@
-import { API_ENDPOINTS } from "@/config/api";
+import { API_ENDPOINTS, resilientFetch } from "@/config/api";
 import { colors } from "@/constants/theme";
 import { FileSourcePicker, type FileSourceOption } from "@/components/FileSourcePicker";
 import { LibraryFilePicker, type SelectedFile } from "@/components/LibraryFilePicker";
@@ -129,7 +129,7 @@ export default function FindReplaceScreen() {
       formData.append("search", searchText);
       formData.append("caseSensitive", String(caseSensitive));
 
-      const response = await fetch(API_ENDPOINTS.TOOLS.FIND_REPLACE_PREVIEW, { method: "POST", body: formData });
+      const response = await resilientFetch(API_ENDPOINTS.TOOLS.FIND_REPLACE_PREVIEW, { method: "POST", body: formData }, { timeoutMs: 120000 });
 
       if (!response.ok) {
         const errData = await response.json().catch(() => null);
@@ -162,7 +162,7 @@ export default function FindReplaceScreen() {
       formData.append("replace", replaceText);
       formData.append("caseSensitive", String(caseSensitive));
 
-      const response = await fetch(API_ENDPOINTS.TOOLS.FIND_REPLACE, { method: "POST", body: formData });
+      const response = await resilientFetch(API_ENDPOINTS.TOOLS.FIND_REPLACE, { method: "POST", body: formData }, { timeoutMs: 120000 });
 
       if (!response.ok) {
         const errData = await response.json().catch(() => null);

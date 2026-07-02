@@ -4,7 +4,7 @@
  * Handles document upload, extraction, and conversational Q&A via the backend RAG pipeline.
  */
 
-import { API_ENDPOINTS, wakeUpBackend } from "@/config/api";
+import { API_ENDPOINTS, resilientFetch, wakeUpBackend } from "@/config/api";
 import { assertAIPremium } from "@/services/ai/premiumGuard";
 import type { AIChatMessage, AIDocumentRef } from "@/services/ai/ai.types";
 import { stripMarkdown } from "@/utils/sanitizeAiText";
@@ -99,44 +99,39 @@ export async function extractDocumentForChat(
     name: doc.name || "document",
   } as any);
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 180_000); // 3 min for large docs
+  // resilientFetch fails over across the backend pool; 3 min per attempt for
+  // large documents.
+  const response = await resilientFetch(
+    API_ENDPOINTS.AI.EXTRACT_DOCUMENT,
+    { method: "POST", body: formData },
+    { timeoutMs: 180_000 },
+  );
 
-  try {
-    const response = await fetch(API_ENDPOINTS.AI.EXTRACT_DOCUMENT, {
-      method: "POST",
-      body: formData,
-      signal: controller.signal,
-    });
-
-    if (!response.ok) {
-      const errBody = await response.json().catch(() => ({}));
-      throw new Error(
-        (errBody as any)?.error ||
-          `Document extraction failed (${response.status})`,
-      );
-    }
-
-    const result = await response.json();
-
-    const session: DocumentChatSession = {
-      docId: result.docId,
-      filename: result.filename,
-      fileType: result.fileType || "pdf",
-      totalPages: result.totalPages,
-      chunkCount: result.chunkCount,
-      embeddingProvider: result.embeddingProvider || "none",
-      preview: result.preview || "",
-      suggestedPrompts: result.suggestedPrompts || [],
-    };
-
-    // Cache the session
-    cacheSession(doc, session);
-
-    return session;
-  } finally {
-    clearTimeout(timeout);
+  if (!response.ok) {
+    const errBody = await response.json().catch(() => ({}));
+    throw new Error(
+      (errBody as any)?.error ||
+        `Document extraction failed (${response.status})`,
+    );
   }
+
+  const result = await response.json();
+
+  const session: DocumentChatSession = {
+    docId: result.docId,
+    filename: result.filename,
+    fileType: result.fileType || "pdf",
+    totalPages: result.totalPages,
+    chunkCount: result.chunkCount,
+    embeddingProvider: result.embeddingProvider || "none",
+    preview: result.preview || "",
+    suggestedPrompts: result.suggestedPrompts || [],
+  };
+
+  // Cache the session
+  cacheSession(doc, session);
+
+  return session;
 }
 
 /**
@@ -151,16 +146,11 @@ export async function askDocumentQuestion(
 ): Promise<DocumentChatResponse> {
   assertAIPremium();
   // Abort on EITHER the 60s timeout OR an external cancel (spring overlay).
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 60_000);
-  const onExternalAbort = () => controller.abort();
-  if (externalSignal) {
-    if (externalSignal.aborted) controller.abort();
-    else externalSignal.addEventListener("abort", onExternalAbort);
-  }
-
-  try {
-    const response = await fetch(API_ENDPOINTS.AI.CHAT_DOCUMENT, {
+  // resilientFetch fails over across the backend pool; externalSignal (caller
+  // cancel, e.g. the spring overlay) is honored without failover.
+  const response = await resilientFetch(
+    API_ENDPOINTS.AI.CHAT_DOCUMENT,
+    {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -171,37 +161,35 @@ export async function askDocumentQuestion(
           content: m.content,
         })),
       }),
-      signal: controller.signal,
-    });
+      signal: externalSignal,
+    },
+    { timeoutMs: 60_000 },
+  );
 
-    if (!response.ok) {
-      const errBody = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const errBody = await response.json().catch(() => ({}));
 
-      if (response.status === 404) {
-        // Document expired — clear from cache
-        throw new Error(
-          "DOCUMENT_EXPIRED: Document session has expired. Please re-upload the document.",
-        );
-      }
-
+    if (response.status === 404) {
+      // Document expired — clear from cache
       throw new Error(
-        (errBody as any)?.error || `Chat failed (${response.status})`,
+        "DOCUMENT_EXPIRED: Document session has expired. Please re-upload the document.",
       );
     }
 
-    const data = await response.json();
-
-    return {
-      // Strip Markdown so the answer renders as clean prose (no ## / ** tokens).
-      answer: stripMarkdown(data.answer),
-      citations: data.citations || [],
-      found: data.found !== false,
-      retrievedChunks: data.retrievedChunks || [],
-    };
-  } finally {
-    clearTimeout(timeout);
-    if (externalSignal) externalSignal.removeEventListener("abort", onExternalAbort);
+    throw new Error(
+      (errBody as any)?.error || `Chat failed (${response.status})`,
+    );
   }
+
+  const data = await response.json();
+
+  return {
+    // Strip Markdown so the answer renders as clean prose (no ## / ** tokens).
+    answer: stripMarkdown(data.answer),
+    citations: data.citations || [],
+    found: data.found !== false,
+    retrievedChunks: data.retrievedChunks || [],
+  };
 }
 
 /**

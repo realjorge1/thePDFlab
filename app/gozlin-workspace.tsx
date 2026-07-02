@@ -29,7 +29,7 @@ import { useTheme } from "@/services/ThemeProvider";
 import { AppHeaderContainer } from "@/components/AppHeaderContainer";
 import { GradientView } from "@/components/GradientView";
 import AILogoIcon from "@/components/AIButton/AILogoIcon";
-import { API_ENDPOINTS } from "@/config/api";
+import { API_ENDPOINTS, resilientFetch } from "@/config/api";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Clipboard from "expo-clipboard";
 // Haptics are globally disabled — this is a no-op shim (see utils/haptics.ts).
@@ -908,14 +908,18 @@ export default function GozlinWorkspaceScreen() {
       update(id, { loading: true, error: undefined, result: undefined });
       recordAIInteraction().catch(() => {});
       try {
-        const res = await fetch(API_ENDPOINTS.SCIENTIFIC_CALC.CALCULATE, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            query: queryToUse.trim(),
-            category: sb.category !== "Ask" ? sb.category : null,
-          }),
-        });
+        const res = await resilientFetch(
+          API_ENDPOINTS.SCIENTIFIC_CALC.CALCULATE,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              query: queryToUse.trim(),
+              category: sb.category !== "Ask" ? sb.category : null,
+            }),
+          },
+          { timeoutMs: 60000 },
+        );
         const json = await res.json();
         if (!res.ok || !json.success) throw new Error(json.error || "Calculation failed");
         // Strip Markdown from every text field so the result reads as clean prose.

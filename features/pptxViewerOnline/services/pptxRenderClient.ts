@@ -11,7 +11,7 @@
 
 import * as FileSystem from "expo-file-system/legacy";
 
-import { API_BASE_URL } from "@/config/api";
+import { API_BASE_URL, resilientFetch } from "@/config/api";
 import type { PptxRenderServerResult } from "../types/pptxViewer";
 
 const UPLOAD_TIMEOUT_MS = 180_000; // 3 min — covers cold start + serialized queue
@@ -69,9 +69,6 @@ async function postPptxForConversion(
     type: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
   } as any);
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), UPLOAD_TIMEOUT_MS);
-
   // No native upload-progress event on fetch in RN. Emit "uploading" now,
   // then flip to "rendering" after a short grace so the UX reflects what
   // LibreOffice is actually doing during the request's long tail.
@@ -82,11 +79,13 @@ async function postPptxForConversion(
   );
 
   try {
-    const response = await fetch(`${API_BASE_URL}/pptx/convert`, {
-      method: "POST",
-      body: form,
-      signal: controller.signal,
-    });
+    // resilientFetch fails over across the backend pool (UPLOAD_TIMEOUT_MS per
+    // attempt); the PDF download below then targets the same active backend.
+    const response = await resilientFetch(
+      `${API_BASE_URL}/pptx/convert`,
+      { method: "POST", body: form },
+      { timeoutMs: UPLOAD_TIMEOUT_MS },
+    );
 
     if (!response.ok) {
       const text = await response.text().catch(() => "");
@@ -136,7 +135,6 @@ async function postPptxForConversion(
     }
     throw err;
   } finally {
-    clearTimeout(timer);
     clearTimeout(renderTimer);
   }
 }

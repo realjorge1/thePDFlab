@@ -404,11 +404,15 @@ export async function summarizeHighlights(
   assertAIPremium();
   try {
     const { API_ENDPOINTS } = require("@/config/api");
-    const res = await fetch(API_ENDPOINTS.AI.HIGHLIGHT_SUMMARY, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ highlights, documentName }),
-    });
+    const res = await resilientFetch(
+      API_ENDPOINTS.AI.HIGHLIGHT_SUMMARY,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ highlights, documentName }),
+      },
+      { timeoutMs: 60000 },
+    );
     if (res.ok) {
       const json = await res.json();
       const data = json?.data ?? {};
@@ -449,11 +453,15 @@ export async function convertHighlightToTask(
   assertAIPremium();
   try {
     const { API_ENDPOINTS } = require("@/config/api");
-    const res = await fetch(API_ENDPOINTS.AI.CONVERT_TO_TASK, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text: highlightText, context, documentName }),
-    });
+    const res = await resilientFetch(
+      API_ENDPOINTS.AI.CONVERT_TO_TASK,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: highlightText, context, documentName }),
+      },
+      { timeoutMs: 60000 },
+    );
     if (res.ok) {
       const json = await res.json();
       if (json?.data && typeof json.data === "object") return deepStripMarkdown(json.data);

@@ -37,9 +37,6 @@ import { OnboardingScreen } from "@/components/OnboardingScreen";
 import { ReturnCardOverlay } from "@/components/ScheduledTasks";
 import { SubscriptionProvider } from "@/context/SubscriptionContext";
 import { useScheduledTasks } from "@/hooks/useScheduledTasks";
-import { wakeUpBackend } from "@/config/api";
-import { initAIProvider } from "@/services/ai";
-import { initKeepAlive } from "@/services/backendKeepAlive";
 import { initNotifications } from "@/services/notificationService";
 import { setPendingGeneration } from "@/services/generatedDocStore";
 import type { ScheduledTask } from "@/services/scheduledTasks";
@@ -107,17 +104,11 @@ export default function RootLayout() {
   const [onboardingDone, setOnboardingDone] = useState(false);
 
   useEffect(() => {
-    // Run background startup tasks in parallel with font loading
-    // Wake Render backend while the app initialises (cold starts take ~60s).
-    // initKeepAlive then keeps it warm with a silent ping every 10 minutes.
-    // Once the backend responds, probe it so AI swaps off the mock provider
-    // globally (every AI screen shares the same singleton provider).
-    wakeUpBackend()
-      .then((ok) => {
-        if (ok) return initAIProvider();
-      })
-      .catch(() => {});
-    initKeepAlive();
+    // Run background startup tasks in parallel with font loading.
+    // NOTE: the app does NOT proactively wake or warm the backend here. Backend
+    // warmth is handled by a separate external system; a backend is contacted
+    // only when a real user request needs it (and each such request fails over
+    // across the backend pool). AI's provider probe runs when an AI screen opens.
 
     // Prepare the OS notification channel + permission early so task/Read-Aloud
     // notifications post to the device's notification drawer (not as alerts).

@@ -11,7 +11,7 @@
 
 import * as FileSystem from "expo-file-system/legacy";
 
-import { API_BASE_URL } from "@/config/api";
+import { resilientUpload } from "@/config/api";
 import { validatePdfFile } from "@/services/pdfValidationService";
 
 // ────────────────────────────────────────────────────────────────────
@@ -31,7 +31,6 @@ export interface PdfRepairResult {
 // Constants
 // ────────────────────────────────────────────────────────────────────
 
-const REPAIR_ENDPOINT = `${API_BASE_URL}/pdf/repair-enhanced`;
 const UPLOAD_TIMEOUT_MS = 60_000;
 
 // ────────────────────────────────────────────────────────────────────
@@ -53,17 +52,17 @@ export async function repairPdfViaBackend(
 
   try {
     // ── 1. Upload to backend ─────────────────────────────────────
-    const uploadResult = await FileSystem.uploadAsync(
-      REPAIR_ENDPOINT,
-      localUri,
-      {
+    // resilientUpload re-tries across the backend pool, failing over to a
+    // backup backend on error / unavailable / suspended.
+    const uploadResult = await resilientUpload((baseUrl) =>
+      FileSystem.uploadAsync(`${baseUrl}/pdf/repair-enhanced`, localUri, {
         fieldName: "pdf",
         httpMethod: "POST",
         uploadType: FileSystem.FileSystemUploadType.MULTIPART,
         headers: {
           Accept: "application/pdf",
         },
-      },
+      }),
     );
 
     if (uploadResult.status !== 200) {

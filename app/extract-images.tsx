@@ -1,4 +1,4 @@
-import { API_ENDPOINTS } from "@/config/api";
+import { API_ENDPOINTS, resilientFetch } from "@/config/api";
 import { colors, spacing } from "@/constants/theme";
 import { FileSourcePicker, type FileSourceOption } from "@/components/FileSourcePicker";
 import { LibraryFilePicker, type SelectedFile } from "@/components/LibraryFilePicker";
@@ -128,10 +128,11 @@ export default function ExtractImagesScreen() {
         name: selectedFile.name,
       } as any);
 
-      const response = await fetch(API_ENDPOINTS.TOOLS.EXTRACT_IMAGES, {
-        method: "POST",
-        body: formData,
-      });
+      const response = await resilientFetch(
+        API_ENDPOINTS.TOOLS.EXTRACT_IMAGES,
+        { method: "POST", body: formData },
+        { timeoutMs: 120000 },
+      );
 
       if (!response.ok) {
         const errData = await response.json().catch(() => null);

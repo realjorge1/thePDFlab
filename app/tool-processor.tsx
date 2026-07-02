@@ -1,4 +1,4 @@
-import { API_BASE_URL } from "@/config/api";
+import { API_BASE_URL, resilientFetch } from "@/config/api";
 import { LibraryFilePicker, type SelectedFile as LibSelectedFile } from "@/components/LibraryFilePicker";
 import { colors, spacing } from "@/constants/theme";
 import { pickFilesWithResult } from "@/services/document-manager";
@@ -422,7 +422,6 @@ export default function ToolProcessorScreen() {
     if (!needsPageInfo || !fileUri) return;
     let cancelled = false;
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 6000);
     (async () => {
       try {
         const form = new FormData();
@@ -431,11 +430,13 @@ export default function ToolProcessorScreen() {
           name: (file as string) || "document.pdf",
           type: "application/pdf",
         } as any);
-        const resp = await fetch(`${API_BASE_URL}/pdf/info`, {
-          method: "POST",
-          body: form,
-          signal: controller.signal,
-        });
+        // resilientFetch fails over to a backup backend on error/timeout; the
+        // controller still cancels the request if the screen unmounts first.
+        const resp = await resilientFetch(
+          `${API_BASE_URL}/pdf/info`,
+          { method: "POST", body: form, signal: controller.signal },
+          { timeoutMs: 6000 },
+        );
         if (!cancelled && resp.ok) {
           const data = await resp.json();
           setPdfPageInfo((prev) => ({
@@ -447,13 +448,10 @@ export default function ToolProcessorScreen() {
         }
       } catch {
         // Backend unavailable — the visible viewer will resolve pageCount.
-      } finally {
-        clearTimeout(timeout);
       }
     })();
     return () => {
       cancelled = true;
-      clearTimeout(timeout);
       controller.abort();
     };
   }, [needsPageInfo, fileUri, file]);

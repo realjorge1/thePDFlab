@@ -11,7 +11,7 @@
 // so existing flows can never break because of these add-on features.
 // ============================================
 
-import { API_ENDPOINTS } from "@/config/api";
+import { API_ENDPOINTS, resilientFetch } from "@/config/api";
 import { stripMarkdown } from "@/utils/sanitizeAiText";
 import { hasAIPremiumAccess } from "./premiumGuard";
 
@@ -34,22 +34,20 @@ export async function quickChat(
   if (!message || !message.trim()) return null;
 
   const timeoutMs = opts.timeoutMs ?? 12_000;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-
-  const onExternalAbort = () => controller.abort();
-  if (opts.signal) {
-    if (opts.signal.aborted) controller.abort();
-    else opts.signal.addEventListener("abort", onExternalAbort);
-  }
 
   try {
-    const res = await fetch(API_ENDPOINTS.AI.CHAT, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message, history: [] }),
-      signal: controller.signal,
-    });
+    // resilientFetch fails over across the backend pool; opts.signal (caller
+    // cancel) is honored without failover.
+    const res = await resilientFetch(
+      API_ENDPOINTS.AI.CHAT,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message, history: [] }),
+        signal: opts.signal,
+      },
+      { timeoutMs },
+    );
     if (!res.ok) return null;
 
     const json = await res.json();
@@ -59,9 +57,6 @@ export async function quickChat(
   } catch {
     // Offline, cold backend, timeout, or aborted — caller falls back locally.
     return null;
-  } finally {
-    clearTimeout(timer);
-    if (opts.signal) opts.signal.removeEventListener("abort", onExternalAbort);
   }
 }
 

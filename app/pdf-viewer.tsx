@@ -72,7 +72,7 @@ import {
   setReadingProgressFromPages,
 } from "@/services/readingProgressService";
 
-import { API_BASE_URL } from "@/config/api";
+import { API_BASE_URL, resilientFetch } from "@/config/api";
 import * as Clipboard from "expo-clipboard";
 import * as FileSystem from "expo-file-system/legacy";
 import {
@@ -649,10 +649,11 @@ export default function PdfViewerScreen() {
       } as any);
       formData.append("password", pwd);
 
-      const response = await fetch(`${API_BASE_URL}/pdf/unlock`, {
-        method: "POST",
-        body: formData,
-      });
+      const response = await resilientFetch(
+        `${API_BASE_URL}/pdf/unlock`,
+        { method: "POST", body: formData },
+        { timeoutMs: 120000 },
+      );
 
       if (!response.ok) {
         const err = await response.json().catch(() => ({}));

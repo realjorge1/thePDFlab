@@ -1,4 +1,4 @@
-import { API_ENDPOINTS } from "@/config/api";
+import { API_ENDPOINTS, resilientFetch } from "@/config/api";
 import { colors } from "@/constants/theme";
 import { FileSourcePicker, type FileSourceOption } from "@/components/FileSourcePicker";
 import { LibraryFilePicker, type SelectedFile } from "@/components/LibraryFilePicker";
@@ -124,7 +124,7 @@ export default function BatchCompressScreen() {
       // Backend reads "compressionLevel", not "level"
       formData.append("compressionLevel", level);
 
-      const response = await fetch(API_ENDPOINTS.TOOLS.BATCH_COMPRESS, { method: "POST", body: formData });
+      const response = await resilientFetch(API_ENDPOINTS.TOOLS.BATCH_COMPRESS, { method: "POST", body: formData }, { timeoutMs: 120000 });
 
       if (!response.ok) {
         const errData = await response.json().catch(() => null);

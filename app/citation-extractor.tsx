@@ -1,4 +1,4 @@
-import { API_ENDPOINTS } from "@/config/api";
+import { API_ENDPOINTS, resilientFetch } from "@/config/api";
 import { colors } from "@/constants/theme";
 import { FileSourcePicker, type FileSourceOption } from "@/components/FileSourcePicker";
 import { LibraryFilePicker, type SelectedFile } from "@/components/LibraryFilePicker";
@@ -180,10 +180,11 @@ export default function CitationExtractorScreen() {
       } as any);
       formData.append("style", style);
 
-      const response = await fetch(API_ENDPOINTS.TOOLS.CITATIONS_EXTRACT, {
-        method: "POST",
-        body: formData,
-      });
+      const response = await resilientFetch(
+        API_ENDPOINTS.TOOLS.CITATIONS_EXTRACT,
+        { method: "POST", body: formData },
+        { timeoutMs: 120000 },
+      );
 
       if (!response.ok) {
         const errData = await response.json().catch(() => null);
@@ -206,14 +207,18 @@ export default function CitationExtractorScreen() {
       setError(null);
 
       try {
-        const response = await fetch(API_ENDPOINTS.TOOLS.CITATIONS_FORMAT, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            citations: result.citations.map((c) => c.raw),
-            style: newStyle,
-          }),
-        });
+        const response = await resilientFetch(
+          API_ENDPOINTS.TOOLS.CITATIONS_FORMAT,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              citations: result.citations.map((c) => c.raw),
+              style: newStyle,
+            }),
+          },
+          { timeoutMs: 60000 },
+        );
 
         if (!response.ok) {
           const errData = await response.json().catch(() => null);

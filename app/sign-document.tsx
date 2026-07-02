@@ -47,7 +47,7 @@ import SignatureScreen, {
   type SignatureViewRef,
 } from "react-native-signature-canvas";
 
-import { API_BASE_URL } from "@/config/api";
+import { API_BASE_URL, resilientFetch } from "@/config/api";
 import { useTheme } from "@/services/ThemeProvider";
 import { upsertFileRecord } from "@/services/fileIndexService";
 import { applyVisualSignature } from "@/services/signingService";
@@ -253,7 +253,6 @@ export default function SignDocumentScreen() {
     if (!fileUri) return;
     let cancelled = false;
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 8000);
 
     (async () => {
       try {
@@ -263,11 +262,13 @@ export default function SignDocumentScreen() {
           name: file || "document.pdf",
           type: "application/pdf",
         } as any);
-        const resp = await fetch(`${API_BASE_URL}/pdf/info`, {
-          method: "POST",
-          body: form,
-          signal: controller.signal,
-        });
+        // resilientFetch fails over to a backup backend on error/timeout; the
+        // controller still cancels the request if the screen unmounts first.
+        const resp = await resilientFetch(
+          `${API_BASE_URL}/pdf/info`,
+          { method: "POST", body: form, signal: controller.signal },
+          { timeoutMs: 8000 },
+        );
         if (cancelled || !resp.ok) return;
         const json = await resp.json();
         const data = json?.data || json;
@@ -283,14 +284,11 @@ export default function SignDocumentScreen() {
         }
       } catch {
         // Backend unavailable — local detectors below will handle it.
-      } finally {
-        clearTimeout(timeout);
       }
     })();
 
     return () => {
       cancelled = true;
-      clearTimeout(timeout);
       controller.abort();
     };
   }, [fileUri, file]);

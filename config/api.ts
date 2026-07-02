@@ -322,6 +322,44 @@ export async function resilientFetch(
     : new Error("All backends are unavailable. Please try again shortly.");
 }
 
+/**
+ * Backend failover for native uploads (e.g. expo-file-system `uploadAsync`)
+ * that can't go through resilientFetch. `attempt` is called with each backend
+ * base in priority order and must perform the upload, returning a result that
+ * carries an HTTP `status`. The first backend to respond without a network
+ * error / failover status becomes the active backend (sticky + persisted).
+ */
+export async function resilientUpload<T extends { status: number }>(
+  attempt: (baseUrl: string) => Promise<T>,
+  opts: { retryStatuses?: Set<number> } = {},
+): Promise<T> {
+  const order = _backendOrder();
+  const retryStatuses = opts.retryStatuses ?? FAILOVER_STATUSES;
+  let lastErr: unknown;
+
+  for (let i = 0; i < order.length; i++) {
+    const idx = order[i];
+    const isLast = i === order.length - 1;
+    try {
+      const result = await attempt(BACKEND_BASES[idx]);
+      if (retryStatuses.has(result.status) && !isLast) {
+        lastErr = new Error(`Backend ${BACKEND_BASES[idx]} → ${result.status}`);
+        continue; // unavailable / suspended → try the next backend
+      }
+      _applyActive(idx);
+      _persistActive();
+      return result;
+    } catch (e) {
+      lastErr = e;
+      if (isLast) break;
+      // Network error → try the next backend.
+    }
+  }
+  throw lastErr instanceof Error
+    ? lastErr
+    : new Error("All backends are unavailable. Please try again shortly.");
+}
+
 // Probes each backend's /health and adopts the first healthy one as active.
 // Render free-tier cold starts can take up to ~60s, so we keep cycling the pool
 // until one answers or the deadline passes. A suspended/unavailable backend

@@ -4,7 +4,7 @@
  * Adapted for React Native (uses fetch + FormData).
  */
 
-import { API_ENDPOINTS } from "@/config/api";
+import { API_ENDPOINTS, resilientFetch } from "@/config/api";
 import * as FileSystem from "expo-file-system/legacy";
 
 /**
@@ -57,10 +57,11 @@ export async function applyVisualSignature(params: {
   form.append("showDate", String(showDate));
   form.append("showName", String(showName));
 
-  const response = await fetch(API_ENDPOINTS.SIGNING.VISUAL, {
-    method: "POST",
-    body: form,
-  });
+  const response = await resilientFetch(
+    API_ENDPOINTS.SIGNING.VISUAL,
+    { method: "POST", body: form },
+    { timeoutMs: 120000 },
+  );
 
   if (!response.ok) {
     const err = await response
@@ -145,10 +146,11 @@ export async function applyDigitalSignature(params: {
   if (contactInfo) form.append("contactInfo", contactInfo);
   if (signatureImage) form.append("signatureImage", signatureImage);
 
-  const response = await fetch(API_ENDPOINTS.SIGNING.DIGITAL, {
-    method: "POST",
-    body: form,
-  });
+  const response = await resilientFetch(
+    API_ENDPOINTS.SIGNING.DIGITAL,
+    { method: "POST", body: form },
+    { timeoutMs: 120000 },
+  );
 
   if (!response.ok) {
     const err = await response
@@ -210,10 +212,11 @@ export async function verifySignatures(fileUri: string, fileName: string) {
     type: "application/pdf",
   } as any);
 
-  const response = await fetch(API_ENDPOINTS.SIGNING.VERIFY, {
-    method: "POST",
-    body: form,
-  });
+  const response = await resilientFetch(
+    API_ENDPOINTS.SIGNING.VERIFY,
+    { method: "POST", body: form },
+    { timeoutMs: 120000 },
+  );
 
   if (!response.ok) {
     const err = await response

@@ -65,6 +65,7 @@
     },
     "extra": {
       "apiUrl": "https://inscribed-backend-docker.onrender.com/api",
+      "apiUrlBackups": ["https://inscribed-backend-backup.onrender.com"],
       "router": {},
       "eas": {
         "projectId": "ed5afc2d-d178-4016-83b7-3ae389e4379e"
