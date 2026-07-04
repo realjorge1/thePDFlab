@@ -41,7 +41,6 @@ export interface MobileRendererHandle {
   scrollToPercent: (percent: number) => void;
   /** Scroll so that text matching `searchText` appears near the top of the viewport. Falls back to proportional scroll. */
   scrollToText: (searchText: string, fallbackPercent: number) => void;
-  applyHighlights: (highlights: Highlight[]) => void;
   /** Apply a single highlight via the selection bridge. */
   bridgeHighlight: (
     id: string,
@@ -154,8 +153,10 @@ export const MobileRenderer = forwardRef<MobileRendererHandle, Props>(
         },
         scrollToPercent(percent: number) {
           const clamped = Math.max(0, Math.min(100, percent));
+          // Scale against the scrollable range (scrollHeight − viewport) so a
+          // percent from the reflow's scroll tracker restores to the same spot.
           inject(
-            `window.scrollTo(0, document.documentElement.scrollHeight * ${clamped} / 100); true;`,
+            `window.scrollTo(0, Math.max(0, document.documentElement.scrollHeight - window.innerHeight) * ${clamped} / 100); true;`,
           );
         },
         scrollToText(searchText: string, fallbackPercent: number) {
@@ -181,15 +182,6 @@ export const MobileRenderer = forwardRef<MobileRendererHandle, Props>(
             `window.scrollTo({top:document.documentElement.scrollHeight*${fb}/100,behavior:'smooth'});` +
             `})(); true;`,
           );
-        },
-        applyHighlights(highlights: Highlight[]) {
-          const payload = highlights.map((h) => ({
-            id: h.id,
-            startOffset: h.startOffset,
-            endOffset: h.endOffset,
-            color: h.color,
-          }));
-          inject(`window.applyHighlights(${JSON.stringify(payload)}); true;`);
         },
         // ── Selection Bridge methods ──────────────────────────
         bridgeHighlight(
@@ -411,6 +403,15 @@ export const MobileRenderer = forwardRef<MobileRendererHandle, Props>(
         originWhitelist={["*"]}
         // Required so the WebView can load the staged file:// document (Android).
         allowFileAccess
+        // Android: let the staged file:// page XHR the document file itself.
+        // The reflow HTML fetches the PDF/DOCX bytes by URL instead of
+        // inlining base64 — inlining forced multiple 30+ MB string copies
+        // through the RN heap and bridge, which OOM-crashed the app process
+        // on larger documents. The page is app-generated, fully offline, and
+        // all top-frame navigation is blocked below, so widening file access
+        // introduces no external surface.
+        allowFileAccessFromFileURLs
+        allowUniversalAccessFromFileURLs
         allowingReadAccessToURL={FileSystem.cacheDirectory ?? undefined}
         javaScriptEnabled
         domStorageEnabled
@@ -424,6 +425,18 @@ export const MobileRenderer = forwardRef<MobileRendererHandle, Props>(
         onError={() => {
           // Webview render error — surface it
           onMessage?.({ type: "ready" } as any);
+        }}
+        // Legacy Android devices often run the WebView renderer in-process
+        // with tight memory; if that renderer dies mid-reflow, report it as a
+        // reflow failure so the viewer falls back to Original view instead of
+        // leaving a dead blank view. Modern devices isolate the renderer, so
+        // this effectively never fires there.
+        onRenderProcessGone={() => {
+          onMessage?.({
+            type: "reflow-error",
+            title: "Mobile View",
+            message: "Mobile View needs more memory than this device has available.",
+          });
         }}
         // All vendor scripts are inlined into the HTML, so we never need
         // network access. This enforces fully offline operation even if some

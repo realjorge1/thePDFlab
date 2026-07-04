@@ -127,7 +127,11 @@ export type WebViewMessage =
       id?: string;
       kind?: "highlight" | "underline" | "strikethrough";
     }
-  | { type: "read-aloud-text"; text: string };
+  | { type: "read-aloud-text"; text: string }
+  /** Posted by the reflow HTML when it cannot render the document
+   *  (scanned PDF, parse failure, vendor script missing). Viewers fall
+   *  back to Original view and surface the message. */
+  | { type: "reflow-error"; title: string; message: string };
 
 // ============================================================================
 // UNDERLINE ANNOTATIONS

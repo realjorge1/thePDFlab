@@ -22,7 +22,6 @@ import {
   ActivityIndicator,
   Alert,
   AppState,
-  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -45,9 +44,10 @@ import {
 import { PDFTextExtractor } from "@/components/DocumentViewer/PDFTextExtractor";
 import { SelectionToolbar } from "@/components/DocumentViewer/SelectionToolbar";
 import { ThreeDotsMenu } from "@/components/DocumentViewer/ThreeDotsMenu";
+import { ReaderControls } from "@/components/DocumentViewer/ReaderControls";
+import { ViewModeToggle } from "@/components/DocumentViewer/ViewModeToggle";
 import { AnalyzeSheet } from "@/components/ai/AnalyzeSheet";
-// ViewModeToggle (Mobile/Normal "Fit-To-Screen") is intentionally not rendered
-// for now; the view-mode logic stays wired in this screen for a future upgrade.
+import { useReaderSettings } from "@/hooks/useReaderSettings";
 import { PageJumpModal } from "@/components/pdf/PageJumpModal";
 import { ThumbnailGrid } from "@/components/pdf/ThumbnailGrid";
 import {
@@ -332,8 +332,17 @@ export default function PdfViewerScreen() {
   const [targetPage, setTargetPage] = useState<number | undefined>(undefined);
   const [showFullscreenIndicator, setShowFullscreenIndicator] = useState(false);
   const [headerHeight, setHeaderHeight] = useState(0);
+  const [showReaderSettings, setShowReaderSettings] = useState(false);
+  const { settings: readerSettings, updateSettings: updateReaderSettings } =
+    useReaderSettings(colorScheme);
   const isMountedRef = useRef(true);
   const mobileRendererRef = useRef<MobileRendererHandle>(null);
+  /** Mirror of state.pageInfo for callbacks that must read it without re-binding. */
+  const pageInfoRef = useRef(state.pageInfo);
+  /** Scroll % to restore in Mobile View once its content finishes rendering. */
+  const pendingMobileScrollPctRef = useRef<number | null>(null);
+  /** Latest scroll % reported by the Mobile View WebView. */
+  const lastMobileScrollPctRef = useRef<number | null>(null);
   const pageViewRef = useRef<PdfTextLayerHandle>(null);
   const editorWebViewRef = useRef<WebViewType>(null);
   const editAbortRef = useRef<AbortController | null>(null);
@@ -361,6 +370,19 @@ export default function PdfViewerScreen() {
     }, BEAT_MS);
     return () => clearInterval(id);
   }, []);
+
+  React.useEffect(() => {
+    pageInfoRef.current = state.pageInfo;
+  }, [state.pageInfo]);
+
+  // Keep the Mobile View WebView's typography/theme in sync with reader
+  // settings. Injections made before the WebView is ready are queued by
+  // MobileRenderer, so firing on mode entry is safe.
+  React.useEffect(() => {
+    if (state.viewMode === "mobile") {
+      mobileRendererRef.current?.updateStyles(readerSettings);
+    }
+  }, [readerSettings, state.viewMode]);
 
   // Normalize URI + check star on mount
   React.useEffect(() => {
@@ -397,6 +419,10 @@ export default function PdfViewerScreen() {
       !state.error &&
       !state.showRecovery &&
       !state.editMode &&
+      // The extractor inlines the whole PDF as base64 into a hidden WebView —
+      // never let that heap spike coincide with Mobile View's reflow WebView.
+      state.viewMode !== "mobile" &&
+      !state.mobileLoading &&
       state.readAloudPageTexts.length === 0 &&
       !state.readAloudActive &&
       !state.searchExtracting &&
@@ -425,6 +451,8 @@ export default function PdfViewerScreen() {
     state.error,
     state.showRecovery,
     state.editMode,
+    state.viewMode,
+    state.mobileLoading,
     state.fileSize,
     state.readAloudPageTexts.length,
     state.readAloudActive,
@@ -702,8 +730,19 @@ export default function PdfViewerScreen() {
   /** @param silent When true (e.g. auto-switch on long press), suppress alerts on failure. */
   const handleViewModeChange = useCallback(
     async (newMode: ViewMode, silent = false) => {
-      // Switching back to original — immediate, cancel any pending load
+      // Switching back to original — immediate, cancel any pending load.
+      // Carry the Mobile View reading position back as a page number so the
+      // native renderer resumes where the user left off.
       if (newMode === "original") {
+        const pct = lastMobileScrollPctRef.current;
+        const { total } = pageInfoRef.current;
+        if (pct != null && total > 1) {
+          const page = Math.min(
+            total,
+            Math.max(1, 1 + Math.round((pct / 100) * (total - 1))),
+          );
+          setTargetPage(page);
+        }
         setState((prev) => ({
           ...prev,
           viewMode: "original",
@@ -712,17 +751,21 @@ export default function PdfViewerScreen() {
         return;
       }
 
-      // Android 8/9 ship Chrome-backed WebView that crashes the process on
-      // init when running a recent Chrome build. Android 10+ decouples
-      // WebView from Chrome, so the crash can't happen there.
-      if (Platform.OS === "android" && (Platform.Version as number) < 29) {
-        if (!silent) {
-          Alert.alert(
-            "Mobile View Unavailable",
-            "Mobile View requires Android 10 or newer. Your device will continue to work in Normal View.",
-          );
-        }
-        return;
+      // No Android version gate: the old "<Android 10" block predated the
+      // file:// staging fix in MobileRenderer (the actual crash vector was
+      // multi-MB inline HTML in legacy WebViews), and the identical
+      // pdf.js-in-WebView workload already runs ungated on every Android
+      // version via PDFTextExtractor. Older devices are protected by the
+      // staged file:// load, a tighter reflow size ceiling, and the
+      // reflow-error / onRenderProcessGone fallbacks to Original view.
+
+      // Carry the current page into Mobile View as an approximate scroll %.
+      // Applied once the reflow finishes rendering (see handleMobileMessage).
+      {
+        const { current, total } = pageInfoRef.current;
+        lastMobileScrollPctRef.current = null;
+        pendingMobileScrollPctRef.current =
+          total > 1 ? ((current - 1) / (total - 1)) * 100 : null;
       }
 
       // Already have mobile HTML cached
@@ -735,12 +778,7 @@ export default function PdfViewerScreen() {
       setState((prev) => ({ ...prev, mobileLoading: true, mobileError: null }));
 
       try {
-        const result = await reflowPDF(state.normalizedUri, {
-          fontSize: 17,
-          lineHeight: 1.6,
-          theme: colorScheme === "dark" ? "dark" : "light",
-          fontFamily: "system-ui",
-        });
+        const result = await reflowPDF(state.normalizedUri, readerSettings);
 
         if (!isMountedRef.current) return;
         if (result.success && result.html) {
@@ -767,7 +805,7 @@ export default function PdfViewerScreen() {
         setState((prev) => ({ ...prev, mobileLoading: false }));
       }
     },
-    [state.mobileHtml, state.normalizedUri, colorScheme],
+    [state.mobileHtml, state.normalizedUri, readerSettings],
   );
 
   // ── Reading mode toggle (Continuous ↔ Facing) ───────────────────
@@ -798,9 +836,23 @@ export default function PdfViewerScreen() {
   }, [showFullscreenIndicator, state.fullscreen]);
 
   // ── Page jump ────────────────────────────────────────────────────
-  const handleGoToPage = useCallback((page: number) => {
-    setTargetPage(page);
-  }, []);
+  const handleGoToPage = useCallback(
+    (page: number) => {
+      // Mobile View has no native pages — approximate with a proportional
+      // scroll so "go to page" still lands near the right content.
+      if (state.viewMode === "mobile") {
+        const { total } = pageInfoRef.current;
+        if (total > 1) {
+          mobileRendererRef.current?.scrollToPercent(
+            ((page - 1) / (total - 1)) * 100,
+          );
+        }
+        return;
+      }
+      setTargetPage(page);
+    },
+    [state.viewMode],
+  );
 
   // ── Share ────────────────────────────────────────────────────────
   const handleShare = useCallback(async () => {
@@ -1235,6 +1287,51 @@ export default function PdfViewerScreen() {
         searchMobileCount: msg.count ?? 0,
         searchMobileCurrent: msg.current ?? 0,
       }));
+    } else if (msg.type === "scroll" && typeof msg.scrollPercent === "number") {
+      lastMobileScrollPctRef.current = msg.scrollPercent;
+      // Keep library/home reading progress fresh while reading in Mobile View
+      // by mapping the scroll % back onto the page-based progress model.
+      const { total } = pageInfoRef.current;
+      if (uri && total > 0) {
+        const page = Math.min(
+          total,
+          Math.max(1, 1 + Math.round((msg.scrollPercent / 100) * (total - 1))),
+        );
+        setReadingProgressFromPages(
+          reEncodeSafDocumentUri(uri),
+          page,
+          total,
+        ).catch(() => {});
+      }
+    } else if (msg.type === "read-aloud-text") {
+      // The reflow posts this once the whole document has rendered — the
+      // earliest reliable moment to restore the position carried over from
+      // Original view. Skip if the user already scrolled somewhere.
+      const pct = pendingMobileScrollPctRef.current;
+      pendingMobileScrollPctRef.current = null;
+      const userScrolled =
+        lastMobileScrollPctRef.current != null &&
+        lastMobileScrollPctRef.current > 2;
+      if (pct != null && pct > 1 && !userScrolled) {
+        mobileRendererRef.current?.scrollToPercent(pct);
+      }
+    } else if (msg.type === "reflow-error") {
+      // Reflow could not render this document (scanned/image-only PDF, parse
+      // failure). Fall back to Original view with an explanation, and drop the
+      // cached HTML so a later attempt regenerates instead of replaying it.
+      setState((prev) => {
+        if (prev.viewMode !== "mobile") return prev;
+        return {
+          ...prev,
+          viewMode: "original",
+          mobileHtml: null,
+          mobileLoading: false,
+        };
+      });
+      Alert.alert(
+        msg.title || "Mobile View",
+        `${msg.message || "This document could not be reflowed."}\n\nShowing Original view instead.`,
+      );
     } else if (msg.type === "annotation_applied" && !msg.success && msg.id && uri) {
       // Bridge failed to apply — remove from storage
       if (msg.kind === "highlight") removeHighlight(uri, msg.id);
@@ -1855,6 +1952,8 @@ export default function PdfViewerScreen() {
             onToggleReadingMode={toggleReadingMode}
             onMenuPress={() => setState((prev) => ({ ...prev, showMenu: true }))}
             mobileLoading={state.mobileLoading}
+            showViewModeToggle={!state.editMode}
+            onReaderSettingsPress={() => setShowReaderSettings(true)}
           />
         </View>
       )}
@@ -2276,6 +2375,14 @@ export default function PdfViewerScreen() {
         file={uri ? { uri, name: name || "Document.pdf", mimeType: "application/pdf" } : null}
       />
 
+      {/* ── Reader settings sheet (Mobile View typography/theme) ── */}
+      <ReaderControls
+        visible={showReaderSettings}
+        settings={readerSettings}
+        onApply={updateReaderSettings}
+        onClose={() => setShowReaderSettings(false)}
+      />
+
       {/* ── PDF Text Extractor (hidden) — feeds Read Aloud AND Search,
            fully independent of Mobile View. Activates when either feature
            needs text; extracted texts are cached for reuse. */}
@@ -2286,7 +2393,13 @@ export default function PdfViewerScreen() {
           // (a completed pre-warm leaves it populated → no re-extraction).
           (state.readAloudActive && state.readAloudPageTexts.length === 0) ||
           state.searchExtracting ||
-          state.prewarmExtract
+          // Suspend the silent pre-warm while Mobile View is loading/active:
+          // the extractor inlines the whole PDF as base64 into a hidden
+          // WebView, and that heap spike must never stack on the reflow
+          // WebView. It resumes automatically back in Original view.
+          (state.prewarmExtract &&
+            state.viewMode !== "mobile" &&
+            !state.mobileLoading)
         }
         onProgress={(pageTexts) => {
           // Stream pages into Read Aloud as they extract so playback can start
@@ -2377,6 +2490,12 @@ interface HeaderProps {
   onToggleReadingMode: () => void;
   onMenuPress: () => void;
   mobileLoading: boolean;
+  /** Render the Original ↔ Mobile toggle. Only the loaded-document header
+   *  passes true; password/recovery/error headers keep it hidden because
+   *  reflow needs a readable document. */
+  showViewModeToggle?: boolean;
+  /** Opens the reader-settings sheet (font size / spacing / theme). */
+  onReaderSettingsPress?: () => void;
 }
 
 function Header({
@@ -2385,12 +2504,14 @@ function Header({
   onClose,
   pageInfo,
   onPagePress,
-  // viewMode / onViewModeChange / mobileLoading are still received (and passed
-  // by callers) but the Mobile/Normal ("Fit-To-Screen") toggle is intentionally
-  // not rendered for now — see note in the header actions below.
+  viewMode,
+  onViewModeChange,
   readingMode,
   onToggleReadingMode,
   onMenuPress,
+  mobileLoading,
+  showViewModeToggle,
+  onReaderSettingsPress,
 }: HeaderProps) {
   return (
     <View
@@ -2439,26 +2560,46 @@ function Header({
         )}
       </Pressable>
 
-      {/* ── Right: reading mode + menu ─────────────────────────── */}
+      {/* ── Right: view mode + reading mode/reader settings + menu ── */}
       <View style={styles.headerActions}>
-        {/* Mobile / Normal ("Fit-To-Screen") view toggle is intentionally
-            hidden from the UI for now. The view-mode logic (handleViewModeChange,
-            viewMode state, MobileRenderer reflow path) is kept wired in the
-            screen so it can be re-surfaced in a future upgrade without
-            rebuilding it. */}
-
-        {/* Continuous / Facing toggle */}
-        <Pressable
-          onPress={onToggleReadingMode}
-          style={styles.headerButton}
-          hitSlop={6}
-        >
-          <MaterialIcons
-            name={readingMode === "continuous" ? "view-day" : "view-carousel"}
-            size={22}
-            color={theme.text.primary}
+        {/* Original ↔ Mobile view toggle */}
+        {showViewModeToggle && (
+          <ViewModeToggle
+            mode={viewMode}
+            onModeChange={onViewModeChange}
+            disabled={mobileLoading}
           />
-        </Pressable>
+        )}
+
+        {/* Continuous/Facing only applies to the original renderer; in Mobile
+            View its slot shows the reader-settings (typography) button. */}
+        {viewMode === "mobile" && onReaderSettingsPress ? (
+          <Pressable
+            onPress={onReaderSettingsPress}
+            style={styles.headerButton}
+            hitSlop={6}
+            accessibilityRole="button"
+            accessibilityLabel="Reader settings"
+          >
+            <MaterialIcons
+              name="format-size"
+              size={22}
+              color={theme.text.primary}
+            />
+          </Pressable>
+        ) : (
+          <Pressable
+            onPress={onToggleReadingMode}
+            style={styles.headerButton}
+            hitSlop={6}
+          >
+            <MaterialIcons
+              name={readingMode === "continuous" ? "view-day" : "view-carousel"}
+              size={22}
+              color={theme.text.primary}
+            />
+          </Pressable>
+        )}
 
         {/* Three dots menu */}
         <Pressable

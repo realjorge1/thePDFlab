@@ -19,7 +19,6 @@ import {
   ActivityIndicator,
   Alert,
   AppState,
-  Platform,
   Pressable,
   StyleSheet,
   Text,
@@ -34,10 +33,12 @@ import {
   MobileRenderer,
   type MobileRendererHandle,
 } from "@/components/DocumentViewer/MobileRenderer";
+import { ReaderControls } from "@/components/DocumentViewer/ReaderControls";
 import { SelectionToolbar } from "@/components/DocumentViewer/SelectionToolbar";
 import { ThreeDotsMenu } from "@/components/DocumentViewer/ThreeDotsMenu";
 import { AnalyzeSheet } from "@/components/ai/AnalyzeSheet";
 import { ViewModeToggle } from "@/components/DocumentViewer/ViewModeToggle";
+import { useReaderSettings } from "@/hooks/useReaderSettings";
 import DocxShareOptions from "@/components/DocxShareOptions";
 import { ReadAloudController } from "@/components/ReadAloudController";
 import type { Highlight, Strikethrough, Underline, ViewMode } from "@/src/types/document-viewer.types";
@@ -194,6 +195,13 @@ export default function DocxViewerScreen() {
   const mammothJsRef = useRef<string | null>(null);
   /** Whether we've already attempted to restore the saved scroll position. */
   const restoredScrollRef = useRef(false);
+  /** Scroll % to restore in Mobile View once its content finishes rendering. */
+  const pendingMobileScrollPctRef = useRef<number | null>(null);
+  /** Latest scroll % reported by the Mobile View WebView. */
+  const lastMobileScrollPctRef = useRef<number | null>(null);
+  const [showReaderSettings, setShowReaderSettings] = useState(false);
+  const { settings: readerSettings, updateSettings: updateReaderSettings } =
+    useReaderSettings(colorScheme);
 
   const { uri, name } = useLocalSearchParams<{ uri: string; name: string }>();
   const displayName = name || getDocxDisplayName(uri || "");
@@ -249,6 +257,15 @@ export default function DocxViewerScreen() {
     }, BEAT_MS);
     return () => clearInterval(id);
   }, []);
+
+  // Keep the Mobile View WebView's typography/theme in sync with reader
+  // settings. Injections made before the WebView is ready are queued by
+  // MobileRenderer, so firing on mode entry is safe.
+  React.useEffect(() => {
+    if (state.viewMode === "mobile") {
+      mobileRendererRef.current?.updateStyles(readerSettings);
+    }
+  }, [readerSettings, state.viewMode]);
 
   // Load document + check star on mount
   React.useEffect(() => {
@@ -380,8 +397,11 @@ export default function DocxViewerScreen() {
   // ── View mode toggle (Mobile ↔ Normal) ──────────────────────────
   const handleViewModeChange = useCallback(
     async (newMode: ViewMode) => {
-      // Switching back to original — immediate, cancel any pending load
+      // Switching back to original — immediate, cancel any pending load.
+      // Reset the restore flag so the remounted original WebView re-restores
+      // its scroll from reading progress, which Mobile View kept up to date.
       if (newMode === "original") {
+        restoredScrollRef.current = false;
         setState((prev) => ({
           ...prev,
           viewMode: "original",
@@ -390,15 +410,28 @@ export default function DocxViewerScreen() {
         return;
       }
 
-      // Android 8/9 ship Chrome-backed WebView that crashes the process on
-      // init when running a recent Chrome build. Android 10+ decouples
-      // WebView from Chrome, so the crash can't happen there.
-      if (Platform.OS === "android" && (Platform.Version as number) < 29) {
-        Alert.alert(
-          "Mobile View Unavailable",
-          "Mobile View requires Android 10 or newer. Your device will continue to work in Normal View.",
-        );
-        return;
+      // No Android version gate: the old "<Android 10" block predated the
+      // file:// staging fix in MobileRenderer (the actual crash vector was
+      // multi-MB inline HTML in legacy WebViews), and this viewer's own
+      // Original mode already runs Mammoth + base64 inline in a WebView on
+      // every Android version. Older devices are protected by the staged
+      // file:// load, a tighter reflow size ceiling, and the reflow-error /
+      // onRenderProcessGone fallbacks to Original view.
+
+      // Carry the reading position into Mobile View. The saved progress is
+      // current because the original WebView persists it on every scroll.
+      // Applied once the reflow finishes rendering (see handleMobileMessage).
+      lastMobileScrollPctRef.current = null;
+      pendingMobileScrollPctRef.current = null;
+      if (uri) {
+        getReadingProgress(uri)
+          .then((entry) => {
+            const p = entry?.progress;
+            if (typeof p === "number" && p > 0 && p < 0.99) {
+              pendingMobileScrollPctRef.current = p * 100;
+            }
+          })
+          .catch(() => {});
       }
 
       // Already have mobile HTML cached
@@ -411,12 +444,7 @@ export default function DocxViewerScreen() {
       setState((prev) => ({ ...prev, mobileLoading: true, mobileError: null }));
 
       try {
-        const result = await reflowDOCX(state.normalizedUri, {
-          fontSize: 17,
-          lineHeight: 1.6,
-          theme: colorScheme === "dark" ? "dark" : "light",
-          fontFamily: "system-ui",
-        });
+        const result = await reflowDOCX(state.normalizedUri, readerSettings);
 
         if (!isMountedRef.current) return;
         if (result.success && result.html) {
@@ -439,7 +467,7 @@ export default function DocxViewerScreen() {
         setState((prev) => ({ ...prev, mobileLoading: false }));
       }
     },
-    [state.mobileHtml, state.normalizedUri, colorScheme],
+    [state.mobileHtml, state.normalizedUri, readerSettings, uri],
   );
 
   // ── Reading mode toggle (Continuous ↔ Facing) ───────────────────
@@ -941,8 +969,47 @@ export default function DocxViewerScreen() {
 
   // ── Mobile renderer messages ─────────────────────────────────────
   const handleMobileMessage = useCallback((msg: any) => {
-    if (msg.type === "read-aloud-text" && msg.text) {
-      setState((prev) => ({ ...prev, readAloudText: msg.text }));
+    if (msg.type === "read-aloud-text") {
+      if (msg.text) {
+        setState((prev) => ({ ...prev, readAloudText: msg.text }));
+      }
+      // The reflow posts this once the document has rendered — the earliest
+      // reliable moment to restore the position carried over from Original
+      // view. Skip if the user already scrolled somewhere.
+      const pct = pendingMobileScrollPctRef.current;
+      pendingMobileScrollPctRef.current = null;
+      const userScrolled =
+        lastMobileScrollPctRef.current != null &&
+        lastMobileScrollPctRef.current > 2;
+      if (pct != null && pct > 1 && !userScrolled) {
+        mobileRendererRef.current?.scrollToPercent(pct);
+      }
+    } else if (msg.type === "scroll" && typeof msg.scrollPercent === "number") {
+      lastMobileScrollPctRef.current = msg.scrollPercent;
+      // Persist under the same key/scale as the original view's tracker so
+      // progress stays continuous across view switches and app restarts.
+      if (uri) {
+        setReadingProgress(uri, msg.scrollPercent / 100, {
+          source: "scroll",
+        }).catch(() => {});
+      }
+    } else if (msg.type === "reflow-error") {
+      // Reflow could not render this document — fall back to Original view
+      // with an explanation and drop the cached HTML so a later attempt
+      // regenerates instead of replaying the failure.
+      setState((prev) => {
+        if (prev.viewMode !== "mobile") return prev;
+        return {
+          ...prev,
+          viewMode: "original",
+          mobileHtml: null,
+          mobileLoading: false,
+        };
+      });
+      Alert.alert(
+        msg.title || "Mobile View",
+        `${msg.message || "This document could not be reflowed."}\n\nShowing Original view instead.`,
+      );
     } else if (msg.type === "selection" && msg.text) {
       setState((prev) => ({
         ...prev,
@@ -1257,6 +1324,7 @@ export default function DocxViewerScreen() {
           onToggleReadingMode={toggleReadingMode}
           onMenuPress={() => setState((prev) => ({ ...prev, showMenu: true }))}
           mobileLoading={state.mobileLoading}
+          onReaderSettingsPress={() => setShowReaderSettings(true)}
         />
         </View>
       )}
@@ -1414,6 +1482,14 @@ export default function DocxViewerScreen() {
         }
       />
 
+      {/* ── Reader settings sheet (Mobile View typography/theme) ── */}
+      <ReaderControls
+        visible={showReaderSettings}
+        settings={readerSettings}
+        onApply={updateReaderSettings}
+        onClose={() => setShowReaderSettings(false)}
+      />
+
       {/* ── Read Aloud controller ──────────────────────────────── */}
       <ReadAloudController
         text={
@@ -1457,6 +1533,8 @@ interface HeaderProps {
   onToggleReadingMode: () => void;
   onMenuPress: () => void;
   mobileLoading: boolean;
+  /** Opens the reader-settings sheet (font size / spacing / theme). */
+  onReaderSettingsPress?: () => void;
 }
 
 function Header({
@@ -1473,6 +1551,7 @@ function Header({
   onToggleReadingMode,
   onMenuPress,
   mobileLoading,
+  onReaderSettingsPress,
 }: HeaderProps) {
   return (
     <View
@@ -1548,20 +1627,37 @@ function Header({
               disabled={mobileLoading}
             />
 
-            {/* Continuous / Facing toggle */}
-            <Pressable
-              onPress={onToggleReadingMode}
-              style={styles.headerButton}
-              hitSlop={6}
-            >
-              <MaterialIcons
-                name={
-                  readingMode === "continuous" ? "view-day" : "view-carousel"
-                }
-                size={22}
-                color={theme.text.primary}
-              />
-            </Pressable>
+            {/* Continuous/Facing only applies to the original renderer; in
+                Mobile View its slot shows the reader-settings button. */}
+            {viewMode === "mobile" && onReaderSettingsPress ? (
+              <Pressable
+                onPress={onReaderSettingsPress}
+                style={styles.headerButton}
+                hitSlop={6}
+                accessibilityRole="button"
+                accessibilityLabel="Reader settings"
+              >
+                <MaterialIcons
+                  name="format-size"
+                  size={22}
+                  color={theme.text.primary}
+                />
+              </Pressable>
+            ) : (
+              <Pressable
+                onPress={onToggleReadingMode}
+                style={styles.headerButton}
+                hitSlop={6}
+              >
+                <MaterialIcons
+                  name={
+                    readingMode === "continuous" ? "view-day" : "view-carousel"
+                  }
+                  size={22}
+                  color={theme.text.primary}
+                />
+              </Pressable>
+            )}
 
             {/* Three dots menu */}
             <Pressable

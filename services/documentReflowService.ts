@@ -9,7 +9,128 @@ import type {
     ReflowResponse,
 } from "@/src/types/document-viewer.types";
 import * as FileSystem from "expo-file-system/legacy";
+import { Platform } from "react-native";
 import { loadMobileViewVendorScripts } from "./mobileViewVendorLoader";
+
+// Reading the file as base64 inflates it ~4/3 and the result is embedded in a
+// single HTML string, so very large documents risk an OOM before the WebView
+// ever finishes loading. 25 MB mirrors the ceiling used elsewhere for
+// in-WebView PDF work (text-layer renderer, pre-extraction). Android 9 and
+// below commonly run the WebView renderer in-process with tighter memory, so
+// they get a lower ceiling instead of being locked out of Mobile View.
+const MAX_REFLOW_BYTES =
+  Platform.OS === "android" && (Platform.Version as number) < 29
+    ? 15 * 1024 * 1024
+    : 25 * 1024 * 1024;
+
+const FILE_TOO_LARGE = "FILE_TOO_LARGE";
+
+const TOO_LARGE_RESPONSE: ReflowResponse = {
+  success: false,
+  error: "File too large",
+  message:
+    "This document is too large for Mobile View. Please use Original view.",
+};
+
+// ============================================================================
+// DOCUMENT BYTE DELIVERY
+// Android: the WebView XHRs the document from a file:// URI. Inlining the
+// bytes as base64 forced the RN JS heap to hold 3–4 transient copies of a
+// 30+ MB string and push it through the bridge — long stalls, then an
+// app-process OOM that no JS fallback can catch. With the XHR the document
+// bytes never leave the WebView.
+// iOS: WKWebView blocks file:// XHR but handles large inline HTML fine, so
+// it keeps the original inline-base64 path.
+// ============================================================================
+
+const DOC_BYTES_LOADER_JS = `
+  function loadDocumentBytes(SOURCE, onBytes, onFail) {
+    if (SOURCE && SOURCE.base64) {
+      try {
+        var raw = atob(SOURCE.base64);
+        var u8 = new Uint8Array(raw.length);
+        for (var i = 0; i < raw.length; i++) u8[i] = raw.charCodeAt(i);
+        onBytes(u8);
+      } catch (e) { onFail(e); }
+      return;
+    }
+    var xhr = new XMLHttpRequest();
+    xhr.open('GET', SOURCE.url, true);
+    xhr.responseType = 'arraybuffer';
+    xhr.onload = function() {
+      // file:// XHR reports status 0 on success.
+      if (xhr.response && (xhr.status === 200 || xhr.status === 0)) {
+        onBytes(new Uint8Array(xhr.response));
+      } else {
+        onFail(new Error('Could not read the document (status ' + xhr.status + ')'));
+      }
+    };
+    xhr.onerror = function() { onFail(new Error('Could not read the document file')); };
+    xhr.send();
+  }
+`;
+
+/** Tracks the previous content:// staging copy per format so repeated opens
+ *  don't accumulate files in the cache directory. */
+const _lastStagedCopy: Record<string, string | null> = {};
+
+/** Returns a file:// URI the WebView can XHR. content:// (SAF) documents are
+ *  copied into the app cache first — a WebView cannot read them directly. */
+async function ensureWebViewReadableUri(
+  fileUri: string,
+  kind: "pdf" | "docx",
+): Promise<string> {
+  if (fileUri.startsWith("file://")) return fileUri;
+  if (fileUri.startsWith("/")) return `file://${fileUri}`;
+  const dir = FileSystem.cacheDirectory + "mobileview/";
+  try {
+    await FileSystem.makeDirectoryAsync(dir, { intermediates: true });
+  } catch {
+    // Directory already exists — fine.
+  }
+  const dest = `${dir}src-${kind}-${Date.now()}`;
+  await FileSystem.copyAsync({ from: fileUri, to: dest });
+  const prev = _lastStagedCopy[kind];
+  if (prev && prev !== dest) {
+    FileSystem.deleteAsync(prev, { idempotent: true }).catch(() => {});
+  }
+  _lastStagedCopy[kind] = dest;
+
+  // content:// sources often report no size up front, which bypasses the
+  // pre-flight ceiling — enforce it on the staged copy instead so an
+  // oversized document can never reach the parser.
+  try {
+    const copied = await FileSystem.getInfoAsync(dest);
+    if (
+      copied.exists &&
+      typeof copied.size === "number" &&
+      copied.size > MAX_REFLOW_BYTES
+    ) {
+      FileSystem.deleteAsync(dest, { idempotent: true }).catch(() => {});
+      _lastStagedCopy[kind] = null;
+      throw new Error(FILE_TOO_LARGE);
+    }
+  } catch (e: any) {
+    if (e?.message === FILE_TOO_LARGE) throw e;
+    // Stat failure alone shouldn't block the feature.
+  }
+  return dest;
+}
+
+/** Builds the JS object literal the reflow HTML reads its bytes from. */
+async function buildDocumentSourceLiteral(
+  fileUri: string,
+  kind: "pdf" | "docx",
+): Promise<string> {
+  if (Platform.OS === "android") {
+    const localUri = await ensureWebViewReadableUri(fileUri, kind);
+    return `{ url: ${JSON.stringify(localUri)} }`;
+  }
+  const base64 = await FileSystem.readAsStringAsync(fileUri, {
+    encoding: FileSystem.EncodingType.Base64,
+  });
+  return `{ base64: ${JSON.stringify(base64)} }`;
+}
 
 // Escaping the ~1.3 MB pdf.js worker on every HTML build is measurable work.
 // The vendor scripts are immutable singletons (loaded once), so cache the
@@ -38,9 +159,11 @@ const THEMES: Record<
 };
 
 // ============================================================================
-// SHARED REFLOW CSS + JS (search, highlight, selection, scroll, style-update)
-// These must expose: searchText, searchNext, searchPrev, clearSearch,
-// updateStyles, scrollToPosition, applyHighlights — called by MobileRenderer
+// SHARED REFLOW CSS + JS (scroll tracking, style updates, ready signal)
+// Exposes: updateStyles, scrollToPosition — called by MobileRenderer.
+// Search, text selection, and annotations are provided by SELECTION_BRIDGE_JS
+// (utils/selectionScripts.ts), which MobileRenderer always injects into this
+// HTML before loading it — do not duplicate those functions here.
 // ============================================================================
 
 function readerCSS(settings: ReaderSettings): string {
@@ -69,9 +192,6 @@ th{background:rgba(0,0,0,.05);font-weight:600}
 blockquote{border-left:4px solid var(--border);padding-left:1em;margin:1em 0;font-style:italic;opacity:.9}
 hr{border:none;border-top:2px solid var(--border);margin:2em 0}
 ::selection{background:rgba(100,150,255,.3)}
-.search-highlight{background:#FFEB3B;color:#000;border-radius:2px;padding:0 1px}
-.search-highlight-active{background:#FF9800;color:#000}
-.user-highlight{border-radius:2px;padding:0 1px}
 #loading-indicator{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:60vh;color:var(--fg)}
 #loading-indicator .spinner{width:40px;height:40px;border:4px solid var(--border);border-top-color:var(--link);border-radius:50%;animation:spin 0.8s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
@@ -120,142 +240,6 @@ function readerJS(): string {
     window.scrollTo({ top: pos, behavior: 'smooth' });
   };
 
-  // ── Search ──
-  window.__searchHighlights = [];
-  window.__searchCurrentIdx = -1;
-
-  window.clearSearch = function() {
-    window.__searchHighlights.forEach(function(el) {
-      var p = el.parentNode; if (!p) return;
-      p.replaceChild(document.createTextNode(el.textContent), el);
-      p.normalize();
-    });
-    window.__searchHighlights = [];
-    window.__searchCurrentIdx = -1;
-  };
-
-  window.searchText = function(query) {
-    window.clearSearch();
-    if (!query) {
-      window.ReactNativeWebView && window.ReactNativeWebView.postMessage(
-        JSON.stringify({ type:'search-result', count:0, current:-1 })
-      );
-      return;
-    }
-    var q = query.toLowerCase();
-    var container = document.getElementById('reader-content');
-    if (!container) return;
-    var walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, null, false);
-    var nodes = [];
-    while (walker.nextNode()) nodes.push(walker.currentNode);
-    var count = 0;
-    nodes.forEach(function(node) {
-      var text = node.nodeValue;
-      var lower = text.toLowerCase();
-      var idx = lower.indexOf(q);
-      if (idx === -1) return;
-      var frag = document.createDocumentFragment();
-      var last = 0;
-      while (idx !== -1) {
-        frag.appendChild(document.createTextNode(text.substring(last, idx)));
-        var span = document.createElement('span');
-        span.className = 'search-highlight';
-        span.setAttribute('data-search-idx', count);
-        span.textContent = text.substring(idx, idx + q.length);
-        frag.appendChild(span);
-        window.__searchHighlights.push(span);
-        count++;
-        last = idx + q.length;
-        idx = lower.indexOf(q, last);
-      }
-      frag.appendChild(document.createTextNode(text.substring(last)));
-      node.parentNode.replaceChild(frag, node);
-    });
-    if (window.__searchHighlights.length > 0) {
-      window.__searchCurrentIdx = 0;
-      window.__searchHighlights[0].classList.add('search-highlight-active');
-      window.__searchHighlights[0].scrollIntoView({ behavior:'smooth', block:'center' });
-    }
-    window.ReactNativeWebView && window.ReactNativeWebView.postMessage(
-      JSON.stringify({ type:'search-result', count:count, current: count > 0 ? 0 : -1 })
-    );
-  };
-
-  window.searchNext = function() {
-    if (window.__searchHighlights.length === 0) return;
-    if (window.__searchCurrentIdx >= 0) window.__searchHighlights[window.__searchCurrentIdx].classList.remove('search-highlight-active');
-    window.__searchCurrentIdx = (window.__searchCurrentIdx + 1) % window.__searchHighlights.length;
-    var el = window.__searchHighlights[window.__searchCurrentIdx];
-    el.classList.add('search-highlight-active');
-    el.scrollIntoView({ behavior:'smooth', block:'center' });
-    window.ReactNativeWebView && window.ReactNativeWebView.postMessage(
-      JSON.stringify({ type:'search-result', count:window.__searchHighlights.length, current:window.__searchCurrentIdx })
-    );
-  };
-
-  window.searchPrev = function() {
-    if (window.__searchHighlights.length === 0) return;
-    if (window.__searchCurrentIdx >= 0) window.__searchHighlights[window.__searchCurrentIdx].classList.remove('search-highlight-active');
-    window.__searchCurrentIdx = (window.__searchCurrentIdx - 1 + window.__searchHighlights.length) % window.__searchHighlights.length;
-    var el = window.__searchHighlights[window.__searchCurrentIdx];
-    el.classList.add('search-highlight-active');
-    el.scrollIntoView({ behavior:'smooth', block:'center' });
-    window.ReactNativeWebView && window.ReactNativeWebView.postMessage(
-      JSON.stringify({ type:'search-result', count:window.__searchHighlights.length, current:window.__searchCurrentIdx })
-    );
-  };
-
-  // ── Highlight support ──
-  window.applyHighlights = function(highlights) {
-    if (!highlights || highlights.length === 0) return;
-    highlights.forEach(function(h) {
-      try {
-        var el = document.getElementById('reader-content');
-        if (!el) return;
-        var walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null, false);
-        var offset = 0; var node;
-        while (node = walker.nextNode()) {
-          var len = node.nodeValue.length;
-          if (offset + len > h.startOffset && offset < h.endOffset) {
-            var start = Math.max(0, h.startOffset - offset);
-            var end = Math.min(len, h.endOffset - offset);
-            var range = document.createRange();
-            range.setStart(node, start);
-            range.setEnd(node, end);
-            var span = document.createElement('span');
-            span.className = 'user-highlight';
-            span.style.backgroundColor = h.color || 'rgba(255,235,59,0.4)';
-            span.setAttribute('data-highlight-id', h.id);
-            range.surroundContents(span);
-          }
-          offset += len;
-        }
-      } catch (e) { /* skip broken highlights */ }
-    });
-  };
-
-  // ── Text selection for highlighting ──
-  document.addEventListener('selectionchange', function() {
-    var sel = window.getSelection();
-    if (!sel || sel.isCollapsed || !sel.toString().trim()) return;
-    var text = sel.toString();
-    try {
-      var container = document.getElementById('reader-content');
-      var range = sel.getRangeAt(0);
-      var preRange = document.createRange();
-      preRange.selectNodeContents(container);
-      preRange.setEnd(range.startContainer, range.startOffset);
-      var startOffset = preRange.toString().length;
-      var endOffset = startOffset + text.length;
-      window.ReactNativeWebView && window.ReactNativeWebView.postMessage(JSON.stringify({
-        type: 'text-selected',
-        text: text,
-        startOffset: startOffset,
-        endOffset: endOffset
-      }));
-    } catch (e) {}
-  });
-
   // ── Signal ready ──
   window.ReactNativeWebView && window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'ready' }));
 })();
@@ -269,10 +253,11 @@ function readerJS(): string {
 /**
  * Generate a self-contained HTML page that:
  * 1. Inlines pdf.js (bundled as a local asset — no network)
- * 2. Decodes the base64 PDF data
+ * 2. Loads the PDF bytes (Android: file:// XHR inside the WebView;
+ *    iOS: inline base64)
  * 3. Extracts text from every page
  * 4. Renders reflowed paragraphs inside .reader-content
- * 5. Includes search / highlight / copy JS
+ * 5. Includes scroll/style JS (search & selection come from the bridge)
  */
 export async function reflowPDF(
   fileUri: string,
@@ -281,13 +266,14 @@ export async function reflowPDF(
   try {
     const info = await FileSystem.getInfoAsync(fileUri);
     if (!info.exists) throw new Error("File not found");
+    if (typeof info.size === "number" && info.size > MAX_REFLOW_BYTES) {
+      return TOO_LARGE_RESPONSE;
+    }
 
     const vendor = await loadMobileViewVendorScripts();
 
-    // Read the PDF as base64
-    const base64 = await FileSystem.readAsStringAsync(fileUri, {
-      encoding: FileSystem.EncodingType.Base64,
-    });
+    // Android: file:// URL the WebView XHRs. iOS: inline base64.
+    const sourceLiteral = await buildDocumentSourceLiteral(fileUri, "pdf");
 
     const css = readerCSS(settings);
     const js = readerJS();
@@ -328,8 +314,8 @@ export async function reflowPDF(
 <script>${pdfWorkerMinJs}<\/script>
 <script>
 (function(){
-  var BASE64_DATA = ${JSON.stringify(base64)};
-
+  var PDF_SOURCE = ${sourceLiteral};
+${DOC_BYTES_LOADER_JS}
   var rc = document.getElementById('reader-content');
   var loading = document.getElementById('loading-indicator');
   var renderedAny = false;
@@ -341,8 +327,10 @@ export async function reflowPDF(
     ec.style.display = 'flex';
     document.getElementById('error-title').textContent = title;
     document.getElementById('error-message').textContent = msg;
-    // Still signal ready so RN doesn't hang
+    // Still signal ready so RN doesn't hang, then report the failure so the
+    // viewer can fall back to Original view with an explanation.
     window.ReactNativeWebView && window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'ready' }));
+    window.ReactNativeWebView && window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'reflow-error', title: title, message: msg }));
   }
 
   // Heading heuristics (same as backend)
@@ -481,20 +469,27 @@ export async function reflowPDF(
   try { pdfjsLib.GlobalWorkerOptions.workerSrc = ''; } catch (_) {}
   try { pdfjsLib.disableWorker = true; } catch (_) {}
 
-  try {
-    var raw = atob(BASE64_DATA);
-    var uint8 = new Uint8Array(raw.length);
-    for (var i = 0; i < raw.length; i++) uint8[i] = raw.charCodeAt(i);
-
-    pdfjsLib.getDocument({ data: uint8, disableWorker: true }).promise.then(function(pdf) {
+  loadDocumentBytes(PDF_SOURCE, function(uint8) {
+    // disableFontFace: we only extract text, never draw glyphs — skip
+    // materialising embedded fonts as browser FontFace objects. Every byte
+    // saved matters on devices whose WebView renderer runs in-process.
+    pdfjsLib.getDocument({ data: uint8, disableWorker: true, disableFontFace: true }).promise.then(function(pdf) {
+      uint8 = null; // pdf.js owns the bytes now — let the copy be collected
       var total = pdf.numPages;
 
       // Extract page-by-page IN ORDER and render each page the moment it is
       // ready. The first page appears almost immediately instead of waiting
       // for the whole document to parse — and large PDFs no longer block.
+      // page.cleanup() releases each page's fonts/objects as soon as its
+      // text is out, keeping peak memory ~one page instead of the whole doc.
       function processPage(pageNum) {
         return pdf.getPage(pageNum)
-          .then(function(page) { return page.getTextContent(); })
+          .then(function(page) {
+            return page.getTextContent().then(function(content) {
+              try { page.cleanup(); } catch (_) {}
+              return content;
+            });
+          })
           .then(function(content) { appendParagraphs(reconstructPage(content)); })
           .catch(function() { /* skip an unreadable page */ });
       }
@@ -505,19 +500,23 @@ export async function reflowPDF(
       }
       chain.then(function() {
         if (!renderedAny) {
+          try { pdf.destroy(); } catch (_) {}
           showError('Scanned Document', 'This PDF appears to be scanned or image-based. Please use Original view.');
           return;
         }
         // Post the full extracted text for Read Aloud.
         var allText = fullTextParts.join('\\n\\n');
         window.ReactNativeWebView && window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'read-aloud-text', text: allText }));
+        // The DOM now holds everything the reader needs — free the parsed
+        // document and its byte buffer entirely.
+        try { pdf.destroy(); } catch (_) {}
       });
     }).catch(function(err) {
       showError('PDF Error', (err && err.message) || 'Failed to parse PDF');
     });
-  } catch (e) {
-    showError('PDF Error', (e && e.message) || 'Failed to decode PDF data');
-  }
+  }, function(e) {
+    showError('PDF Error', (e && e.message) || 'Failed to load PDF data');
+  });
 })();
 <\/script>
 
@@ -530,6 +529,7 @@ ${js}
 
     return { success: true, html };
   } catch (error: any) {
+    if (error?.message === FILE_TOO_LARGE) return TOO_LARGE_RESPONSE;
     console.error("[ReflowService] reflowPDF error:", error);
     return {
       success: false,
@@ -546,10 +546,11 @@ ${js}
 /**
  * Generate a self-contained HTML page that:
  * 1. Inlines Mammoth.js (bundled as a local asset — no network)
- * 2. Decodes the base64 DOCX data
+ * 2. Loads the DOCX bytes (Android: file:// XHR inside the WebView;
+ *    iOS: inline base64)
  * 3. Converts DOCX → HTML with Mammoth
  * 4. Renders inside .reader-content with mobile-optimised styles
- * 5. Includes search / highlight / copy JS
+ * 5. Includes scroll/style JS (search & selection come from the bridge)
  */
 export async function reflowDOCX(
   fileUri: string,
@@ -558,13 +559,14 @@ export async function reflowDOCX(
   try {
     const info = await FileSystem.getInfoAsync(fileUri);
     if (!info.exists) throw new Error("File not found");
+    if (typeof info.size === "number" && info.size > MAX_REFLOW_BYTES) {
+      return TOO_LARGE_RESPONSE;
+    }
 
     const vendor = await loadMobileViewVendorScripts();
 
-    // Read the DOCX as base64
-    const base64 = await FileSystem.readAsStringAsync(fileUri, {
-      encoding: FileSystem.EncodingType.Base64,
-    });
+    // Android: file:// URL the WebView XHRs. iOS: inline base64.
+    const sourceLiteral = await buildDocumentSourceLiteral(fileUri, "docx");
 
     const css = readerCSS(settings);
     const js = readerJS();
@@ -600,15 +602,18 @@ export async function reflowDOCX(
 
 <script>
 (function(){
-  var BASE64_DATA = ${JSON.stringify(base64)};
-
+  var DOCX_SOURCE = ${sourceLiteral};
+${DOC_BYTES_LOADER_JS}
   function showError(title, msg) {
     document.getElementById('loading-indicator').style.display = 'none';
     var ec = document.getElementById('error-container');
     ec.style.display = 'flex';
     document.getElementById('error-title').textContent = title;
     document.getElementById('error-message').textContent = msg;
+    // Signal ready so RN doesn't hang, then report the failure so the viewer
+    // can fall back to Original view with an explanation.
     window.ReactNativeWebView && window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'ready' }));
+    window.ReactNativeWebView && window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'reflow-error', title: title, message: msg }));
   }
 
   if (typeof mammoth === 'undefined') {
@@ -616,11 +621,7 @@ export async function reflowDOCX(
     return;
   }
 
-  try {
-    var raw = atob(BASE64_DATA);
-    var uint8 = new Uint8Array(raw.length);
-    for (var i = 0; i < raw.length; i++) uint8[i] = raw.charCodeAt(i);
-
+  loadDocumentBytes(DOCX_SOURCE, function(uint8) {
     mammoth.convertToHtml(
       { arrayBuffer: uint8.buffer },
       {
@@ -661,9 +662,9 @@ export async function reflowDOCX(
     }).catch(function(err) {
       showError('Conversion Error', err.message || 'Failed to convert DOCX');
     });
-  } catch (e) {
-    showError('DOCX Error', e.message || 'Failed to decode DOCX data');
-  }
+  }, function(e) {
+    showError('DOCX Error', (e && e.message) || 'Failed to load DOCX data');
+  });
 })();
 <\/script>
 
@@ -676,6 +677,7 @@ ${js}
 
     return { success: true, html };
   } catch (error: any) {
+    if (error?.message === FILE_TOO_LARGE) return TOO_LARGE_RESPONSE;
     console.error("[ReflowService] reflowDOCX error:", error);
     return {
       success: false,

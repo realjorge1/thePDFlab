@@ -185,8 +185,8 @@ export const API_ENDPOINTS = {
     FILE: `${API_BASE_URL}/document/file`,
     DELETE: `${API_BASE_URL}/document/delete`,
     UPDATE: `${API_BASE_URL}/document/update`,
-    PDF_REFLOW: `${API_BASE_URL}/document/pdf-reflow`,
-    DOCX_REFLOW: `${API_BASE_URL}/document/docx-reflow`,
+    // Reflow endpoints removed: Mobile View is generated fully on-device by
+    // services/documentReflowService.ts (bundled pdf.js / Mammoth).
     EXTRACT_TEXT: `${API_BASE_URL}/document/extract-text`,
   },
 
