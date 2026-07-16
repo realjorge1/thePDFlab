@@ -951,7 +951,7 @@ export default function DownloadsScreen() {
   return (
     <PremiumGate
       feature="Downloads"
-      description="Search and download books & research papers with Premium."
+      description="Search and explore books & research papers with Premium."
     >
     <PINGate screen="downloads">
       <SafeAreaView

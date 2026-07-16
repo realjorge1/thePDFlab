@@ -327,4 +327,28 @@ export const toolCategories = [
       },
     ],
   },
+  {
+    id: "westgard-qc",
+    name: "QC Calculator",
+    color: "#0D9488",
+    tools: [
+      {
+        id: "qc-calculators",
+        name: "QC Calculators",
+        description: "Method validation & lot verification — fully offline",
+      },
+    ],
+  },
+  {
+    id: "gozlin-scientia",
+    name: "Gozlin Scientia",
+    color: "#9333EA",
+    tools: [
+      {
+        id: "gozlin-scientia",
+        name: "Gozlin Scientia",
+        description: "Notes, math, charts & scientific calculations workspace",
+      },
+    ],
+  },
 ];

@@ -221,6 +221,8 @@ export default function RootLayout() {
           <Stack.Screen name="ppt-viewer" />
           <Stack.Screen name="scheduled-tasks" />
           <Stack.Screen name="schedule-task" />
+          <Stack.Screen name="qc-calculators/index" />
+          <Stack.Screen name="qc-calculators/[tool]" />
         </Stack>
         <FloatingAIButton />
         <ScheduledTasksWatcher />

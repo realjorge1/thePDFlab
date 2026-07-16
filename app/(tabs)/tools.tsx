@@ -200,6 +200,19 @@ export default function ToolsScreen() {
   // ============================================================================
 
   const handleToolPress = useCallback((toolId: string) => {
+    // Westgard QC calculators: fully offline suite, no file input needed
+    if (toolId === "qc-calculators") {
+      router.push("/qc-calculators" as any);
+      return;
+    }
+
+    // Gozlin Scientia: premium notebook workspace. The workspace screen wraps
+    // itself in <PremiumGate>, so non-subscribers see the upsell automatically.
+    if (toolId === "gozlin-scientia") {
+      router.push("/gozlin-workspace" as any);
+      return;
+    }
+
     // Batch compress: navigate directly (no file pre-pick needed, multi-file picker is in-screen)
     if (toolId === "batch-compress") {
       router.push("/batch-compress" as any);
@@ -507,7 +520,7 @@ export default function ToolsScreen() {
           </TouchableOpacity>
           <View style={styles.headerTitleArea}>
             <Text style={[styles.headerTitle, { color: "#FFFFFF" }]}>
-              PDF Tools
+              your Tools
             </Text>
           </View>
           <View style={styles.headerRight} />

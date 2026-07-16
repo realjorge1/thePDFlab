@@ -2,6 +2,8 @@ import { useTheme } from "@/services/ThemeProvider";
 import {
   ArrowLeft,
   ArrowRight,
+  Atom,
+  Calculator,
   ChevronDown,
   ChevronRight,
   ChevronUp,
@@ -49,6 +51,8 @@ const iconMap: Record<string, React.ComponentType<any>> = {
   forms: Grid,
   compare: FileSearch,
   advanced: Zap,
+  "westgard-qc": Calculator,
+  "gozlin-scientia": Atom,
 };
 
 export const ToolCategory = React.memo(function ToolCategory({
