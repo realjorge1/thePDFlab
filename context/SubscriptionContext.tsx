@@ -5,6 +5,7 @@ import {
   REVENUECAT_IOS_API_KEY,
 } from '@/config/revenuecat';
 import { setAIPremiumAccess } from '@/services/ai/premiumGuard';
+import { setAIUserId } from '@/services/ai/aiRequestHeaders';
 import React, {
   createContext,
   useCallback,
@@ -69,7 +70,23 @@ export function SubscriptionProvider({ children }: { children: ReactNode }) {
     const apiKey =
       Platform.OS === 'ios' ? REVENUECAT_IOS_API_KEY : REVENUECAT_ANDROID_API_KEY;
 
-    Purchases.configure({ apiKey });
+    try {
+      Purchases.configure({ apiKey });
+    } catch (e) {
+      // Without the SDK nobody can be verified as premium. End the loading
+      // state so gated screens show the upsell instead of spinning forever,
+      // and let AI requests go out without a user ID.
+      console.error(e);
+      setAIUserId(null);
+      setIsLoading(false);
+      return;
+    }
+
+    // Contract v2 (C3): AI requests carry the RevenueCat app user ID. AI calls
+    // wait at most 2 s for it, then go out without it.
+    Purchases.getAppUserID()
+      .then((id) => setAIUserId(id))
+      .catch(() => setAIUserId(null));
 
     Purchases.getCustomerInfo()
       .then((info) => applyPremium(isPremiumActive(info), setIsPremium))

@@ -34,11 +34,15 @@ export class CancelError extends Error {
   }
 }
 
-/** True for our own cancellations and for fetch AbortError (aborted network). */
+/**
+ * True for our own cancellations, for fetch AbortError (aborted network), and
+ * for an AIError whose code is CANCELLED (services/ai/aiErrors).
+ */
 export function isCancelError(e: unknown): boolean {
   return (
     e instanceof CancelError ||
-    (e instanceof Error && (e.name === "CancelError" || e.name === "AbortError"))
+    (e instanceof Error && (e.name === "CancelError" || e.name === "AbortError")) ||
+    (e instanceof Error && e.name === "AIError" && (e as { code?: unknown }).code === "CANCELLED")
   );
 }
 

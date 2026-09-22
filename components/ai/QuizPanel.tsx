@@ -16,6 +16,8 @@ import { useTheme } from "@/services/ThemeProvider";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useRouter } from "expo-router";
 import type { AIDocumentRef } from "@/services/ai/ai.types";
+import { AI_CITATIONS_V2 } from "@/constants/featureFlags";
+import { locatorLabel, locatorTypeForDocument } from "@/services/ai/citations";
 import {
   AlertTriangle,
   AlarmClock,
@@ -160,11 +162,21 @@ function parseQuestions(raw: any[]): QuizQuestion[] {
   });
 }
 
-function formatSourceLocation(ref: QuizSourceReference | string | undefined): string {
+function formatSourceLocation(
+  ref: QuizSourceReference | string | undefined,
+  documentName?: string,
+): string {
   if (!ref) return "";
   if (typeof ref === "string") return ref;
   const parts: string[] = [];
-  if (typeof ref.page === "number") parts.push(`Page ${ref.page}`);
+  if (typeof ref.page === "number") {
+    // W8.2: a PPTX "page" is a slide, an EPUB's a chapter, a DOCX's a section.
+    parts.push(
+      AI_CITATIONS_V2 && documentName
+        ? locatorLabel(locatorTypeForDocument({ name: documentName }), ref.page)
+        : `Page ${ref.page}`,
+    );
+  }
   if (typeof ref.slide === "number") parts.push(`Slide ${ref.slide}`);
   if (ref.section) parts.push(ref.section);
   return parts.join(" · ");
@@ -1015,9 +1027,9 @@ export function QuizPanel({ initialDoc, initialDocText }: Props) {
                     <Text style={[styles.sourceHeaderText, { color: "#10B981" }]}>
                       Source from document
                     </Text>
-                    {!!formatSourceLocation(currentQ.source_reference) && (
+                    {!!formatSourceLocation(currentQ.source_reference, doc?.name) && (
                       <Text style={[styles.sourceLocation, { color: t.textTertiary }]}>
-                        {formatSourceLocation(currentQ.source_reference)}
+                        {formatSourceLocation(currentQ.source_reference, doc?.name)}
                       </Text>
                     )}
                   </View>

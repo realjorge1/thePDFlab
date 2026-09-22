@@ -47,12 +47,17 @@ import { loadNativeFonts } from "@/services/editorFontService";
 import { runImportedFileRetentionCheck } from "@/services/fileRetentionService";
 import { purgeExpired } from "@/services/recycleBinService";
 import { loadSettings } from "@/services/settingsService";
-import { ThemeProvider, ThemedStatusBar } from "@/services/ThemeProvider";
+import { ThemeProvider, ThemedStatusBar, useTheme } from "@/services/ThemeProvider";
+import {
+  DarkTheme as NavDarkTheme,
+  DefaultTheme as NavDefaultTheme,
+  ThemeProvider as NavThemeProvider,
+} from "@react-navigation/native";
 import { NoirLayer, NoirProvider } from "@/services/NoirProvider";
-import { setAutoDetectLanguage, setRate } from "@/services/ttsService";
+import { initVoice, setAutoDetectLanguage, setRate } from "@/services/ttsService";
 import { Stack } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { StyleSheet } from "react-native";
 import Animated, { FadeIn } from "react-native-reanimated";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
@@ -125,6 +130,9 @@ export default function RootLayout() {
         setRate(s.readingSpeed);
         setAutoDetectLanguage(s.autoDetectLanguage);
       }).catch(console.error),
+      // Resolve the Read Aloud voice: the user's saved pick, else the
+      // Australian default. Runs before any screen mounts.
+      initVoice().catch(console.error),
       // Initialise the SAF document library DB and kick off a background scan
       docLibDb
         .init()
@@ -164,66 +172,72 @@ export default function RootLayout() {
             device's OS appearance. Screens reserve the bar's height via
             SafeAreaView / useSafeAreaInsets. */}
         <ThemedStatusBar />
-        <Stack
-          screenOptions={{
-            headerShown: false,
-            // PERF: Freeze inactive screens to prevent background re-renders
-            freezeOnBlur: true,
-            // Consistent, smooth push/pop transition across the whole app.
-            // Individual screens can still override (e.g. the editor screens
-            // below opt into `animation: "none"` for instant open).
-            animation: "slide_from_right",
-            animationDuration: 260,
-          }}
-        >
-          <Stack.Screen name="(tabs)" />
-          <Stack.Screen name="index" options={{ headerShown: false }} />
-          <Stack.Screen name="gozlin" />
-          <Stack.Screen name="manage-pages" />
-          <Stack.Screen name="file-details" />
-          <Stack.Screen name="browse-files" />
-          <Stack.Screen name="tool-processor" />
-          <Stack.Screen name="library" />
-          <Stack.Screen name="doclib-library" />
-          <Stack.Screen name="share" />
-          <Stack.Screen name="folders" />
-          <Stack.Screen name="pdf-viewer" />
-          <Stack.Screen name="docx-viewer" />
-          <Stack.Screen name="epub-viewer" />
-          <Stack.Screen name="image-viewer" />
-          {/* PERF: Use fast 'none' animation for editor screens — avoids
-              layout animation overhead so the screen appears instantly */}
-          <Stack.Screen name="create-file" />
-          <Stack.Screen
-            name="create-blank-pdf"
-            options={{ animation: "none" }}
-          />
-          <Stack.Screen
-            name="create-blank-docx"
-            options={{ animation: "none" }}
-          />
-          <Stack.Screen name="image-to-file-preview" />
-          <Stack.Screen name="gozlin-generated-preview" />
-          <Stack.Screen name="settings" />
-          <Stack.Screen name="privacy-policy" />
-          <Stack.Screen name="terms-of-service" />
-          <Stack.Screen name="profile" />
-          <Stack.Screen name="premium" />
-          <Stack.Screen name="recycle" />
-          <Stack.Screen name="chat-with-document" />
-          <Stack.Screen name="extract-images" />
-          <Stack.Screen name="batch-compress" />
-          <Stack.Screen name="find-replace" />
-          <Stack.Screen name="qr-code" />
-          <Stack.Screen name="highlight-export" />
-          <Stack.Screen name="citation-extractor" />
-          <Stack.Screen name="ppt-studio" />
-          <Stack.Screen name="ppt-viewer" />
-          <Stack.Screen name="scheduled-tasks" />
-          <Stack.Screen name="schedule-task" />
-          <Stack.Screen name="qc-calculators/index" />
-          <Stack.Screen name="qc-calculators/[tool]" />
-        </Stack>
+        <NavThemeBridge>
+          <Stack
+            screenOptions={{
+              headerShown: false,
+              // PERF: Freeze inactive screens to prevent background re-renders
+              freezeOnBlur: true,
+              // Consistent, smooth push/pop transition across the whole app.
+              // Individual screens can still override (e.g. the editor screens
+              // below opt into `animation: "none"` for instant open).
+              animation: "slide_from_right",
+              animationDuration: 260,
+            }}
+          >
+            <Stack.Screen name="(tabs)" />
+            <Stack.Screen name="index" options={{ headerShown: false }} />
+            <Stack.Screen name="gozlin" />
+            <Stack.Screen name="manage-pages" />
+            <Stack.Screen name="file-details" />
+            <Stack.Screen name="browse-files" />
+            <Stack.Screen name="tool-processor" />
+            <Stack.Screen name="library" />
+            <Stack.Screen name="doclib-library" />
+            <Stack.Screen name="share" />
+            <Stack.Screen name="folders" />
+            <Stack.Screen name="pdf-viewer" />
+            <Stack.Screen name="docx-viewer" />
+            <Stack.Screen name="epub-viewer" />
+            <Stack.Screen name="image-viewer" />
+            {/* PERF: Use fast 'none' animation for editor screens — avoids
+                layout animation overhead so the screen appears instantly */}
+            <Stack.Screen name="create-file" />
+            <Stack.Screen
+              name="create-blank-pdf"
+              options={{ animation: "none" }}
+            />
+            <Stack.Screen
+              name="create-blank-docx"
+              options={{ animation: "none" }}
+            />
+            <Stack.Screen name="image-to-file-preview" />
+            <Stack.Screen name="gozlin-generated-preview" />
+            <Stack.Screen name="settings" />
+            <Stack.Screen name="privacy-policy" />
+            <Stack.Screen name="terms-of-service" />
+            <Stack.Screen name="profile" />
+            <Stack.Screen name="premium" />
+            <Stack.Screen name="recycle" />
+            <Stack.Screen name="chat-with-document" />
+            <Stack.Screen name="extract-images" />
+            <Stack.Screen name="batch-compress" />
+            <Stack.Screen name="find-replace" />
+            <Stack.Screen name="highlight-export" />
+            <Stack.Screen name="citation-extractor" />
+            <Stack.Screen name="ppt-studio" />
+            <Stack.Screen name="ppt-viewer" />
+            <Stack.Screen name="scheduled-tasks" />
+            <Stack.Screen name="schedule-task" />
+            <Stack.Screen name="qc-calculators/index" />
+            <Stack.Screen name="qc-calculators/[tool]" />
+            {/* Saved Pages (R1). Registered unconditionally so the route
+                always resolves; the screen itself checks SAVED_PAGES, and with
+                the flag off nothing links here. */}
+            <Stack.Screen name="saved-pages" />
+            <Stack.Screen name="saved-page" />
+          </Stack>
+        </NavThemeBridge>
         <FloatingAIButton />
         <ScheduledTasksWatcher />
         {!onboardingDone && (
@@ -241,6 +255,37 @@ export default function RootLayout() {
     </ThemeProvider>
     </NoirProvider>
   );
+}
+
+// ─── Navigation theme bridge ─────────────────────────────────────────────────
+// react-navigation keeps its OWN palette, entirely separate from this app's
+// ThemeProvider. Left unwired it falls back to DefaultTheme and paints
+// rgb(242,242,242) behind every navigator — in dark and noir too, where it is a
+// light-grey slab. Screens normally hide it by painting their own background,
+// which is exactly why it only became visible once the tab bar stopped being
+// opaque. Feeding it the resolved app colours makes the navigator background
+// correct in every theme, so anything transparent above it can stay that way.
+function NavThemeBridge({ children }: { children: React.ReactNode }) {
+  const { colors: t, mode } = useTheme();
+
+  const navTheme = useMemo(() => {
+    const base = mode === "dark" ? NavDarkTheme : NavDefaultTheme;
+    return {
+      ...base,
+      dark: mode === "dark",
+      colors: {
+        ...base.colors,
+        primary: t.primary,
+        background: t.background,
+        card: t.card,
+        text: t.text,
+        border: t.border,
+        notification: t.error,
+      },
+    };
+  }, [t, mode]);
+
+  return <NavThemeProvider value={navTheme}>{children}</NavThemeProvider>;
 }
 
 const styles = StyleSheet.create({

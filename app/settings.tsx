@@ -16,7 +16,6 @@ import {
   Lock,
   Palette,
   Settings,
-  User,
 } from "lucide-react-native";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
@@ -36,8 +35,13 @@ import { GradientView } from "@/components/GradientView";
 import { PINSetupModal } from "@/components/PINGate";
 import { SegmentedControl, SettingRow } from "@/components/SettingsUI";
 import { VoicePicker } from "@/components/VoicePicker";
+import { READING_SESSIONS } from "@/constants/featureFlags";
 import { clearRecentFiles } from "@/services/fileService";
 import { initNotifications } from "@/services/notificationService";
+import {
+  cancelReadingReminder,
+  maybeScheduleReadingReminder,
+} from "@/services/readingReminderService";
 import { removePIN, setupPIN, verifyPIN } from "@/services/pinLockService";
 import {
   ImportRetentionDays,
@@ -49,6 +53,7 @@ import {
   loadSettings,
   useSettings,
 } from "@/services/settingsService";
+import { useSubscription } from "@/context/SubscriptionContext";
 import { useTheme } from "@/services/ThemeProvider";
 import {
   getResolvedVoices,
@@ -168,6 +173,7 @@ export default function SettingsScreen() {
   const router = useRouter();
   const { colors } = useTheme();
   const { settings, updateSetting } = useSettings();
+  const { isPremium } = useSubscription();
 
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const toggle = (key: string) =>
@@ -311,10 +317,7 @@ export default function SettingsScreen() {
       key:
         | "notifyProcessingComplete"
         | "notifyDownloadsComplete"
-        | "notifyAIComplete"
-        | "notifyReadAloudPlaying"
-        | "notifyReadAloudStopped"
-        | "notifyReadAloudEndOfFile",
+        | "notifyAIComplete",
       value: boolean,
     ) => {
       if (value) {
@@ -424,49 +427,7 @@ export default function SettingsScreen() {
         contentContainerStyle={styles.listContent}
         showsVerticalScrollIndicator={false}
       >
-        {/* ── 1. Account ── */}
-        <Category
-          title="Account"
-          icon={<User size={iconSize} color={iconColor} />}
-          expanded={!!expanded.account}
-          onToggle={() => toggle("account")}
-        >
-          {/* Profile — visible but non-functional (no navigation, no action) */}
-          <SettingRow
-            title="Profile"
-            subtitle={
-              settings.auth.isSignedIn
-                ? `${settings.auth.name} · ${settings.auth.email}`
-                : "Sign in / Create account"
-            }
-            hideSeparator
-          />
-          <SettingRow
-            title="Premium"
-            value={settings.auth.plan === "premium" ? "Premium" : "Free"}
-            onPress={() => router.push("/premium" as any)}
-            hideSeparator
-          />
-        </Category>
-
-        {/* ── 2. Appearance ── */}
-        <Category
-          title="Appearance"
-          icon={<Palette size={iconSize} color={iconColor} />}
-          expanded={!!expanded.appearance}
-          onToggle={() => toggle("appearance")}
-        >
-          <View style={[rowStyles.themeRow, { backgroundColor: colors.rowBg }]}>
-            <Text style={[rowStyles.label, { color: colors.text }]}>Theme</Text>
-            <SegmentedControl
-              options={THEME_OPTIONS}
-              selected={settings.themeMode}
-              onChange={(v) => updateSetting("themeMode", v)}
-            />
-          </View>
-        </Category>
-
-        {/* ── 3. General ── */}
+        {/* ── 1. General ── */}
         <Category
           title="General"
           icon={<Settings size={iconSize} color={iconColor} />}
@@ -500,7 +461,24 @@ export default function SettingsScreen() {
           />
         </Category>
 
-        {/* ── 4. File & Storage ── */}
+        {/* ── 2. Theme ── */}
+        <Category
+          title="Theme"
+          icon={<Palette size={iconSize} color={iconColor} />}
+          expanded={!!expanded.theme}
+          onToggle={() => toggle("theme")}
+        >
+          <View style={[rowStyles.themeRow, { backgroundColor: colors.rowBg }]}>
+            <Text style={[rowStyles.label, { color: colors.text }]}>Theme</Text>
+            <SegmentedControl
+              options={THEME_OPTIONS}
+              selected={settings.themeMode}
+              onChange={(v) => updateSetting("themeMode", v)}
+            />
+          </View>
+        </Category>
+
+        {/* ── 3. File & Storage ── */}
         <Category
           title="File & Storage"
           icon={<Database size={iconSize} color={iconColor} />}
@@ -593,7 +571,7 @@ export default function SettingsScreen() {
           )}
         </Category>
 
-        {/* ── 5. Document Behavior ── */}
+        {/* ── 4. Document Behavior ── */}
         <Category
           title="Document Behavior"
           icon={<FileText size={iconSize} color={iconColor} />}
@@ -621,7 +599,7 @@ export default function SettingsScreen() {
           />
         </Category>
 
-        {/* ── 6. Accessibility & Reading ── */}
+        {/* ── 5. Accessibility & Reading ── */}
         <Category
           title="Accessibility & Reading"
           icon={<BookOpen size={iconSize} color={iconColor} />}
@@ -732,7 +710,7 @@ export default function SettingsScreen() {
           </View>
         </Category>
 
-        {/* ── 7. Notifications ── */}
+        {/* ── 6. Notifications ── */}
         <Category
           title="Notifications"
           icon={<Bell size={iconSize} color={iconColor} />}
@@ -764,36 +742,9 @@ export default function SettingsScreen() {
             onToggle={(v) => handleNotificationToggle("notifyAIComplete", v)}
             hideSeparator
           />
-          <SettingRow
-            title="Notify when Read Aloud starts playing"
-            toggle
-            toggleValue={settings.notifyReadAloudPlaying}
-            onToggle={(v) =>
-              handleNotificationToggle("notifyReadAloudPlaying", v)
-            }
-            hideSeparator
-          />
-          <SettingRow
-            title="Notify when Read Aloud is stopped"
-            toggle
-            toggleValue={settings.notifyReadAloudStopped}
-            onToggle={(v) =>
-              handleNotificationToggle("notifyReadAloudStopped", v)
-            }
-            hideSeparator
-          />
-          <SettingRow
-            title="Notify when Read Aloud reaches end of file"
-            toggle
-            toggleValue={settings.notifyReadAloudEndOfFile}
-            onToggle={(v) =>
-              handleNotificationToggle("notifyReadAloudEndOfFile", v)
-            }
-            hideSeparator
-          />
         </Category>
 
-        {/* ── 8. Security & Privacy ── */}
+        {/* ── 7. Security & Privacy ── */}
         <Category
           title="Security & Privacy"
           icon={<Lock size={iconSize} color={iconColor} />}
@@ -858,6 +809,34 @@ export default function SettingsScreen() {
             onToggle={(v) => updateSetting("hideRecentFiles", v)}
             hideSeparator
           />
+          {/* Reading sessions (R2) — a premium Gozlin feature, so the rows are
+              hidden from anyone who cannot use them. With the flag off
+              Settings looks exactly as it does today. */}
+          {READING_SESSIONS && isPremium && (
+            <>
+              <SettingRow
+                title="Hide continue reading in Gozlin WorkSpace"
+                toggle
+                toggleValue={settings.hideContinueReading}
+                onToggle={(v) => updateSetting("hideContinueReading", v)}
+                hideSeparator
+              />
+              <SettingRow
+                title="Reading reminders"
+                subtitle="Send one notification a day to pick up a book you started. Never for a book you finished, and never right after you have been reading."
+                toggle
+                toggleValue={settings.readingReminders}
+                onToggle={(v) => {
+                  void updateSetting("readingReminders", v);
+                  // Turning it off must take effect immediately, not at the
+                  // next app start — a pending reminder would still fire.
+                  if (!v) void cancelReadingReminder();
+                  else void maybeScheduleReadingReminder();
+                }}
+                hideSeparator
+              />
+            </>
+          )}
           <SettingRow
             title="Clear recent history"
             subtitle="Clears recently opened list, not your files"
@@ -867,7 +846,7 @@ export default function SettingsScreen() {
           />
         </Category>
 
-        {/* ── 9. About & Support ── */}
+        {/* ── 8. About & Support ── */}
         <Category
           title="About & Support"
           icon={<Info size={iconSize} color={iconColor} />}

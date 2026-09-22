@@ -2,6 +2,7 @@
 // AI Chat Bubble – renders a single message with markdown support
 // ============================================
 
+import { AI_CITATIONS_V2, AI_MARKDOWN } from "@/constants/featureFlags";
 import { spacing } from "@/constants/theme";
 import { useTheme } from "@/services/ThemeProvider";
 import { copyToClipboard } from "@/services/ai/ai.service";
@@ -11,15 +12,43 @@ import type {
   ChallengerRole,
   HighlightItem,
 } from "@/services/ai/ai.types";
-import { Check, Copy } from "lucide-react-native";
+import { stripCitationMarkers, type AICitation } from "@/services/ai/citations";
+import { stripMarkdown } from "@/utils/sanitizeAiText";
+import { Check, Copy, RotateCcw } from "lucide-react-native";
 import React, { useCallback, useState } from "react";
-import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { ActivityIndicator, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { CitationSources } from "./CitationSources";
+import { MarkdownText } from "./MarkdownText";
 import { StructuredMessageRenderer } from "./renderers/StructuredMessageRenderer";
+
+/**
+ * Whether a message should render with MarkdownText: it kept its Markdown
+ * (AI_MARKDOWN) or carries tappable citations (AI_CITATIONS_V2). Messages from
+ * before the upgrade have neither and render with the original renderer.
+ */
+export function shouldRenderRich(message: AIChatMessage): boolean {
+  return (
+    (AI_MARKDOWN && message.format === "markdown") ||
+    (AI_CITATIONS_V2 && Array.isArray(message.citations) && message.citations.length > 0)
+  );
+}
+
+/** Clean text for the clipboard: never raw Markdown or [n] markers. */
+export function clipboardTextFor(message: AIChatMessage): string {
+  if (message.format === "markdown" || (message.citations && message.citations.length > 0)) {
+    return stripMarkdown(stripCitationMarkers(message.content));
+  }
+  return message.content;
+}
 
 interface Props {
   message: AIChatMessage;
   action?: AIAction;
   documentName?: string;
+  /** Tap on a citation chip or a Sources row (AI_CITATIONS_V2). */
+  onCitationPress?: (citation: AICitation, message: AIChatMessage) => void;
+  /** Retry an answer whose stream was interrupted. */
+  onRetry?: (message: AIChatMessage) => void;
   onAddAllToTodos?: (tasks: any[]) => void;
   onSourceTap?: (quote: string) => void;
   onAskMore?: (prompt: string) => void;
@@ -207,10 +236,63 @@ function MarkdownContent({
   );
 }
 
+/** Small status line for streaming / stopped / interrupted answers and notices. */
+function MessageFooterNotes({
+  message,
+  color,
+  onRetry,
+}: {
+  message: AIChatMessage;
+  color: string;
+  onRetry?: (message: AIChatMessage) => void;
+}) {
+  const notes: React.ReactNode[] = [];
+  if (message.notice) {
+    notes.push(
+      <Text key="notice" allowFontScaling style={[styles.notice, { color }]}>
+        {message.notice}
+      </Text>,
+    );
+  }
+  if (message.streamState === "stopped") {
+    notes.push(
+      <Text key="stopped" allowFontScaling style={[styles.notice, { color }]}>
+        Stopped
+      </Text>,
+    );
+  }
+  if (message.streamState === "interrupted") {
+    notes.push(
+      <View key="interrupted" style={styles.interruptedRow}>
+        <Text allowFontScaling style={[styles.notice, { color }]}>
+          Answer interrupted
+        </Text>
+        {onRetry ? (
+          <TouchableOpacity
+            onPress={() => onRetry(message)}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            style={styles.retryBtn}
+            accessibilityRole="button"
+            accessibilityLabel="Retry answer"
+          >
+            <RotateCcw size={12} color="#9333EA" />
+            <Text allowFontScaling style={styles.retryText}>
+              Retry
+            </Text>
+          </TouchableOpacity>
+        ) : null}
+      </View>,
+    );
+  }
+  return notes.length ? <View style={styles.notes}>{notes}</View> : null;
+}
+
 export const AIChatBubble = React.memo(function AIChatBubble({
   message,
   action,
   documentName,
+  onCitationPress,
+  onRetry,
   onAddAllToTodos,
   onSourceTap,
   onAskMore,
@@ -231,12 +313,19 @@ export const AIChatBubble = React.memo(function AIChatBubble({
   const [copied, setCopied] = useState(false);
 
   const handleCopy = useCallback(async () => {
-    const ok = await copyToClipboard(message.content);
+    const ok = await copyToClipboard(clipboardTextFor(message));
     if (ok) {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     }
-  }, [message.content]);
+  }, [message]);
+
+  const handleCitation = useCallback(
+    (citation: AICitation) => onCitationPress?.(citation, message),
+    [onCitationPress, message],
+  );
+  const showSources =
+    AI_CITATIONS_V2 && !isUser && Array.isArray(message.citations) && message.citations.length > 0;
 
   const textColor = isUser ? "#FFFFFF" : t.text;
 
@@ -269,6 +358,7 @@ export const AIChatBubble = React.memo(function AIChatBubble({
             onConvertHighlightsToFlashcards={onConvertHighlightsToFlashcards}
             onExportHighlights={onExportHighlights}
           />
+          <MessageFooterNotes message={message} color={t.textTertiary} onRetry={onRetry} />
           <View style={styles.meta}>
             <Text style={[styles.time, { color: t.textTertiary }]}>
               {new Date(message.timestamp).toLocaleTimeString([], {
@@ -308,11 +398,44 @@ export const AIChatBubble = React.memo(function AIChatBubble({
               },
         ]}
       >
-        <MarkdownContent
-          text={message.content}
-          textColor={textColor}
-          isUser={isUser}
-        />
+        {!isUser && message.streamState === "streaming" && !message.content ? (
+          <View
+            style={styles.typingRow}
+            accessible
+            accessibilityLabel="Gozlin is writing an answer"
+          >
+            <ActivityIndicator size="small" color="#9333EA" />
+            <Text allowFontScaling style={[styles.notice, { color: t.textTertiary }]}>
+              Gozlin is writing…
+            </Text>
+          </View>
+        ) : !isUser && shouldRenderRich(message) ? (
+          <MarkdownText
+            text={message.content}
+            color={textColor}
+            accentColor="#9333EA"
+            citations={message.citations}
+            onCitationPress={onCitationPress ? handleCitation : undefined}
+          />
+        ) : (
+          <MarkdownContent
+            text={message.content}
+            textColor={textColor}
+            isUser={isUser}
+          />
+        )}
+
+        {showSources ? (
+          <CitationSources
+            citations={message.citations!}
+            onPress={onCitationPress ? handleCitation : undefined}
+            accentColor="#9333EA"
+          />
+        ) : null}
+
+        {!isUser ? (
+          <MessageFooterNotes message={message} color={t.textTertiary} onRetry={onRetry} />
+        ) : null}
 
         {/* Timestamp + copy for assistant messages */}
         <View style={styles.meta}>
@@ -438,5 +561,34 @@ const styles = StyleSheet.create({
   structuredWrap: {
     width: "100%",
     maxWidth: "100%",
+  },
+  notes: {
+    marginTop: 6,
+    gap: 2,
+  },
+  notice: {
+    fontSize: 12,
+    fontStyle: "italic",
+  },
+  interruptedRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  retryBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 3,
+  },
+  retryText: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: "#9333EA",
+  },
+  typingRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    paddingVertical: 2,
   },
 });

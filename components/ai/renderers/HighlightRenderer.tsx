@@ -8,11 +8,13 @@
 // - Timeline view for date-like highlights
 // ============================================
 
+import { AI_CITATIONS_V2 } from "@/constants/featureFlags";
 import { useTheme } from "@/services/ThemeProvider";
 import {
   copyToClipboard,
   summarizeHighlights,
 } from "@/services/ai/ai.service";
+import { locatorLabel, locatorTypeForDocument } from "@/services/ai/citations";
 import type {
   HighlightData,
   HighlightItem,
@@ -542,7 +544,7 @@ export function HighlightRenderer({
             {items.map((h, idx) => (
               <HighlightCard
                 key={`${cat}-${idx}`}
-                highlight={h}
+                highlight={h} documentName={documentName}
                 onJumpToSource={onJumpToSource}
                 onConvertToTask={onConvertToTask}
                 onAddToNotes={onAddToNotes}
@@ -567,7 +569,7 @@ export function HighlightRenderer({
                 </View>
                 <View style={{ flex: 1 }}>
                   <HighlightCard
-                    highlight={h}
+                    highlight={h} documentName={documentName}
                     onJumpToSource={onJumpToSource}
                     onConvertToTask={onConvertToTask}
                     onAddToNotes={onAddToNotes}
@@ -582,7 +584,7 @@ export function HighlightRenderer({
         filtered.map((h, idx) => (
           <HighlightCard
             key={idx}
-            highlight={h}
+            highlight={h} documentName={documentName}
             onJumpToSource={onJumpToSource}
             onConvertToTask={onConvertToTask}
             onAddToNotes={onAddToNotes}
@@ -641,6 +643,8 @@ export function HighlightRenderer({
 
 interface CardProps {
   highlight: HighlightItem;
+  /** Used to label locations by the document's unit (W8.2). */
+  documentName?: string;
   onJumpToSource?: (h: HighlightItem) => void;
   onConvertToTask?: (h: HighlightItem) => void;
   onAddToNotes?: (h: HighlightItem) => void;
@@ -649,6 +653,7 @@ interface CardProps {
 
 function HighlightCard({
   highlight,
+  documentName,
   onJumpToSource,
   onConvertToTask,
   onAddToNotes,
@@ -696,7 +701,12 @@ function HighlightCard({
   const ref = highlight.sourceReference;
   const refLabel = ref
     ? [
-        typeof ref.page === "number" ? `p. ${ref.page}` : null,
+        typeof ref.page === "number"
+          ? AI_CITATIONS_V2 && documentName
+            ? // W8.2: "Slide 7" for a deck, "Chapter 3" for a book, …
+              locatorLabel(locatorTypeForDocument({ name: documentName }), ref.page)
+            : `p. ${ref.page}`
+          : null,
         ref.section ? ref.section : null,
       ]
         .filter(Boolean)

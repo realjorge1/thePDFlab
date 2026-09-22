@@ -31,10 +31,12 @@ import React, {
 import { ActivityIndicator, Alert, StyleSheet, Text, View } from "react-native";
 
 import { colors as brandColors } from "@/constants/theme";
+import type { WordBoundaryPosition } from "@/hooks/useReadAloud";
 import { useReadAloud } from "@/hooks/useReadAloud";
 import type { TextChunk } from "@/utils/chunkText";
 import { chunkPages, chunkSingleDocument } from "@/utils/chunkText";
 
+import { PronunciationEditor } from "./PronunciationEditor";
 import { ReadAloudBar } from "./ReadAloudBar";
 import { VoicePicker } from "./VoicePicker";
 
@@ -65,6 +67,16 @@ interface ReadAloudControllerProps {
   onPageChange?: (pageIndex: number) => void;
   /** Called on every chunk change with the chunk and total chunk count (for proportional auto-scroll) */
   onChunkChange?: (chunk: TextChunk, totalChunks: number) => void;
+  /**
+   * Called as each word is spoken, with the text of the chunk it belongs to.
+   *
+   * Only fires on engines that report word boundaries; a viewer that wires
+   * this keeps whatever chunk-level feedback it already had as the fallback.
+   */
+  onWordBoundary?: (
+    position: WordBoundaryPosition,
+    chunkText: string,
+  ) => void;
   /** Whether the Read Aloud bar is open (controlled by parent via 3-dots menu). */
   active: boolean;
   /** Request the parent to close the Read Aloud UI. */
@@ -87,6 +99,7 @@ export const ReadAloudController: React.FC<ReadAloudControllerProps> = ({
   colorScheme = "dark",
   onPageChange,
   onChunkChange,
+  onWordBoundary,
   active,
   onRequestClose,
   documentId,
@@ -94,6 +107,7 @@ export const ReadAloudController: React.FC<ReadAloudControllerProps> = ({
   documentName,
 }) => {
   const [showVoicePicker, setShowVoicePicker] = useState(false);
+  const [showPronunciation, setShowPronunciation] = useState(false);
   const [extracting, setExtracting] = useState(false);
   const hasAutoStarted = useRef(false);
   const extractionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -129,6 +143,14 @@ export const ReadAloudController: React.FC<ReadAloudControllerProps> = ({
     documentId,
     persistState,
     documentName,
+    onWordBoundary: useCallback(
+      (position: WordBoundaryPosition) => {
+        // Resolve the chunk here so viewers never have to hold the chunk list.
+        const chunk = chunks[position.chunkIndex];
+        if (chunk) onWordBoundary?.(position, chunk.text);
+      },
+      [onWordBoundary, chunks],
+    ),
     onChunkChange: useCallback(
       (chunk: TextChunk) => {
         onPageChange?.(chunk.pageIndex);
@@ -221,6 +243,14 @@ export const ReadAloudController: React.FC<ReadAloudControllerProps> = ({
     onRequestClose();
   }, [readAloud, onRequestClose]);
 
+  // ── Open the pronunciation sheet ─────────────────────────────
+  // Pause first: the sheet's Test button speaks, and two utterances competing
+  // for the engine would leave playback stalled mid-chunk.
+  const handlePronunciationPress = useCallback(() => {
+    if (readAloud.status === "speaking") readAloud.pause();
+    setShowPronunciation(true);
+  }, [readAloud]);
+
   // ── Render ───────────────────────────────────────────────────
   if (!active) return null;
 
@@ -246,12 +276,22 @@ export const ReadAloudController: React.FC<ReadAloudControllerProps> = ({
         colorScheme={colorScheme}
         accentColor={accentColor}
         onVoicePress={() => setShowVoicePicker(true)}
+        onPronunciationPress={handlePronunciationPress}
       />
 
       {/* VoicePicker */}
       <VoicePicker
         visible={showVoicePicker}
         onClose={() => setShowVoicePicker(false)}
+        colorScheme={colorScheme}
+      />
+
+      {/* Pronunciation rules */}
+      <PronunciationEditor
+        visible={showPronunciation}
+        onClose={() => setShowPronunciation(false)}
+        documentId={documentId}
+        documentName={documentName}
         colorScheme={colorScheme}
       />
     </>

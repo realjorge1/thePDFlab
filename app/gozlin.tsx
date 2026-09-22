@@ -91,6 +91,7 @@ import React, {
   useState,
 } from "react";
 import {
+  AccessibilityInfo,
   ActivityIndicator,
   Alert,
   BackHandler,
@@ -115,6 +116,20 @@ import { SuggestionStrip } from "@/components/ai/SuggestionStrip";
 import { PressableScale } from "@/components/ui/PressableScale";
 import { useTypingGlow } from "@/hooks/useTypingGlow";
 import { isCancelError, runCancelable } from "@/services/activity/activityStore";
+import { MarkdownText } from "@/components/ai/MarkdownText";
+import {
+  AI_DOCID_TASKS,
+  AI_MARKDOWN,
+  AI_STREAMING,
+} from "@/constants/featureFlags";
+import { getDocumentId, messageExtrasFromResponse } from "@/services/ai/ai.service";
+import { generateId } from "@/services/ai/ai.types";
+import { isPresentableAIError, presentAIError } from "@/services/ai/aiErrorPresenter";
+import { canUse } from "@/services/ai/capabilities";
+import { navigateToCitation } from "@/services/ai/citationNavigator";
+import type { AICitation } from "@/services/ai/citations";
+import { answerChat } from "@/services/ai/streamingChat";
+import { stripMarkdown } from "@/utils/sanitizeAiText";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 const ACCENT = "#9333EA";
@@ -304,7 +319,7 @@ export default function AIScreen() {
   const [translateDocText, setTranslateDocText] = useState<string | undefined>();
   const [translateDocPageCount, setTranslateDocPageCount] = useState(0);
   const [translatePageInput, setTranslatePageInput] = useState("all");
-  const [translateMessages, setTranslateMessages] = useState<Array<{ id: string; type: "request" | "response" | "error"; label: string; content: string; timestamp: number }>>([]);
+  const [translateMessages, setTranslateMessages] = useState<Array<{ id: string; type: "request" | "response" | "error"; label: string; content: string; timestamp: number; format?: "markdown"; notice?: string }>>([]);
   const [translateFreeText, setTranslateFreeText] = useState("");
   const [isTranslating, setIsTranslating] = useState(false);
   const [translateOutputMode, setTranslateOutputMode] = useState<"text" | "document">("text");
@@ -618,6 +633,9 @@ export default function AIScreen() {
           ? "All pages"
           : `Pages ${translatePageInput.trim()}`;
       const textToTranslate = extractTextForPages(text, pageNums, translateDocPageCount || 1);
+      // All pages → the service may translate the whole stored document by
+      // docId (AI_DOCID_TASKS); a page subset always sends its text.
+      const wholeDocRef = pageLabel === "All pages" ? translateDoc : undefined;
 
       // ── Document output mode ──────────────────────────────────────────────
       if (translateOutputMode === "document") {
@@ -626,7 +644,9 @@ export default function AIScreen() {
         try {
           const response = await runCancelable(
             (signal) =>
-              translate(textToTranslate, targetLang, translateDoc.name, signal),
+              translate(textToTranslate, targetLang, translateDoc.name, signal, {
+                docRef: wholeDocRef,
+              }),
             { kind: "ai", label: "Translating" },
           );
           setTranslateProgress("Creating document…");
@@ -666,12 +686,15 @@ export default function AIScreen() {
         const beforeY = translateContentHeightRef.current;
         const response = await runCancelable(
             (signal) =>
-              translate(textToTranslate, targetLang, translateDoc.name, signal),
+              translate(textToTranslate, targetLang, translateDoc.name, signal, {
+                docRef: wholeDocRef,
+                preserveMarkdown: true,
+              }),
             { kind: "ai", label: "Translating" },
           );
         setTranslateMessages((prev) => [
           ...prev,
-          { id: `${msgId}_r`, type: "response", label: currentLangLabel, content: response.content, timestamp: Date.now() },
+          { id: `${msgId}_r`, type: "response", label: currentLangLabel, content: response.content, timestamp: Date.now(), format: response.format === "markdown" ? "markdown" : undefined, notice: response.notice },
         ]);
         // Anchor the start of the new response at the top of the viewport
         translatePendingTopRef.current = beforeY;
@@ -736,12 +759,12 @@ export default function AIScreen() {
       try {
         const beforeY = translateContentHeightRef.current;
         const response = await runCancelable(
-            (signal) => translate(text, targetLang, "text", signal),
+            (signal) => translate(text, targetLang, "text", signal, { preserveMarkdown: true }),
             { kind: "ai", label: "Translating" },
           );
         setTranslateMessages((prev) => [
           ...prev,
-          { id: `${msgId}_r`, type: "response", label: currentLangLabel, content: response.content, timestamp: Date.now() },
+          { id: `${msgId}_r`, type: "response", label: currentLangLabel, content: response.content, timestamp: Date.now(), format: response.format === "markdown" ? "markdown" : undefined, notice: response.notice },
         ]);
         // Anchor the start of the new response at the top of the viewport
         translatePendingTopRef.current = beforeY;
@@ -1035,6 +1058,28 @@ export default function AIScreen() {
     return hasText;
   }, [isLoading, inputText, attachedDoc, activeAction]);
 
+  // ── Streaming message helpers ─────────────────────────────────────────────
+  const updateSessionMessage = useCallback((id: string, patch: Partial<AIChatMessage>) => {
+    setSession((prev) => ({
+      ...prev,
+      messages: prev.messages.map((m) => (m.id === id ? { ...m, ...patch } : m)),
+    }));
+  }, []);
+
+  /** Final update of a streamed message; saved explicitly because the
+   *  length-keyed autosave already ran when the placeholder was added. */
+  const finalizeSessionMessage = useCallback((id: string, patch: Partial<AIChatMessage>) => {
+    setSession((prev) => {
+      const next = {
+        ...prev,
+        messages: prev.messages.map((m) => (m.id === id ? { ...m, ...patch } : m)),
+        updatedAt: Date.now(),
+      };
+      saveSession(next);
+      return next;
+    });
+  }, []);
+
   // ── Main send handler ─────────────────────────────────────────────────────
   const handleSend = useCallback(async (override?: string) => {
     const text = (override ?? inputText).trim();
@@ -1070,13 +1115,49 @@ export default function AIScreen() {
     const displayText = hasText ? text : `📎 Process "${attachedDoc!.name}"`;
     const userMsg = createMessage("user", displayText);
     const userMsgId = userMsg.id;
+
+    // Contract v2 chat (flag + capability gated): streamed answers, and
+    // questions about an uploaded document through document search with
+    // citations. When neither is usable the original sendChat call runs.
+    const isChatMode = activeAction === "chat" || activeAction === "chat-with-document";
+    const docSearchUsable =
+      !!attachedDoc && !!getDocumentId(attachedDoc) && canUse(AI_DOCID_TASKS, "docIdTasks");
+    const useV2Chat = isChatMode && (canUse(AI_STREAMING, "streamChat") || docSearchUsable);
+    const streamPlaceholder =
+      useV2Chat &&
+      (docSearchUsable
+        ? canUse(AI_STREAMING, "streamChatDocument")
+        : canUse(AI_STREAMING, "streamChat"));
+    const assistantId = generateId();
+    const progress = { text: "", cancelled: false };
+
     setSession((prev) => ({
       ...prev,
-      messages: [...prev.messages, userMsg],
+      messages: streamPlaceholder
+        ? [
+            ...prev.messages,
+            userMsg,
+            { id: assistantId, role: "assistant", content: "", timestamp: Date.now(), streamState: "streaming" },
+          ]
+        : [...prev.messages, userMsg],
       updatedAt: Date.now(),
     }));
     setInputText("");
     setIsLoading(true);
+
+    // Whole-document tasks (AI_DOCID_TASKS): with backend support the service
+    // sends the attached document's docId and the typed text as `instruction`;
+    // otherwise it sends effectiveText exactly as before.
+    const taskOptions = {
+      docRef: attachedDoc,
+      instruction: hasText ? text : undefined,
+      preserveMarkdown: true,
+    };
+    const streamText = (t: string) => {
+      if (progress.cancelled) return;
+      progress.text = t;
+      updateSessionMessage(assistantId, { content: t });
+    };
 
     try {
       // Run the AI call through the global spring overlay so the user can pull
@@ -1102,16 +1183,27 @@ export default function AIScreen() {
 
           switch (activeAction) {
             case "chat":
-              response = await sendChat(
-                text,
-                session.messages,
-                docText,
-                attachedDoc?.name,
-                signal,
-              );
+              response = useV2Chat
+                ? await answerChat({
+                    message: text,
+                    history: session.messages,
+                    documentText: docText,
+                    docRef: attachedDoc,
+                    signal,
+                    preserveMarkdown: true,
+                    onText: streamText,
+                  })
+                : await sendChat(
+                    text,
+                    session.messages,
+                    docText,
+                    attachedDoc?.name,
+                    signal,
+                    { preserveMarkdown: true },
+                  );
               break;
             case "summarize":
-              response = await summarize(effectiveText, attachedDoc?.name, signal);
+              response = await summarize(effectiveText, attachedDoc?.name, signal, taskOptions);
               break;
             case "translate":
               response = await translate(
@@ -1119,6 +1211,7 @@ export default function AIScreen() {
                 targetLang,
                 attachedDoc?.name,
                 signal,
+                taskOptions,
               );
               break;
             case "devils-advocate":
@@ -1130,6 +1223,7 @@ export default function AIScreen() {
                 contextDocText,
                 contextDoc?.name,
                 signal,
+                { ...taskOptions, contextDocRef: contextDoc },
               );
               break;
             case "narrative-arc":
@@ -1140,19 +1234,20 @@ export default function AIScreen() {
                 contextDocText,
                 contextDoc?.name,
                 signal,
+                { ...taskOptions, contextDocRef: contextDoc },
               );
               break;
             case "analyze":
-              response = await analyze(effectiveText, undefined, attachedDoc?.name, signal);
+              response = await analyze(effectiveText, undefined, attachedDoc?.name, signal, taskOptions);
               break;
             case "tasks":
-              response = await extractTasks(effectiveText, attachedDoc?.name, signal);
+              response = await extractTasks(effectiveText, attachedDoc?.name, signal, taskOptions);
               break;
             case "highlight":
-              response = await highlightKeyPoints(effectiveText, attachedDoc?.name, signal);
+              response = await highlightKeyPoints(effectiveText, attachedDoc?.name, signal, taskOptions);
               break;
             case "explain":
-              response = await explainText(effectiveText, undefined, undefined, signal);
+              response = await explainText(effectiveText, undefined, undefined, signal, taskOptions);
               break;
             case "quiz":
               // Quiz is handled entirely by QuizPanel; the input row is hidden
@@ -1160,13 +1255,24 @@ export default function AIScreen() {
               response = { content: "" };
               break;
             case "chat-with-document":
-              response = await sendChat(
-                text,
-                session.messages,
-                docText,
-                attachedDoc?.name,
-                signal,
-              );
+              response = useV2Chat
+                ? await answerChat({
+                    message: text,
+                    history: session.messages,
+                    documentText: docText,
+                    docRef: attachedDoc,
+                    signal,
+                    preserveMarkdown: true,
+                    onText: streamText,
+                  })
+                : await sendChat(
+                    text,
+                    session.messages,
+                    docText,
+                    attachedDoc?.name,
+                    signal,
+                    { preserveMarkdown: true },
+                  );
               break;
             default:
               response = await sendChat(
@@ -1186,20 +1292,45 @@ export default function AIScreen() {
         "assistant",
         response.content,
         response.structuredData,
+        { ...messageExtrasFromResponse(response), streamState: response.streamState },
       );
-      setSession((prev) => ({
-        ...prev,
-        messages: [...prev.messages, assistantMsg],
-        updatedAt: Date.now(),
-      }));
-    } catch (e) {
-      // User pulled down to cancel — restore to the pre-send state.
-      if (isCancelError(e)) {
+      if (streamPlaceholder) {
+        finalizeSessionMessage(assistantId, { ...assistantMsg, id: assistantId });
+      } else {
         setSession((prev) => ({
           ...prev,
-          messages: prev.messages.filter((m) => m.id !== userMsgId),
+          messages: [...prev.messages, assistantMsg],
+          updatedAt: Date.now(),
+        }));
+      }
+      if (response.streamed && !response.streamState) {
+        AccessibilityInfo.announceForAccessibility("Answer ready");
+      }
+    } catch (e) {
+      // User pulled down to cancel — restore to the pre-send state, or keep
+      // an already-streamed partial answer marked "Stopped".
+      if (isCancelError(e)) {
+        progress.cancelled = true;
+        if (streamPlaceholder && progress.text) {
+          finalizeSessionMessage(assistantId, { streamState: "stopped" });
+          return;
+        }
+        setSession((prev) => ({
+          ...prev,
+          messages: prev.messages.filter((m) => m.id !== userMsgId && m.id !== assistantId),
         }));
         if (hasText) setInputText(text);
+        return;
+      }
+      // Paywall, rate limit, "update the app" and connectivity errors use the
+      // shared presenter (with Retry); the message is restored for re-sending.
+      if (isPresentableAIError(e)) {
+        setSession((prev) => ({
+          ...prev,
+          messages: prev.messages.filter((m) => m.id !== userMsgId && m.id !== assistantId),
+        }));
+        if (hasText) setInputText(text);
+        presentAIError(e, { onRetry: () => void handleSendRef.current(text) });
         return;
       }
       const errorMsg = createMessage(
@@ -1208,7 +1339,7 @@ export default function AIScreen() {
       );
       setSession((prev) => ({
         ...prev,
-        messages: [...prev.messages, errorMsg],
+        messages: [...prev.messages.filter((m) => m.id !== assistantId), errorMsg],
       }));
     } finally {
       setIsLoading(false);
@@ -1224,7 +1355,35 @@ export default function AIScreen() {
     challengerRole,
     contextDoc,
     contextDocText,
+    updateSessionMessage,
+    finalizeSessionMessage,
   ]);
+  const handleSendRef = useRef(handleSend);
+  handleSendRef.current = handleSend;
+
+  // ── Citations & interrupted answers ───────────────────────────────────────
+  const sessionMessagesRef = useRef(session.messages);
+  sessionMessagesRef.current = session.messages;
+
+  const handleCitationPress = useCallback(
+    (citation: AICitation) => {
+      void navigateToCitation(citation, { source: "screen", document: attachedDoc ?? null });
+    },
+    [attachedDoc],
+  );
+
+  const handleRetryMessage = useCallback((message: AIChatMessage) => {
+    const list = sessionMessagesRef.current;
+    const idx = list.findIndex((m) => m.id === message.id);
+    const prevUser = idx > 0 ? list[idx - 1] : undefined;
+    if (!prevUser || prevUser.role !== "user") return;
+    setSession((prev) => ({
+      ...prev,
+      messages: prev.messages.filter((m) => m.id !== message.id && m.id !== prevUser.id),
+    }));
+    const retryText = prevUser.content.startsWith("📎 Process") ? "" : prevUser.content;
+    setTimeout(() => void handleSendRef.current(retryText), 0);
+  }, []);
 
   // ── New session ───────────────────────────────────────────────────────────
   const handleNewSession = useCallback(() => {
@@ -1651,6 +1810,8 @@ export default function AIScreen() {
         message={item}
         action={session.action}
         documentName={attachedDoc?.name}
+        onCitationPress={handleCitationPress}
+        onRetry={handleRetryMessage}
         onAddAllToTodos={handleAddAllToTodos}
         onSourceTap={handleSourceTap}
         onAskMore={handleAskMore}
@@ -1670,6 +1831,8 @@ export default function AIScreen() {
     [
       session.action,
       attachedDoc?.name,
+      handleCitationPress,
+      handleRetryMessage,
       handleAddAllToTodos,
       handleSourceTap,
       handleAskMore,
@@ -2062,11 +2225,20 @@ export default function AIScreen() {
                         <View style={[styles.translateResponseBubble, { backgroundColor: mode === "dark" ? "#1E293B" : "#F8F4FF", borderColor: mode === "dark" ? "#334155" : "#E9D5FF" }]}>
                           <View style={styles.translateResponseHeader}>
                             <Text style={[styles.translateResponseLang, { color: ACCENT }]}>{msg.label}</Text>
-                            <TouchableOpacity onPress={() => handleCopyTranslateMessage(msg.content)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                            <TouchableOpacity onPress={() => handleCopyTranslateMessage(msg.format === "markdown" ? stripMarkdown(msg.content) : msg.content)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
                               <Copy size={13} color={t.textTertiary} />
                             </TouchableOpacity>
                           </View>
-                          <Text style={[styles.translateResponseText, { color: t.text }]}>{msg.content}</Text>
+                          {AI_MARKDOWN && msg.format === "markdown" ? (
+                            <MarkdownText text={msg.content} color={t.text} accentColor={ACCENT} />
+                          ) : (
+                            <Text style={[styles.translateResponseText, { color: t.text }]}>{msg.content}</Text>
+                          )}
+                          {msg.notice ? (
+                            <Text allowFontScaling style={{ color: t.textTertiary, fontSize: 12, fontStyle: "italic", marginTop: 6 }}>
+                              {msg.notice}
+                            </Text>
+                          ) : null}
                         </View>
                       </View>
                     )

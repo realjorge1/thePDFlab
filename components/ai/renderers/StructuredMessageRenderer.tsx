@@ -77,6 +77,8 @@ export function StructuredMessageRenderer({
         originalText={sd?.originalText}
         initialMode={sd?.mode}
         initialDepth={sd?.depth}
+        format={message.format}
+        docId={typeof sd?.docId === "string" ? sd.docId : undefined}
         onAddToNotes={onAddToNotes}
         onExport={onExport}
       />
@@ -187,6 +189,8 @@ export function StructuredMessageRenderer({
         originalText={sd?.originalText}
         initialMode={sd?.mode}
         initialDepth={sd?.depth}
+        format={message.format}
+        docId={typeof sd?.docId === "string" ? sd.docId : undefined}
         onAddToNotes={onAddToNotes}
         onExport={onExport}
       />

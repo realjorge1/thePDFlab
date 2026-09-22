@@ -17,7 +17,7 @@ import * as Sharing from "expo-sharing";
 // SECONDARY (additive): records that a document was opened so the Gozlin
 // workspace can surface related material. Fire-and-forget; never throws.
 import { recordDocumentOpen } from "@/services/contextAwarenessService";
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -43,10 +43,34 @@ import {
 } from "@/components/DocumentViewer/PdfTextLayerView";
 import { PDFTextExtractor } from "@/components/DocumentViewer/PDFTextExtractor";
 import { SelectionToolbar } from "@/components/DocumentViewer/SelectionToolbar";
+import { BookmarkToast } from "@/components/DocumentViewer/BookmarkToast";
 import { ThreeDotsMenu } from "@/components/DocumentViewer/ThreeDotsMenu";
 import { ReaderControls } from "@/components/DocumentViewer/ReaderControls";
 import { ViewModeToggle } from "@/components/DocumentViewer/ViewModeToggle";
 import { AnalyzeSheet } from "@/components/ai/AnalyzeSheet";
+import {
+  READ_ALOUD_PANEL_CLEARANCE,
+  ReaderAIPanel,
+  type ReaderAIPanelHandle,
+} from "@/components/ai/ReaderAIPanel";
+import { SOURCE_CARD_OVERLAY_STYLE, SourceCard } from "@/components/ai/SourceCard";
+import {
+  AI_READER_PANEL,
+  READING_SESSIONS,
+  SAVED_PAGES,
+  SAVED_PAGES_THUMBNAILS,
+} from "@/constants/featureFlags";
+import { parseLocatorParams } from "@/services/ai/citationNavigator";
+import { useReadingSession } from "@/hooks/useReadingSession";
+import { useSavePage } from "@/hooks/useSavePage";
+import { SNAPSHOT_MAX } from "@/services/savedPagesTypes";
+import {
+  IMAGE_MAX_EDGE,
+  IMAGE_QUALITY,
+  writeSavedPageImage,
+} from "@/services/savedPageImageStore";
+import { updateThumbPath } from "@/services/savedPagesService";
+import { locatorLabel, type AICitation } from "@/services/ai/citations";
 import { useReaderSettings } from "@/hooks/useReaderSettings";
 import { PageJumpModal } from "@/components/pdf/PageJumpModal";
 import { ThumbnailGrid } from "@/components/pdf/ThumbnailGrid";
@@ -55,6 +79,8 @@ import {
   PdfRecoveryScreen,
 } from "@/components/PdfRecoveryScreen";
 import { ReadAloudController } from "@/components/ReadAloudController";
+import type { WordBoundaryPosition } from "@/hooks/useReadAloud";
+import type { TextChunk } from "@/utils/chunkText";
 import type { Highlight, Strikethrough, Underline, ViewMode } from "@/src/types/document-viewer.types";
 import {
   getHighlights,
@@ -267,7 +293,14 @@ export default function PdfViewerScreen() {
   // layer of URI-encoding from SAF tree-document URIs and produces EISDIR
   // when the resulting URI is opened. The wrap+native-decode round-trip
   // restores the original URI here without any extra work.
-  const { uri, name } = useLocalSearchParams<{ uri: string; name: string }>();
+  const { uri, name, locatorType, locatorIndex, quote } = useLocalSearchParams<{
+    uri: string;
+    name: string;
+    /** Optional citation target (a tapped source in Chat with File). */
+    locatorType?: string;
+    locatorIndex?: string;
+    quote?: string;
+  }>();
 
   // SECONDARY (additive): note this document open for context-awareness. Uses
   // the same canonical key as reading-progress so it aligns with the library.
@@ -352,6 +385,13 @@ export default function PdfViewerScreen() {
   const restoredPageRef = useRef(false);
   /** Whether background text pre-extraction has been kicked off for this open. */
   const prewarmStartedRef = useRef(false);
+  /**
+   * R2's activity signal. Held in a ref because the callbacks that fire it
+   * (page changes, touches) are defined above useReadingSession, and because
+   * it must never re-bind them — a page-turn handler that re-creates itself
+   * re-renders the PDF renderer.
+   */
+  const noteActivityRef = useRef<(() => void) | null>(null);
 
   // ── Lifecycle ────────────────────────────────────────────────────
   React.useEffect(() => {
@@ -362,8 +402,11 @@ export default function PdfViewerScreen() {
   }, []);
 
   // ── Reading-time heartbeat → WorkSpace Progress dashboard ──
-  // Credits time only while the screen is mounted and the app is foregrounded.
+  // ORIGINAL PATH (READING_SESSIONS off): credits time whenever the screen is
+  // mounted and the app is foregrounded. Kept verbatim so the flag is a true
+  // kill switch — useReadingSession below replaces it when the flag is on.
   React.useEffect(() => {
+    if (READING_SESSIONS) return; // the shared hook owns the heartbeat instead
     const BEAT_MS = 20000;
     const id = setInterval(() => {
       if (AppState.currentState === "active") bumpReadingTime(BEAT_MS);
@@ -622,6 +665,9 @@ export default function PdfViewerScreen() {
   const handlePageChanged = useCallback(
     (page: number, numberOfPages: number) => {
       if (!isMountedRef.current) return;
+      // A page turn is the clearest possible signal that someone is reading.
+      // R2's activity guard needs it, or a phone on a table earns time.
+      noteActivityRef.current?.();
       setState((prev) => ({
         ...prev,
         pageInfo: { current: page, total: numberOfPages },
@@ -854,6 +900,236 @@ export default function PdfViewerScreen() {
     [state.viewMode],
   );
 
+  // ── Citation target from route params (W4) ───────────────────────
+  // Present only when opened from a tapped citation. Pages are jumped to,
+  // never highlighted in place (ENABLE_INPLACE_PDF_SELECTION stays off); the
+  // Source card shows the quoted words instead. No params → today's behavior.
+  const locatorTarget = useMemo(
+    () => parseLocatorParams({ locatorType, locatorIndex, quote }),
+    [locatorType, locatorIndex, quote],
+  );
+  const locatorAppliedRef = useRef(false);
+  const [sourceCard, setSourceCard] = useState<{ label: string; quote: string } | null>(null);
+  const closeSourceCard = useCallback(() => setSourceCard(null), []);
+  useEffect(() => {
+    if (!locatorTarget || locatorAppliedRef.current) return;
+    // The citation wins over the saved reading position.
+    restoredPageRef.current = true;
+    const total = state.pageInfo.total;
+    if (total <= 0) return; // act once the document has loaded
+    locatorAppliedRef.current = true;
+    if (locatorTarget.locatorType === "page") {
+      handleGoToPage(Math.min(Math.max(1, locatorTarget.index), total));
+    }
+    setSourceCard({
+      label: locatorLabel(locatorTarget.locatorType, locatorTarget.index),
+      quote: locatorTarget.quote,
+    });
+  }, [locatorTarget, state.pageInfo.total, handleGoToPage]);
+
+  // ── Saved Pages (R1) + reading sessions (R2) ─────────────────────
+  // Mirror of the extracted per-page text, so the excerpt capture below can
+  // read it from a callback without re-binding on every extraction tick.
+  const pageTextsRef = useRef<string[]>(state.readAloudPageTexts);
+  React.useEffect(() => {
+    pageTextsRef.current = state.readAloudPageTexts;
+  }, [state.readAloudPageTexts]);
+
+  /** Saves waiting on this page's text to finish extracting. */
+  const excerptWaitersRef = useRef<
+    { page: number; resolve: (text: string) => void }[]
+  >([]);
+
+  /** Hand extracted text to any save that is waiting for it. */
+  const resolveExcerptWaiters = useCallback((pageTexts: string[]) => {
+    if (excerptWaitersRef.current.length === 0) return;
+    const stillWaiting: typeof excerptWaitersRef.current = [];
+    for (const waiter of excerptWaitersRef.current) {
+      const text = pageTexts[waiter.page - 1];
+      if (text && text.trim()) waiter.resolve(text);
+      else stillWaiting.push(waiter);
+    }
+    excerptWaitersRef.current = stillWaiting;
+  }, []);
+
+  /**
+   * The WHOLE text of the current PDF page — the page the bookmark keeps, not
+   * a preview of it. useSavePage stores this as the page snapshot and takes the
+   * list excerpt from its first EXCERPT_MAX characters.
+   *
+   * Source is PDFTextExtractor — the hidden pdf.js WebView already used by
+   * Read Aloud. It is proven and, unlike the page-canvas renderer, it does
+   * NOT require Mobile View and does not touch ENABLE_INPLACE_PDF_SELECTION.
+   *
+   * If the text is already cached this is instant. Otherwise the extractor is
+   * mounted on demand (prewarmExtract) and unmounts itself when it finishes.
+   * Nobody waits on this: the save has already happened.
+   */
+  const capturePdfPageText = useCallback((): Promise<string> => {
+    const page = pageInfoRef.current.current;
+    const cached = pageTextsRef.current[page - 1];
+    if (cached && cached.trim()) {
+      return Promise.resolve(cached.trim().slice(0, SNAPSHOT_MAX));
+    }
+    // Ask for extraction, unless something already has it running.
+    setState((prev) =>
+      prev.prewarmExtract || prev.readAloudActive
+        ? prev
+        : { ...prev, prewarmExtract: true },
+    );
+    return new Promise<string>((resolve) => {
+      const done = (text: string) => resolve(text.trim().slice(0, SNAPSHOT_MAX));
+      // Give up quietly rather than leaking a pending promise forever. A
+      // bookmark with no captured page still opens, showing its location and
+      // "No text was captured for this page", which is acceptable.
+      const timer = setTimeout(() => {
+        excerptWaitersRef.current = excerptWaitersRef.current.filter(
+          (w) => w.resolve !== wrapped,
+        );
+        resolve("");
+      }, 45_000);
+      const wrapped = (text: string) => {
+        clearTimeout(timer);
+        done(text);
+      };
+      excerptWaitersRef.current.push({ page, resolve: wrapped });
+    });
+  }, []);
+
+  const savePageState = useSavePage({
+    uri,
+    name,
+    location: {
+      locatorType: "page",
+      page: state.pageInfo.current,
+      totalPages: state.pageInfo.total,
+    },
+    capturePageText: capturePdfPageText,
+  });
+
+  const [bookmarkToast, setBookmarkToast] = useState<{
+    message: string;
+    ok: boolean;
+  } | null>(null);
+  const bookmarkToastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const showBookmarkToast = useCallback((message: string, ok: boolean) => {
+    setBookmarkToast({ message, ok });
+    if (bookmarkToastTimer.current) clearTimeout(bookmarkToastTimer.current);
+    bookmarkToastTimer.current = setTimeout(() => setBookmarkToast(null), 2400);
+  }, []);
+  useEffect(
+    () => () => {
+      if (bookmarkToastTimer.current) clearTimeout(bookmarkToastTimer.current);
+    },
+    [],
+  );
+
+  /**
+   * A pending page image for a bookmark: { page, savedPageId }.
+   *
+   * Set when a bookmark is made, cleared when the picture arrives. Mounting
+   * the extractor with this page number makes the pdf.js pass that is already
+   * fetching the page text ALSO rasterise it, so one document load serves
+   * both. The bookmark is saved and usable long before this resolves.
+   */
+  const [pendingImage, setPendingImage] = useState<{
+    page: number;
+    savedPageId: string;
+  } | null>(null);
+
+  /** Bookmark or un-bookmark the current page, and confirm it on screen. */
+  const handleSavePageToggle = useCallback(
+    async (seedExcerpt?: string) => {
+      const wasSaved = savePageState.isSaved;
+      const page = pageInfoRef.current.current;
+      const result = await savePageState.toggle(seedExcerpt);
+      if (wasSaved) {
+        showBookmarkToast("Bookmark removed", true);
+        return;
+      }
+      if ("ok" in result && result.ok) {
+        showBookmarkToast(`Page ${page} bookmarked`, true);
+        // Ask for the picture of this page. Fire-and-forget by design: the
+        // bookmark already exists and already has its text.
+        if (SAVED_PAGES_THUMBNAILS && page >= 1 && "page" in result) {
+          setPendingImage({ page, savedPageId: result.page.id });
+        }
+        return;
+      }
+      showBookmarkToast(
+        "message" in result ? result.message : "Could not bookmark this page.",
+        false,
+      );
+    },
+    [savePageState, showBookmarkToast],
+  );
+
+  /**
+   * Whether anything actually wants the document's per-page TEXT right now.
+   *
+   * Read Aloud only needs the extractor if text isn't cached yet (a completed
+   * pre-warm leaves it populated). The silent pre-warm is suspended while
+   * Mobile View is loading or active, because two document-parsing WebViews
+   * must never be alive at once.
+   */
+  const needsExtractedText =
+    (state.readAloudActive && state.readAloudPageTexts.length === 0) ||
+    state.searchExtracting ||
+    (state.prewarmExtract &&
+      state.viewMode !== "mobile" &&
+      !state.mobileLoading);
+
+  /** Persist a rasterised page and attach it to its bookmark. */
+  const handlePageImage = useCallback(
+    (page: number, base64Jpeg: string) => {
+      const pending = pendingImage;
+      if (!pending || pending.page !== page) return;
+      setPendingImage(null);
+      void (async () => {
+        const path = await writeSavedPageImage(pending.savedPageId, base64Jpeg);
+        if (path) await updateThumbPath(pending.savedPageId, path);
+      })();
+    },
+    [pendingImage],
+  );
+
+  // One heartbeat for every reader, with the activity guard. noteActivity is
+  // wired to page changes and to touches on the reader surface below.
+  const { noteActivity } = useReadingSession({
+    uri,
+    name,
+    isSpeaking: state.readAloudActive,
+    pageLabel: state.pageInfo.total
+      ? `Page ${state.pageInfo.current}`
+      : undefined,
+    enabled: !state.loading && !state.error,
+  });
+  noteActivityRef.current = noteActivity;
+
+  // ── In-reader Gozlin panel (AI_READER_PANEL, W7) ─────────────────
+  // All panel state lives inside the panel; these refs and callbacks are
+  // stable so opening or streaming never re-renders the PDF renderer.
+  const aiPanelRef = useRef<ReaderAIPanelHandle>(null);
+  const goToPageRef = useRef(handleGoToPage);
+  goToPageRef.current = handleGoToPage;
+  const panelDocument = useMemo(
+    () => (uri ? { uri, name: name || "Document.pdf", mimeType: "application/pdf" } : null),
+    [uri, name],
+  );
+  const handlePanelCitation = useCallback((citation: AICitation) => {
+    const index = citation.locator?.index ?? citation.page;
+    if (!index || index < 1) return false;
+    const { total } = pageInfoRef.current;
+    goToPageRef.current(total > 0 ? Math.min(index, total) : index);
+    return true;
+  }, []);
+  const handleOpenChatFullScreen = useCallback(() => {
+    router.push({
+      pathname: "/chat-with-document",
+      params: { uri, name },
+    });
+  }, [uri, name]);
+
   // ── Share ────────────────────────────────────────────────────────
   const handleShare = useCallback(async () => {
     if (!uri) return;
@@ -1026,6 +1302,10 @@ export default function PdfViewerScreen() {
 
   // ── Chat with File ───────────────────────────────────────────────
   const handleChatWithFile = useCallback(() => {
+    if (AI_READER_PANEL) {
+      aiPanelRef.current?.open({ state: "expanded" });
+      return;
+    }
     router.push({
       pathname: "/chat-with-document",
       params: { uri, name },
@@ -1260,6 +1540,35 @@ export default function PdfViewerScreen() {
   }, [state.fileId]);
 
   // ── Mobile renderer messages ─────────────────────────────────────
+  // ── Read Aloud highlighting (Mobile View only) ───────────────────
+  // Mobile View is reflowed text in MobileRenderer, where a passage and a word
+  // can be marked. The page view is left alone on purpose: in-place text
+  // selection on PDF pages is disabled because it crashes the app, so there
+  // is no reliable text layer to highlight into there.
+  const handleReadAloudChunk = useCallback(
+    (chunk: TextChunk) => {
+      if (state.viewMode !== "mobile") return;
+      mobileRendererRef.current?.highlightSpokenChunk(chunk.text);
+    },
+    [state.viewMode],
+  );
+
+  const handleReadAloudWord = useCallback(
+    (position: WordBoundaryPosition, chunkText: string) => {
+      if (state.viewMode !== "mobile") return;
+      mobileRendererRef.current?.highlightSpokenWord(
+        chunkText,
+        position.chunkStart,
+        position.chunkEnd,
+      );
+    },
+    [state.viewMode],
+  );
+
+  useEffect(() => {
+    if (!state.readAloudActive) mobileRendererRef.current?.clearSpokenWord();
+  }, [state.readAloudActive]);
+
   const handleMobileMessage = useCallback((msg: any) => {
     if (msg.type === "selection" && msg.text) {
       setState((prev) => ({
@@ -1288,6 +1597,8 @@ export default function PdfViewerScreen() {
         searchMobileCurrent: msg.current ?? 0,
       }));
     } else if (msg.type === "scroll" && typeof msg.scrollPercent === "number") {
+      // Scrolling in Mobile View is reading activity (R2's guard).
+      noteActivityRef.current?.();
       lastMobileScrollPctRef.current = msg.scrollPercent;
       // Keep library/home reading progress fresh while reading in Mobile View
       // by mapping the scroll % back onto the page-based progress model.
@@ -1498,6 +1809,11 @@ export default function PdfViewerScreen() {
 
   const handleSelectionAskAthemi = useCallback(() => {
     if (!state.selectionText) return;
+    if (AI_READER_PANEL) {
+      aiPanelRef.current?.open({ selection: state.selectionText });
+      setState((prev) => ({ ...prev, selectionVisible: false }));
+      return;
+    }
     router.push({ pathname: "/gozlin", params: { prompt: state.selectionText } });
     setState((prev) => ({ ...prev, selectionVisible: false }));
   }, [state.selectionText]);
@@ -1934,6 +2250,9 @@ export default function PdfViewerScreen() {
     <SafeAreaView
       style={[styles.container, { backgroundColor: theme.background.primary }]}
       edges={state.fullscreen ? [] : ["top"]}
+      // R2's activity signal. onTouchStart on the container does not capture
+      // or consume the touch, so every existing gesture behaves as before.
+      onTouchStart={() => noteActivityRef.current?.()}
     >
       {/* ── Header (hidden in fullscreen) ──────────────────────── */}
       {!state.fullscreen && (
@@ -2312,6 +2631,13 @@ export default function PdfViewerScreen() {
         onCopy={handleSelectionCopy}
         onSearch={handleSelectionAskAthemi}
         onDismiss={handleSelectionDismiss}
+        onSavePage={
+          SAVED_PAGES && savePageState.enabled
+            ? (selectedText) => {
+                void handleSavePageToggle(selectedText);
+              }
+            : undefined
+        }
       />
 
       {/* ── Fullscreen exit hint ───────────────────────────────── */}
@@ -2367,6 +2693,14 @@ export default function PdfViewerScreen() {
         onDelete={handleDelete}
         onStar={handleStar}
         isStarred={state.isStarred}
+        onSavePage={
+          SAVED_PAGES && savePageState.enabled
+            ? () => {
+                void handleSavePageToggle();
+              }
+            : undefined
+        }
+        isPageSaved={savePageState.isSaved}
       />
 
       <AnalyzeSheet
@@ -2388,29 +2722,28 @@ export default function PdfViewerScreen() {
            needs text; extracted texts are cached for reuse. */}
       <PDFTextExtractor
         uri={state.normalizedUri ?? null}
-        active={
-          // Read Aloud only needs the extractor if text isn't cached yet
-          // (a completed pre-warm leaves it populated → no re-extraction).
-          (state.readAloudActive && state.readAloudPageTexts.length === 0) ||
-          state.searchExtracting ||
-          // Suspend the silent pre-warm while Mobile View is loading/active:
-          // the extractor inlines the whole PDF as base64 into a hidden
-          // WebView, and that heap spike must never stack on the reflow
-          // WebView. It resumes automatically back in Original view.
-          (state.prewarmExtract &&
-            state.viewMode !== "mobile" &&
-            !state.mobileLoading)
-        }
+        active={needsExtractedText || pendingImage !== null}
+        imagePage={pendingImage?.page ?? null}
+        imageMaxEdge={IMAGE_MAX_EDGE}
+        imageQuality={IMAGE_QUALITY}
+        // Nobody wants the text right now, so render the page and skip the
+        // per-page text pass — otherwise bookmarking page 200 of a 300-page
+        // book would re-parse all 300 to reach one picture.
+        imageOnly={!needsExtractedText}
+        onPageImage={handlePageImage}
         onProgress={(pageTexts) => {
           // Stream pages into Read Aloud as they extract so playback can start
           // on page 1 without waiting for the whole document. During a silent
           // pre-warm (no UI open yet) we ALSO accumulate, so that text is ready
           // the instant the user taps Read Aloud. Search still waits for the
           // final onPageTexts aggregate below.
+          // A save may be waiting on this page's text.
+          resolveExcerptWaiters(pageTexts);
           if (!state.readAloudActive && !state.prewarmExtract) return;
           setState((prev) => ({ ...prev, readAloudPageTexts: pageTexts }));
         }}
         onPageTexts={(pageTexts) => {
+          resolveExcerptWaiters(pageTexts);
           // Resolve any pending search that triggered this extraction
           const pending = pendingSearchQueryRef.current;
           pendingSearchQueryRef.current = null;
@@ -2470,7 +2803,34 @@ export default function PdfViewerScreen() {
         }
         documentId={uri}
         documentName={name}
+        onChunkChange={handleReadAloudChunk}
+        onWordBoundary={handleReadAloudWord}
       />
+      {/* ── Bookmark confirmation (R1) ─────────────────────────── */}
+      <BookmarkToast
+        message={bookmarkToast?.message ?? null}
+        ok={bookmarkToast?.ok}
+        bottomOffset={state.readAloudActive ? READ_ALOUD_PANEL_CLEARANCE : 0}
+      />
+
+      {/* ── Source card for a citation opened from Chat with File ── */}
+      {sourceCard && (
+        <View style={SOURCE_CARD_OVERLAY_STYLE} pointerEvents="box-none">
+          <SourceCard label={sourceCard.label} quote={sourceCard.quote} onClose={closeSourceCard} />
+        </View>
+      )}
+
+      {/* ── In-reader Gozlin panel (AI_READER_PANEL) ─────────────── */}
+      {AI_READER_PANEL && (
+        <ReaderAIPanel
+          ref={aiPanelRef}
+          document={panelDocument}
+          readerKind="pdf"
+          onNavigateToCitation={handlePanelCitation}
+          bottomOffset={state.readAloudActive ? READ_ALOUD_PANEL_CLEARANCE : 0}
+          onOpenFullScreen={handleOpenChatFullScreen}
+        />
+      )}
     </SafeAreaView>
   );
 }

@@ -14,7 +14,7 @@
 import MaterialIcons from "@expo/vector-icons/MaterialIcons";
 import { router, useLocalSearchParams } from "expo-router";
 import * as Sharing from "expo-sharing";
-import React, { useCallback, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -35,12 +35,38 @@ import {
 } from "@/components/DocumentViewer/MobileRenderer";
 import { ReaderControls } from "@/components/DocumentViewer/ReaderControls";
 import { SelectionToolbar } from "@/components/DocumentViewer/SelectionToolbar";
+import { BookmarkToast } from "@/components/DocumentViewer/BookmarkToast";
 import { ThreeDotsMenu } from "@/components/DocumentViewer/ThreeDotsMenu";
 import { AnalyzeSheet } from "@/components/ai/AnalyzeSheet";
+import {
+  READ_ALOUD_PANEL_CLEARANCE,
+  ReaderAIPanel,
+  type ReaderAIPanelHandle,
+} from "@/components/ai/ReaderAIPanel";
+import { SOURCE_CARD_OVERLAY_STYLE, SourceCard } from "@/components/ai/SourceCard";
+import {
+  AI_READER_PANEL,
+  READING_SESSIONS,
+  SAVED_PAGES,
+} from "@/constants/featureFlags";
+import { useReadingSession } from "@/hooks/useReadingSession";
+import { useSavePage } from "@/hooks/useSavePage";
+import { SNAPSHOT_MAX } from "@/services/savedPagesTypes";
+import { parseLocatorParams } from "@/services/ai/citationNavigator";
+import { locatorLabel, type AICitation } from "@/services/ai/citations";
+import { findQuote, pickSearchRun } from "@/utils/quoteMatch";
 import { ViewModeToggle } from "@/components/DocumentViewer/ViewModeToggle";
 import { useReaderSettings } from "@/hooks/useReaderSettings";
 import DocxShareOptions from "@/components/DocxShareOptions";
 import { ReadAloudController } from "@/components/ReadAloudController";
+import type { WordBoundaryPosition } from "@/hooks/useReadAloud";
+import type { TextChunk } from "@/utils/chunkText";
+import {
+  buildHighlightChunk,
+  buildHighlightClear,
+  buildHighlightInstall,
+  buildHighlightShow,
+} from "@/utils/readAloudHighlightScript";
 import type { Highlight, Strikethrough, Underline, ViewMode } from "@/src/types/document-viewer.types";
 import {
   getHighlights,
@@ -203,7 +229,14 @@ export default function DocxViewerScreen() {
   const { settings: readerSettings, updateSettings: updateReaderSettings } =
     useReaderSettings(colorScheme);
 
-  const { uri, name } = useLocalSearchParams<{ uri: string; name: string }>();
+  const { uri, name, locatorType, locatorIndex, quote } = useLocalSearchParams<{
+    uri: string;
+    name: string;
+    /** Optional citation target (a tapped source in Chat with File). */
+    locatorType?: string;
+    locatorIndex?: string;
+    quote?: string;
+  }>();
   const displayName = name || getDocxDisplayName(uri || "");
 
   const [state, setState] = useState<ViewerState>({
@@ -250,13 +283,24 @@ export default function DocxViewerScreen() {
   }, []);
 
   // ── Reading-time heartbeat → WorkSpace Progress dashboard ──
+  // ORIGINAL PATH (READING_SESSIONS off), kept verbatim so the flag is a true
+  // kill switch. useReadingSession below replaces it when the flag is on.
   React.useEffect(() => {
+    if (READING_SESSIONS) return; // the shared hook owns the heartbeat instead
     const BEAT_MS = 20000;
     const id = setInterval(() => {
       if (AppState.currentState === "active") bumpReadingTime(BEAT_MS);
     }, BEAT_MS);
     return () => clearInterval(id);
   }, []);
+
+  /** R2's activity signal, held in a ref so callbacks never re-bind. */
+  const noteActivityRef = useRef<(() => void) | null>(null);
+  /** Saves waiting on the reflow WebView to report its visible text. */
+  const visibleTextWaitersRef = useRef<((text: string) => void)[]>([]);
+  const visibleHtmlWaitersRef = useRef<
+    ((result: { html: string; css: string }) => void)[]
+  >([]);
 
   // Keep the Mobile View WebView's typography/theme in sync with reader
   // settings. Injections made before the WebView is ready are queued by
@@ -652,8 +696,203 @@ export default function DocxViewerScreen() {
     setState((prev) => ({ ...prev, readAloudActive: true }));
   }, [state.viewMode]);
 
+  // ── Citation navigation (W4) ─────────────────────────────────────
+  // A DOCX has no pages: the viewer's own search finds the cited words and
+  // scrolls to the first match, and the Source card shows the quote. If the
+  // words aren't found, the Source card alone tells the user what was cited.
+  const searchActionsRef = useRef({ open: handleOpenSearch, query: handleSearchQuery });
+  searchActionsRef.current = { open: handleOpenSearch, query: handleSearchQuery };
+  const docTextRef = useRef("");
+  docTextRef.current = state.extractedText || state.textContent || state.readAloudText || "";
+  const searchForQuote = useCallback((quoteText: string) => {
+    if (!quoteText || !quoteText.trim()) return false;
+    const match = docTextRef.current ? findQuote(docTextRef.current, quoteText) : null;
+    const run = pickSearchRun(match ? match.text.replace(/\s+/g, " ") : quoteText, 4, 7);
+    if (!run) return false;
+    searchActionsRef.current.open();
+    setTimeout(() => {
+      if (isMountedRef.current) searchActionsRef.current.query(run);
+    }, 60);
+    return true;
+  }, []);
+
+  const locatorTarget = useMemo(
+    () => parseLocatorParams({ locatorType, locatorIndex, quote }),
+    [locatorType, locatorIndex, quote],
+  );
+  const locatorAppliedRef = useRef(false);
+  const [sourceCard, setSourceCard] = useState<{ label: string; quote: string } | null>(null);
+  const closeSourceCard = useCallback(() => setSourceCard(null), []);
+  const docContentReady = !state.loading && !state.error;
+  useEffect(() => {
+    if (!locatorTarget || locatorAppliedRef.current || !docContentReady) return;
+    locatorAppliedRef.current = true;
+    setSourceCard({
+      label: locatorLabel(locatorTarget.locatorType, locatorTarget.index),
+      quote: locatorTarget.quote,
+    });
+    // Let the document WebView lay out before searching it.
+    setTimeout(() => {
+      if (isMountedRef.current && locatorTarget.quote) searchForQuote(locatorTarget.quote);
+    }, 900);
+  }, [locatorTarget, docContentReady, searchForQuote]);
+
+  // ── Saved Pages (R1) + reading sessions (R2) ─────────────────────
+  /**
+   * The WHOLE text of the current position in a reflow document — everything
+   * actually ON SCREEN, fetched over the existing WebView bridge. This is the
+   * page the bookmark keeps; useSavePage stores it as the snapshot and takes
+   * the list excerpt from its first EXCERPT_MAX characters.
+   *
+   * Falls back to "" rather than making the user wait, and never blocks the
+   * save: a bookmark with no captured page still opens at its location.
+   */
+  const captureReflowPageText = useCallback((): Promise<string> => {
+    const renderer = mobileRendererRef.current;
+    if (!renderer) return Promise.resolve("");
+    return new Promise<string>((resolve) => {
+      // Only HORIZONTAL whitespace is collapsed. The blank lines between
+      // blocks are the page's paragraph structure, and this text is stored as
+      // the bookmarked page itself — see services/savedPageSnapshotStore.ts.
+      const done = (text: string) =>
+        resolve(
+          (text || "")
+            .replace(/[ \t\u00a0]+/g, " ")
+            .trim()
+            .slice(0, SNAPSHOT_MAX),
+        );
+      const timer = setTimeout(() => {
+        visibleTextWaitersRef.current = visibleTextWaitersRef.current.filter(
+          (w) => w !== wrapped,
+        );
+        resolve("");
+      }, 4000);
+      const wrapped = (text: string) => {
+        clearTimeout(timer);
+        done(text);
+      };
+      visibleTextWaitersRef.current.push(wrapped);
+      renderer.captureVisibleText();
+    });
+  }, []);
+
+  /**
+   * The MARKUP of what is on screen — the reflow answer to "a picture of the
+   * page". A DOCX page cannot be rasterised without a native view capture,
+   * but its own markup re-renders on /saved-page through the same engine,
+   * which brings back the fonts, tables and lists that text loses.
+   *
+   * Same contract as the text capture: resolves empty rather than hanging,
+   * and never blocks the save.
+   */
+  const captureReflowPageHtml = useCallback((): Promise<{
+    html: string;
+    css: string;
+  }> => {
+    const renderer = mobileRendererRef.current;
+    if (!renderer) return Promise.resolve({ html: "", css: "" });
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        visibleHtmlWaitersRef.current = visibleHtmlWaitersRef.current.filter(
+          (w) => w !== wrapped,
+        );
+        resolve({ html: "", css: "" });
+      }, 4000);
+      const wrapped = (result: { html: string; css: string }) => {
+        clearTimeout(timer);
+        resolve(result);
+      };
+      visibleHtmlWaitersRef.current.push(wrapped);
+      renderer.captureVisibleHtml();
+    });
+  }, []);
+
+  const scrollPct = lastMobileScrollPctRef.current ?? 0;
+  const savePageState = useSavePage({
+    uri,
+    name: displayName,
+    location: { locatorType: "section", scrollPct },
+    capturePageText: captureReflowPageText,
+    capturePageHtml: captureReflowPageHtml,
+  });
+
+  const [bookmarkToast, setBookmarkToast] = useState<{
+    message: string;
+    ok: boolean;
+  } | null>(null);
+  const bookmarkToastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const showBookmarkToast = useCallback((message: string, ok: boolean) => {
+    setBookmarkToast({ message, ok });
+    if (bookmarkToastTimer.current) clearTimeout(bookmarkToastTimer.current);
+    bookmarkToastTimer.current = setTimeout(() => setBookmarkToast(null), 2400);
+  }, []);
+  useEffect(
+    () => () => {
+      if (bookmarkToastTimer.current) clearTimeout(bookmarkToastTimer.current);
+    },
+    [],
+  );
+
+  /** Bookmark or un-bookmark the current place, and confirm it on screen. */
+  const handleSavePageToggle = useCallback(
+    async (seedExcerpt?: string) => {
+      const wasSaved = savePageState.isSaved;
+      const result = await savePageState.toggle(seedExcerpt);
+      if (wasSaved) {
+        showBookmarkToast("Bookmark removed", true);
+        return;
+      }
+      if ("ok" in result && result.ok) {
+        showBookmarkToast("Page bookmarked", true);
+        return;
+      }
+      showBookmarkToast(
+        "message" in result ? result.message : "Could not bookmark this page.",
+        false,
+      );
+    },
+    [savePageState, showBookmarkToast],
+  );
+
+  const { noteActivity } = useReadingSession({
+    uri,
+    name: displayName,
+    isSpeaking: state.readAloudActive,
+    pageLabel: `Section · ${Math.round(scrollPct)}%`,
+    enabled: docContentReady,
+  });
+  noteActivityRef.current = noteActivity;
+
+  // ── In-reader Gozlin panel (AI_READER_PANEL, W7) ─────────────────
+  const aiPanelRef = useRef<ReaderAIPanelHandle>(null);
+  const panelDocument = useMemo(
+    () =>
+      uri
+        ? {
+            uri,
+            name: name || displayName || "Document.docx",
+            mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+          }
+        : null,
+    [uri, name, displayName],
+  );
+  const handlePanelCitation = useCallback(
+    (citation: AICitation) => searchForQuote(citation.quote),
+    [searchForQuote],
+  );
+  const handleOpenChatFullScreen = useCallback(() => {
+    router.push({
+      pathname: "/chat-with-document",
+      params: { uri, name },
+    });
+  }, [uri, name]);
+
   // ── Chat with File ───────────────────────────────────────────────
   const handleChatWithFile = useCallback(() => {
+    if (AI_READER_PANEL) {
+      aiPanelRef.current?.open({ state: "expanded" });
+      return;
+    }
     router.push({
       pathname: "/chat-with-document",
       params: { uri, name },
@@ -967,6 +1206,69 @@ export default function DocxViewerScreen() {
     [displayName, state.base64Content, state.textContent, state.isValidDocx, uri],
   );
 
+  // ── Read Aloud highlighting ──────────────────────────────────
+  // Both views are live HTML: Original is mammoth's rendering of the DOCX in
+  // this screen's WebView (the default view), Mobile View is the reflow in
+  // MobileRenderer. The passage band on every chunk change works with every
+  // speech engine; the word highlight refines it on engines that report word
+  // positions.
+  //
+  // The Original WebView reloads whenever its HTML changes, which discards an
+  // installed highlighter, so installation is tracked and reset on load.
+  const originalHighlighterInstalledRef = useRef(false);
+
+  const injectOriginalHighlight = useCallback((js: string) => {
+    const webView = webViewRef.current;
+    if (!webView) return;
+    if (!originalHighlighterInstalledRef.current) {
+      webView.injectJavaScript(buildHighlightInstall());
+      originalHighlighterInstalledRef.current = true;
+    }
+    webView.injectJavaScript(js);
+  }, []);
+
+  const handleWordBoundary = useCallback(
+    (position: WordBoundaryPosition, chunkText: string) => {
+      if (state.viewMode === "mobile") {
+        mobileRendererRef.current?.highlightSpokenWord(
+          chunkText,
+          position.chunkStart,
+          position.chunkEnd,
+        );
+      } else {
+        injectOriginalHighlight(
+          buildHighlightShow(chunkText, position.chunkStart, position.chunkEnd),
+        );
+      }
+    },
+    [state.viewMode, injectOriginalHighlight],
+  );
+
+  const handleReadAloudChunk = useCallback(
+    (chunk: TextChunk) => {
+      if (state.viewMode === "mobile") {
+        mobileRendererRef.current?.highlightSpokenChunk(chunk.text);
+      } else {
+        injectOriginalHighlight(buildHighlightChunk(chunk.text));
+      }
+    },
+    [state.viewMode, injectOriginalHighlight],
+  );
+
+  // Drop the highlight when Read Aloud closes, so a stale passage is never
+  // left marked on the page.
+  useEffect(() => {
+    if (state.readAloudActive) return;
+    mobileRendererRef.current?.clearSpokenWord();
+    webViewRef.current?.injectJavaScript(buildHighlightClear());
+  }, [state.readAloudActive]);
+
+  // A new Original document, or switching views, discards any highlighter
+  // installed in the previous page.
+  useEffect(() => {
+    originalHighlighterInstalledRef.current = false;
+  }, [state.htmlContent, state.viewMode]);
+
   // ── Mobile renderer messages ─────────────────────────────────────
   const handleMobileMessage = useCallback((msg: any) => {
     if (msg.type === "read-aloud-text") {
@@ -984,7 +1286,18 @@ export default function DocxViewerScreen() {
       if (pct != null && pct > 1 && !userScrolled) {
         mobileRendererRef.current?.scrollToPercent(pct);
       }
+    } else if (msg.type === "visible-html") {
+      const waiters = visibleHtmlWaitersRef.current;
+      visibleHtmlWaitersRef.current = [];
+      waiters.forEach((w) => w({ html: msg.html || "", css: msg.css || "" }));
+    } else if (msg.type === "visible-text") {
+      // Saved Pages (R1): hand the on-screen text to whatever save is waiting.
+      const waiters = visibleTextWaitersRef.current;
+      visibleTextWaitersRef.current = [];
+      for (const resolve of waiters) resolve(typeof msg.text === "string" ? msg.text : "");
     } else if (msg.type === "scroll" && typeof msg.scrollPercent === "number") {
+      // Scrolling is reading activity (R2's guard).
+      noteActivityRef.current?.();
       lastMobileScrollPctRef.current = msg.scrollPercent;
       // Persist under the same key/scale as the original view's tracker so
       // progress stays continuous across view switches and app restarts.
@@ -1148,6 +1461,11 @@ export default function DocxViewerScreen() {
 
   const handleSelectionAskAthemi = useCallback(() => {
     if (!state.selectionText) return;
+    if (AI_READER_PANEL) {
+      aiPanelRef.current?.open({ selection: state.selectionText });
+      setState((prev) => ({ ...prev, selectionVisible: false }));
+      return;
+    }
     router.push({ pathname: "/gozlin", params: { prompt: state.selectionText } });
     setState((prev) => ({ ...prev, selectionVisible: false }));
   }, [state.selectionText]);
@@ -1306,6 +1624,9 @@ export default function DocxViewerScreen() {
     <SafeAreaView
       style={[styles.container, { backgroundColor: theme.background.primary }]}
       edges={state.fullscreen ? [] : ["top"]}
+      // R2's activity signal. onTouchStart does not capture or consume the
+      // touch, so every existing gesture behaves exactly as before.
+      onTouchStart={() => noteActivityRef.current?.()}
     >
       {/* ── Header (hidden in fullscreen) ──────────────────────── */}
       {!state.fullscreen && (
@@ -1389,6 +1710,10 @@ export default function DocxViewerScreen() {
               domStorageEnabled
               injectedJavaScript={SCROLL_TRACKER_JS}
               onMessage={handleWebViewMessage}
+              onLoadEnd={() => {
+                // A finished load is a new document with no highlighter in it.
+                originalHighlighterInstalledRef.current = false;
+              }}
               onError={() => {
                 setState((prev) => ({
                   ...prev,
@@ -1448,6 +1773,13 @@ export default function DocxViewerScreen() {
         onCopy={handleSelectionCopy}
         onSearch={handleSelectionAskAthemi}
         onDismiss={handleSelectionDismiss}
+        onSavePage={
+          SAVED_PAGES && savePageState.enabled
+            ? (selectedText) => {
+                void handleSavePageToggle(selectedText);
+              }
+            : undefined
+        }
       />
 
       {/* ── Three dots menu ────────────────────────────────────── */}
@@ -1465,6 +1797,14 @@ export default function DocxViewerScreen() {
         onDelete={handleDelete}
         onStar={handleStar}
         isStarred={state.isStarred}
+        onSavePage={
+          SAVED_PAGES && savePageState.enabled
+            ? () => {
+                void handleSavePageToggle();
+              }
+            : undefined
+        }
+        isPageSaved={savePageState.isSaved}
       />
 
       <AnalyzeSheet
@@ -1480,6 +1820,13 @@ export default function DocxViewerScreen() {
               }
             : null
         }
+      />
+
+      {/* ── Bookmark confirmation (R1) ─────────────────────────── */}
+      <BookmarkToast
+        message={bookmarkToast?.message ?? null}
+        ok={bookmarkToast?.ok}
+        bottomOffset={state.readAloudActive ? READ_ALOUD_PANEL_CLEARANCE : 0}
       />
 
       {/* ── Reader settings sheet (Mobile View typography/theme) ── */}
@@ -1502,6 +1849,8 @@ export default function DocxViewerScreen() {
         }
         documentId={uri}
         documentName={displayName}
+        onChunkChange={handleReadAloudChunk}
+        onWordBoundary={handleWordBoundary}
       />
 
       {/* ── DOCX Share Options Modal ───────────────────────────── */}
@@ -1512,6 +1861,25 @@ export default function DocxViewerScreen() {
         textContent={state.extractedText || state.textContent}
         fileName={displayName}
       />
+
+      {/* ── Source card for a citation opened from Chat with File ── */}
+      {sourceCard && (
+        <View style={SOURCE_CARD_OVERLAY_STYLE} pointerEvents="box-none">
+          <SourceCard label={sourceCard.label} quote={sourceCard.quote} onClose={closeSourceCard} />
+        </View>
+      )}
+
+      {/* ── In-reader Gozlin panel (AI_READER_PANEL) ─────────────── */}
+      {AI_READER_PANEL && (
+        <ReaderAIPanel
+          ref={aiPanelRef}
+          document={panelDocument}
+          readerKind="docx"
+          onNavigateToCitation={handlePanelCitation}
+          bottomOffset={state.readAloudActive ? READ_ALOUD_PANEL_CLEARANCE : 0}
+          onOpenFullScreen={handleOpenChatFullScreen}
+        />
+      )}
     </SafeAreaView>
   );
 }

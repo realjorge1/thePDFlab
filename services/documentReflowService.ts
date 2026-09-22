@@ -169,12 +169,12 @@ const THEMES: Record<
 function readerCSS(settings: ReaderSettings): string {
   const t = THEMES[settings.theme] || THEMES.light;
   return `
-:root{--fs:${settings.fontSize}px;--lh:${settings.lineHeight};--ff:${settings.fontFamily},-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;--bg:${t.bg};--fg:${t.text};--link:${t.link};--border:${t.border}}
+:root{--fs:${settings.fontSize}px;--lh:${settings.lineHeight};--ff:${settings.fontFamily},-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;--bg:${t.bg};--fg:${t.text};--link:${t.link};--border:${t.border};--pm:${settings.margin ?? 16}px;--ta:${settings.textAlign ?? "left"};--ps:${settings.paragraphSpacing ?? 1}em}
 *{margin:0;padding:0;box-sizing:border-box;-webkit-user-select:text;user-select:text}
 html{font-size:var(--fs);-webkit-text-size-adjust:100%}
 body{font-family:var(--ff);line-height:var(--lh);color:var(--fg);background:var(--bg);padding:0;margin:0;overflow-x:hidden;-webkit-font-smoothing:antialiased;cursor:text}
-.reader-content{max-width:100%;padding:20px 16px;margin:0 auto}
-p{margin-bottom:1em;text-align:left;word-wrap:break-word;overflow-wrap:break-word}
+.reader-content{max-width:100%;padding:20px var(--pm);margin:0 auto}
+p{margin-bottom:var(--ps);text-align:var(--ta);word-wrap:break-word;overflow-wrap:break-word;hyphens:auto;-webkit-hyphens:auto}
 h1,h2,h3,h4,h5,h6{margin-top:1.5em;margin-bottom:.5em;font-weight:600;line-height:1.3;color:var(--fg)}
 h1{font-size:1.8em}h2{font-size:1.5em}h3{font-size:1.3em}h4{font-size:1.1em}
 h1:first-child,h2:first-child,h3:first-child{margin-top:0}
@@ -691,28 +691,59 @@ ${js}
 // PDF TEXT EXTRACTION — lightweight, no rendering, used by Read Aloud
 // ============================================================================
 
+/** How a page image is encoded when one is requested. */
+export interface PdfPageImageRequest {
+  /** 1-based page to rasterise. */
+  page: number;
+  /** Longest edge in CSS pixels before JPEG encoding. */
+  maxEdge: number;
+  /** JPEG quality, 0-1. */
+  quality: number;
+  /**
+   * Skip text extraction entirely and produce ONLY the page image.
+   *
+   * Set when the caller already has the document's text cached. Without it,
+   * bookmarking page 200 of a 300-page book would re-parse all 300 pages'
+   * text purely to reach one picture.
+   */
+  imageOnly?: boolean;
+}
+
 /**
  * Generate a minimal self-contained HTML page that:
  * 1. Inlines pdf.js (bundled, no CDN)
- * 2. Decodes the base64 PDF
+ * 2. Loads the PDF bytes (see BYTE DELIVERY below)
  * 3. Extracts text from every page WITHOUT rendering anything
- * 4. Posts { type: 'pdf-page-texts', pageTexts: string[] } back to RN
- * 5. Posts { type: 'pdf-text-error', message: string } on failure
+ * 4. Optionally rasterises ONE page to a JPEG (see below)
+ * 5. Posts { type: 'pdf-page-texts', pageTexts: string[] } back to RN
+ * 6. Posts { type: 'pdf-text-error', message: string } on failure
  *
  * This HTML is intended for a hidden 0-height WebView. It is completely
  * independent of the Mobile View rendering pipeline.
+ *
+ * BYTE DELIVERY: the same loadDocumentBytes() path Mobile View uses — on
+ * Android the WebView XHRs the file:// URI so the bytes never enter the RN
+ * heap, on iOS WKWebView takes the inline-base64 path it handles well. This
+ * replaced an unconditional inline-base64 read, which made every Read Aloud
+ * extraction hold 3-4 transient copies of the whole document on the RN side.
+ *
+ * PAGE IMAGE (optional, `imageRequest`): renders exactly ONE page to a canvas
+ * and posts { type: 'pdf-page-image', page, dataUrl }. It is deliberately part
+ * of THIS pass rather than a second WebView: Bookmarks needs the text and the
+ * picture of the same page, and one pdf.js load serves both. Rendering is
+ * capped at maxEdge and runs AFTER the text of that page has been posted, so
+ * a rasterisation failure can never cost the caller its text.
  */
 export async function generatePdfTextExtractionHtml(
   fileUri: string,
+  imageRequest?: PdfPageImageRequest | null,
 ): Promise<{ html: string } | { error: string }> {
   try {
     const info = await FileSystem.getInfoAsync(fileUri);
     if (!info.exists) return { error: "File not found" };
 
     const vendor = await loadMobileViewVendorScripts();
-    const base64 = await FileSystem.readAsStringAsync(fileUri, {
-      encoding: FileSystem.EncodingType.Base64,
-    });
+    const sourceLiteral = await buildDocumentSourceLiteral(fileUri, "pdf");
 
     const pdfMinJs = escapeForScriptTag(vendor.pdfMinJs);
     // Loaded as a REAL (executable) script — not a Blob worker. Running the
@@ -721,14 +752,27 @@ export async function generatePdfTextExtractionHtml(
     // Blob-worker-that-never-responds hang inside a hidden Android WebView.
     const pdfWorkerMinJs = escapeForScriptTag(vendor.pdfWorkerMinJs);
 
+    const imageLiteral =
+      imageRequest && imageRequest.page >= 1
+        ? JSON.stringify({
+            page: Math.floor(imageRequest.page),
+            maxEdge: imageRequest.maxEdge,
+            quality: imageRequest.quality,
+            imageOnly: imageRequest.imageOnly === true,
+          })
+        : "null";
+
     const html = `<!DOCTYPE html>
 <html>
 <head><meta charset="UTF-8"></head>
 <body>
 <script>${pdfMinJs}<\/script>
 <script>${pdfWorkerMinJs}<\/script>
+<script>${DOC_BYTES_LOADER_JS}<\/script>
 <script>
 (function(){
+  var SOURCE=${sourceLiteral};
+
   function post(obj){
     try{ window.ReactNativeWebView && window.ReactNativeWebView.postMessage(JSON.stringify(obj)); }catch(_){}
   }
@@ -761,14 +805,59 @@ export async function generatePdfTextExtractionHtml(
     return out;
   }
 
-  try{
-    var raw=atob(${JSON.stringify(base64)});
-    var uint8=new Uint8Array(raw.length);
-    for(var i=0;i<raw.length;i++) uint8[i]=raw.charCodeAt(i);
+  // Requested page image, or null. Set by the RN caller.
+  var IMAGE_REQUEST=${imageLiteral};
 
+  /**
+   * Rasterise ONE page to a JPEG data URL.
+   *
+   * Runs at a viewport scale that puts the longest edge at maxEdge, so a
+   * poster-sized page costs the same as a paperback one. Failures are
+   * swallowed: the caller already has the text, and a bookmark without a
+   * picture is a working bookmark.
+   */
+  function renderPageImage(pdf, req){
+    if(!req || !req.page || req.page<1 || req.page>pdf.numPages) return;
+    pdf.getPage(req.page).then(function(page){
+      var base=page.getViewport({scale:1});
+      var longest=Math.max(base.width, base.height) || 1;
+      var scale=Math.min(req.maxEdge/longest, 2);
+      if(!(scale>0)) scale=1;
+      var vp=page.getViewport({scale:scale});
+      var canvas=document.createElement('canvas');
+      canvas.width=Math.max(1,Math.floor(vp.width));
+      canvas.height=Math.max(1,Math.floor(vp.height));
+      var ctx=canvas.getContext('2d');
+      // PDF pages are transparent; without this they encode as black JPEGs.
+      ctx.fillStyle='#FFFFFF';
+      ctx.fillRect(0,0,canvas.width,canvas.height);
+      return page.render({canvasContext:ctx, viewport:vp}).promise.then(function(){
+        var url=canvas.toDataURL('image/jpeg', req.quality);
+        // Free the bitmap before the data URL crosses the bridge.
+        canvas.width=0; canvas.height=0;
+        post({type:'pdf-page-image',page:req.page,dataUrl:url});
+      });
+    }).catch(function(err){
+      post({type:'pdf-page-image-error',page:req.page,message:(err&&err.message)||'Render failed'});
+    });
+  }
+
+  function onBytesFail(err){
+    post({type:'pdf-text-error',message:(err&&err.message)||'Could not read the document'});
+  }
+
+  try{
+    loadDocumentBytes(SOURCE, function(uint8){
     pdfjsLib.getDocument({data:uint8, disableWorker:true}).promise.then(function(pdf){
       var total=pdf.numPages;
       var pageTexts=new Array(total);
+
+      // Picture only: the caller already has the text and re-extracting it
+      // would mean parsing every page to reach one of them.
+      if(IMAGE_REQUEST && IMAGE_REQUEST.imageOnly){
+        try{ renderPageImage(pdf, IMAGE_REQUEST); }catch(_){ }
+        return;
+      }
 
       if(total===0){
         post({type:'pdf-page-texts',pageTexts:[]});
@@ -804,9 +893,16 @@ export async function generatePdfTextExtractionHtml(
         // search and any non-streaming consumer.
         post({type:'pdf-page-texts',pageTexts:pageTexts});
       });
+
+      // The picture, after the text. Never chained into the text promise:
+      // a render failure must not be able to reject the extraction.
+      if(IMAGE_REQUEST){
+        try{ renderPageImage(pdf, IMAGE_REQUEST); }catch(_){ }
+      }
     }).catch(function(err){
       post({type:'pdf-text-error',message:(err && err.message)||'PDF load failed'});
     });
+    }, onBytesFail);
   }catch(e){
     post({type:'pdf-text-error',message:(e && e.message)||'Decode failed'});
   }

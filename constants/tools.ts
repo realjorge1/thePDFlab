@@ -1,6 +1,7 @@
 // ============================================
 // FILE: constants/tools.ts
 // ============================================
+
 export const toolCategories = [
   {
     id: "organize",
@@ -216,11 +217,6 @@ export const toolCategories = [
         name: "Find & Replace",
         description: "Find and replace text in PDF",
       },
-      {
-        id: "qr-code",
-        name: "QR Code",
-        description: "Add QR codes to PDF pages",
-      },
     ],
   },
   {
@@ -235,24 +231,6 @@ export const toolCategories = [
         id: "validate",
         name: "Validate PDF",
         description: "Check PDF/A compliance",
-      },
-    ],
-  },
-  {
-    id: "forms",
-    name: "Forms & Fill",
-    color: "#F59E0B",
-    tools: [
-      { id: "fill-form", name: "Fill Form", description: "Fill PDF forms" },
-      {
-        id: "flatten",
-        name: "Flatten PDF",
-        description: "Flatten form fields",
-      },
-      {
-        id: "extract-data",
-        name: "Extract Form Data",
-        description: "Export form data",
       },
     ],
   },

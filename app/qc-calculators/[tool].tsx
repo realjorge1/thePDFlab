@@ -2,7 +2,6 @@ import { QCScreenShell } from "@/components/qc/QCScreenShell";
 import { ControlLimitsTool } from "@/components/qc/tools/ControlLimitsTool";
 import { CriticalNTool } from "@/components/qc/tools/CriticalNTool";
 import { DispersionTool } from "@/components/qc/tools/DispersionTool";
-import { LotToLotTool } from "@/components/qc/tools/LotToLotTool";
 import { OpSpecsTool } from "@/components/qc/tools/OpSpecsTool";
 import { QcGridTool } from "@/components/qc/tools/QcGridTool";
 import { ReplicationTool } from "@/components/qc/tools/ReplicationTool";
@@ -48,7 +47,6 @@ export default function QCCalculatorScreen() {
       {tool.id === "rr-record" ? <RRRecordTool /> : null}
       {tool.id === "dispersion" ? <DispersionTool /> : null}
       {tool.id === "critical-n" ? <CriticalNTool /> : null}
-      {tool.id === "lot-to-lot" ? <LotToLotTool /> : null}
     </QCScreenShell>
   );
 }

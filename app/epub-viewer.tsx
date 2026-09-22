@@ -42,9 +42,33 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { WebView } from "react-native-webview";
 
+import { PronunciationEditor } from "@/components/PronunciationEditor";
+import { READ_ALOUD_HIGHLIGHTER_SOURCE } from "@/utils/readAloudHighlightScript";
+import {
+  AI_READER_PANEL,
+  EPUB_PAGINATED_MODE,
+  READING_SESSIONS,
+  SAVED_PAGES,
+} from "@/constants/featureFlags";
+import { useReadingSession } from "@/hooks/useReadingSession";
+import { useSavePage } from "@/hooks/useSavePage";
+import { SNAPSHOT_MAX } from "@/services/savedPagesTypes";
+import { PAGE_HTML_CAPTURE_JS } from "@/utils/pageHtmlCapture";
+import { buildEpubTypographyCss } from "@/services/epubTypography";
+import { useReaderSettings } from "@/hooks/useReaderSettings";
 import { ReadAloudBar } from "@/components/ReadAloudBar";
+import { BookmarkToast } from "@/components/DocumentViewer/BookmarkToast";
 import { SelectionToolbar } from "@/components/DocumentViewer/SelectionToolbar";
 import { VoicePicker } from "@/components/VoicePicker";
+import {
+  READ_ALOUD_PANEL_CLEARANCE,
+  ReaderAIPanel,
+  type ReaderAIPanelHandle,
+} from "@/components/ai/ReaderAIPanel";
+import { SOURCE_CARD_OVERLAY_STYLE, SourceCard } from "@/components/ai/SourceCard";
+import { parseLocatorParams } from "@/services/ai/citationNavigator";
+import { locatorLabel, type AICitation } from "@/services/ai/citations";
+import { pickSearchRun } from "@/utils/quoteMatch";
 import {
   DarkTheme,
   LightTheme,
@@ -137,7 +161,10 @@ export default function EpubViewerScreen() {
   }, []);
 
   // ── Reading-time heartbeat → WorkSpace Progress dashboard ──
+  // ORIGINAL PATH (READING_SESSIONS off), kept verbatim so the flag is a true
+  // kill switch. useReadingSession below replaces it when the flag is on.
   useEffect(() => {
+    if (READING_SESSIONS) return; // the shared hook owns the heartbeat instead
     const BEAT_MS = 20000;
     const id = setInterval(() => {
       if (AppState.currentState === "active") bumpReadingTime(BEAT_MS);
@@ -145,7 +172,30 @@ export default function EpubViewerScreen() {
     return () => clearInterval(id);
   }, []);
 
-  const { uri, name } = useLocalSearchParams<{ uri: string; name: string }>();
+  /** R2's activity signal, held in a ref so callbacks never re-bind. */
+  const noteActivityRef = useRef<(() => void) | null>(null);
+  /** The CFI the reader is currently on — the exact Saved Pages locator. */
+  const currentCfiRef = useRef<string | null>(null);
+  /** Saves waiting on the epub.js bridge to report its visible text. */
+  const visibleTextWaitersRef = useRef<((text: string) => void)[]>([]);
+  const visibleHtmlWaitersRef = useRef<
+    ((result: { html: string; css: string }) => void)[]
+  >([]);
+
+  const { uri, name, locatorType, locatorIndex, quote, savedCfi } =
+    useLocalSearchParams<{
+      uri: string;
+      name: string;
+      /** Optional citation target (a tapped source in Chat with File). */
+      locatorType?: string;
+      locatorIndex?: string;
+      quote?: string;
+      /**
+       * Optional exact position from a saved page (R1). A CFI is exact, so it
+       * takes priority over the saved reading position when both exist.
+       */
+      savedCfi?: string;
+    }>();
   const displayName = name || getEpubDisplayName(uri || "");
 
   // ---- State ----
@@ -160,10 +210,20 @@ export default function EpubViewerScreen() {
   const [showSettings, setShowSettings] = useState(false);
   const [showReadAloud, setShowReadAloud] = useState(false);
   const [showVoicePicker, setShowVoicePicker] = useState(false);
+  const [showPronunciation, setShowPronunciation] = useState(false);
   const [settings, setSettings] = useState<EpubReaderSettings>(
     getDefaultReaderSettings(),
   );
   const [webViewReady, setWebViewReady] = useState(false);
+
+  // ── Shared reader typography ───────────────────────────
+  // Line height, margin, alignment, paragraph spacing and typeface come
+  // from the app-wide ReaderSettings, so a reader configures them once and
+  // every format obeys. Font size and theme stay on the EPUB-specific
+  // storage because epub.js owns them directly (see epubTypography.ts for
+  // the point-to-percentage conversion that keeps the two consistent).
+  const { settings: readerTypography } = useReaderSettings(colorScheme);
+
   const [dataReady, setDataReady] = useState(false);
 
   // ── Search ──────────────────────────────────────────────────────────
@@ -173,6 +233,8 @@ export default function EpubViewerScreen() {
   const [searchCurrent, setSearchCurrent] = useState(0);
   const [searchLoading, setSearchLoading] = useState(false);
   const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** Chapter to open if a citation's quote search finds nothing (W4). */
+  const pendingChapterFallbackRef = useRef<number | null>(null);
 
   // ── Text selection toolbar ──────────────────────────────────────
   const [selectionVisible, setSelectionVisible] = useState(false);
@@ -220,6 +282,9 @@ export default function EpubViewerScreen() {
     initialRate: 1.0,
     onChapterChange: (_chapterIndex, chapter) => {
       // When Read Aloud advances to a new chapter, navigate epub.js to it
+      // The previous section's DOM is about to be replaced, so the
+      // highlighter must forget its cached index and search position.
+      webViewRef.current?.injectJavaScript("raResetHighlight();true;");
       if (webViewRef.current && chapter) {
         const href = toc.find((t) => t.label === chapter.title)?.href;
         if (href) {
@@ -227,30 +292,66 @@ export default function EpubViewerScreen() {
         }
       }
     },
+    onWordBoundary: (position, chunkText) => {
+      // Already throttled by useReadAloud; this is one small injectJavaScript
+      // per spoken word, which the bridge handles comfortably.
+      webViewRef.current?.injectJavaScript(
+        `raHighlightWord(${JSON.stringify(chunkText)},${position.chunkStart},${position.chunkEnd});true;`,
+      );
+    },
     onChunkChange: (chunk, totalChunks) => {
-      // Scroll the WebView so the spoken text appears near the top of the viewport
-      if (webViewRef.current && totalChunks > 0) {
-        const searchText = JSON.stringify(chunk.text.trim().substring(0, 60));
-        const fallbackPercent = totalChunks > 1
+      if (!webViewRef.current || totalChunks <= 0) return;
+      // Band the passage being read and bring it into view. Every engine gets
+      // this; word-level highlighting refines it only on engines that report
+      // word positions. The old version searched this page's own body, which
+      // never holds book text (that lives in epub.js's iframes), so it always
+      // fell through to the proportional jump — now only the fallback for a
+      // passage whose section has not rendered yet.
+      const fallbackPercent =
+        totalChunks > 1
           ? Math.max(0, Math.min(100, (chunk.chunkIndex / (totalChunks - 1)) * 100))
           : 0;
-        webViewRef.current.injectJavaScript(
-          `(function(){` +
-          `var s=${searchText};` +
-          `var w=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT);` +
-          `while(w.nextNode()){` +
-          `var t=w.currentNode.textContent;` +
-          `if(t&&t.indexOf(s)!==-1){` +
-          `var r=document.createRange();r.selectNodeContents(w.currentNode);` +
-          `var rect=r.getBoundingClientRect();` +
-          `window.scrollTo({top:Math.max(0,window.scrollY+rect.top-80),behavior:'smooth'});` +
-          `return;}}` +
+      webViewRef.current.injectJavaScript(
+        `(function(){` +
+          `if(typeof raHighlightChunk==='function'&&raHighlightChunk(${JSON.stringify(chunk.text)}))return;` +
           `window.scrollTo({top:document.documentElement.scrollHeight*${fallbackPercent}/100,behavior:'smooth'});` +
-          `})(); true;`
-        );
-      }
+          `})(); true;`,
+      );
     },
   });
+
+  // ── Push reader typography into the book ───────────────────
+  // Rebuilt whenever a typography setting changes, and re-sent once the
+  // WebView is ready. Building is async only because an embedded typeface
+  // has to be read from the asset bundle and encoded; that result is cached,
+  // so this costs nothing after the first time a face is used.
+  useEffect(() => {
+    if (!webViewReady) return;
+    let cancelled = false;
+
+    buildEpubTypographyCss(readerTypography)
+      .then((css) => {
+        if (cancelled) return;
+        webViewRef.current?.injectJavaScript(
+          `applyTypography(${JSON.stringify(css)});true;`,
+        );
+      })
+      .catch(() => {
+        // A typeface that will not load leaves the book at its own styling,
+        // which is a downgrade rather than a failure.
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    webViewReady,
+    readerTypography.fontFamily,
+    readerTypography.lineHeight,
+    readerTypography.margin,
+    readerTypography.textAlign,
+    readerTypography.paragraphSpacing,
+  ]);
 
   useEffect(() => {
     if (!__DEV__) return;
@@ -306,6 +407,10 @@ export default function EpubViewerScreen() {
     if (!showReadAloud && epubReadAloud.controls.status === "speaking") {
       epubReadAloud.controls.pause();
     }
+    if (!showReadAloud) {
+      // Never leave a word marked on the page after the bar is dismissed.
+      webViewRef.current?.injectJavaScript("raClearHighlight();true;");
+    }
   }, [showReadAloud]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ---- Load on mount ----
@@ -346,6 +451,10 @@ export default function EpubViewerScreen() {
       // Load any previously-saved reading progress
       const prog = await loadReadingProgress(uri!);
       if (prog?.cfi && appSettings.rememberLastPage) savedCfiRef.current = prog.cfi;
+      // A saved page's CFI is an explicit destination the user just chose, so
+      // it wins over both the remembered position and the rememberLastPage
+      // setting (which is about resuming, not about honouring a direct tap).
+      if (savedCfi) savedCfiRef.current = savedCfi;
 
       if (!isMountedRef.current) return;
       setDataReady(true);
@@ -398,6 +507,7 @@ export default function EpubViewerScreen() {
   <div id="area"></div>
   <script>
     var book=null,rendition=null,currentCfi=null;
+    var __RA_PAGINATED__ = ${EPUB_PAGINATED_MODE ? "true" : "false"};
     var __inscribedAnnotations=[];
 
     function sendMsg(type,data){
@@ -412,7 +522,19 @@ export default function EpubViewerScreen() {
           var h=window.innerHeight;
           rendition=book.renderTo("area",{
             width:w,
-            flow:"scrolled-doc",spread:"none",manager:"continuous"
+            flow:__RA_PAGINATED__?"paginated":"scrolled-doc",
+            spread:"none",
+            manager:__RA_PAGINATED__?"default":"continuous"
+          });
+
+          // epub.js builds a fresh document per section, so reader
+          // typography has to be re-applied every time one renders —
+          // this is what keeps it alive across chapter turns, theme
+          // changes and font-size changes.
+          rendition.on("rendered",function(){
+            __raEachContents(__raApplyTypographyTo);
+            // A section that has just appeared may hold the passage being read.
+            __raReapply();
           });
 
           rendition.themes.register("light",{body:{background:"#ffffff",color:"#000000"}});
@@ -634,11 +756,170 @@ export default function EpubViewerScreen() {
       }
     }
 
+    // Saved Pages (R1): report the text of the section currently on screen.
+    // A SEPARATE message type from 'location' on purpose — that one fires on
+    // every scroll and drives reading progress; overloading it would couple
+    // an occasional one-shot capture to a high-frequency channel.
+    //
+    // What comes back is the BOOKMARKED PAGE, not a preview of it: blocks are
+    // joined with a BLANK LINE, because paragraph structure is what makes it
+    // read as a page on /saved-page, and the cap is SNAPSHOT_MAX rather than
+    // an excerpt-sized 1200.
+    function captureVisibleText(){
+      try{
+        var LIMIT=${SNAPSHOT_MAX};
+        var contents=rendition?rendition.getContents():null;
+        if(!contents||!contents.length){sendMsg('visible-text',{text:''});return;}
+        var parts=[];
+        var size=0;
+        for(var ci=0;ci<contents.length;ci++){
+          var d=contents[ci].document;
+          if(!d||!d.body)continue;
+          var view=d.defaultView;
+          var vh=(view&&view.innerHeight)||0;
+          var nodes=d.body.querySelectorAll('p,li,h1,h2,h3,h4,h5,h6,blockquote');
+          for(var i=0;i<nodes.length;i++){
+            var r=nodes[i].getBoundingClientRect();
+            // In scrolled-doc mode every section is laid out; keep only what
+            // is inside the viewport. vh of 0 (paginated) keeps everything.
+            if(vh===0||(r.bottom>0&&r.top<vh&&r.height>0)){
+              // Horizontal whitespace only — blank lines are the structure.
+              var t=(nodes[i].textContent||'').replace(/[ \\t\\u00a0]+/g,' ').trim();
+              if(t){parts.push(t);size+=t.length+2;}
+            }
+            if(size>LIMIT)break;
+          }
+          if(size>LIMIT)break;
+        }
+        sendMsg('visible-text',{text:parts.join('\\n\\n').slice(0,LIMIT)});
+      }catch(e){sendMsg('visible-text',{text:''});}
+    }
+
+    // The same region as MARKUP — the reflow answer to a picture of the page.
+    // An EPUB section cannot be rasterised here, but its own markup re-renders
+    // on /saved-page with the fonts, tables and lists that text loses.
+    // Capture and sanitiser come from utils/pageHtmlCapture.ts, shared with the
+    // DOCX reader so the two paths cannot drift apart.
+    ${PAGE_HTML_CAPTURE_JS}
+    function captureVisibleHtml(){
+      try{
+        var contents=rendition?rendition.getContents():null;
+        if(!contents||!contents.length){sendMsg('visible-html',{html:'',css:''});return;}
+        var htmlParts=[];
+        var css='';
+        for(var ci=0;ci<contents.length;ci++){
+          var d=contents[ci].document;
+          if(!d||!d.body)continue;
+          var view=d.defaultView;
+          var vh=(view&&view.innerHeight)||0;
+          var res=__inscribedCaptureVisibleHtml(d,d.body,vh);
+          if(res.html)htmlParts.push(res.html);
+          if(!css&&res.css)css=res.css;
+        }
+        sendMsg('visible-html',{html:htmlParts.join(''),css:css});
+      }catch(e){sendMsg('visible-html',{html:'',css:''});}
+    }
+
     function goToCfi(cfi){if(rendition)rendition.display(cfi);}
     function goToHref(href){if(rendition)rendition.display(href);}
     function changeTheme(t){if(rendition)rendition.themes.select(t);document.body.style.background=t==='dark'?'#1a1a1a':t==='sepia'?'#f5f1e8':'#ffffff';}
     function changeFontSize(s){if(rendition)rendition.themes.fontSize(s+"%");}
     function setAnnotations(anns){__inscribedAnnotations=anns||[];}
+
+    // ── Reader typography ──────────────────────────────
+    // One replaceable <style> per section document. epub.js ships an
+    // addStylesheetRules() helper, but its own id lookup never matches, so it
+    // appends a new <style> on every call and leaks one per settings change.
+    var __typographyCSS = '';
+
+    function __raApplyTypographyTo(c){
+      if(!c||!c.document)return;
+      var d=c.document;
+      var el=d.getElementById('inscribed-typography');
+      if(!el){
+        el=d.createElement('style');
+        el.id='inscribed-typography';
+        (d.head||d.documentElement).appendChild(el);
+      }
+      el.textContent=__typographyCSS;
+    }
+
+    function applyTypography(css){
+      __typographyCSS=css||'';
+      __raEachContents(__raApplyTypographyTo);
+    }
+
+    // The Read Aloud highlighter factory, defined in this page. See the bridge
+    // below for why it cannot live inside the book's own iframes.
+    ${READ_ALOUD_HIGHLIGHTER_SOURCE}
+    // ── Read Aloud word highlighting ───────────────────────
+    // epub.js puts each section in an iframe sandboxed with only
+    // "allow-same-origin" (allowScriptedContent defaults to false), so no
+    // script can run inside a book's pages; installing the highlighter there
+    // silently did nothing. It runs out here instead and reaches into each
+    // section's document through the same-origin DOM, one instance per
+    // epub.js Contents. Sections are rebuilt as the reader moves, and a
+    // rebuilt section is a new Contents with a fresh highlighter.
+    function __raEachContents(fn){
+      if(!rendition||!rendition.getContents)return;
+      var cs=rendition.getContents();
+      if(!cs)return;
+      if(!cs.length&&cs.document)cs=[cs];
+      for(var i=0;i<cs.length;i++){try{fn(cs[i]);}catch(e){}}
+    }
+
+    // The last highlight asked for, so a section that renders afterwards (a
+    // chapter turn, a relocation) is highlighted as soon as it exists.
+    var __raLast=null;
+
+    function __raFor(c){
+      if(!c||!c.document||typeof window.__raCreateHighlighter!=='function')return null;
+      if(!c.__raHl||c.__raHlDoc!==c.document){
+        c.__raHl=window.__raCreateHighlighter(c.document);
+        c.__raHlDoc=c.document;
+      }
+      return c.__raHl;
+    }
+
+    // Run against every rendered section until one holds the text, clearing
+    // the rest so an old highlight never lingers in a neighbouring section.
+    function __raApply(run){
+      var found=false;
+      __raEachContents(function(c){
+        var hl=__raFor(c);
+        if(!hl)return;
+        if(!found&&run(hl))found=true;
+        else hl.clear();
+      });
+      return found;
+    }
+
+    function raHighlightWord(text,start,end){
+      __raLast={text:text,start:start,end:end};
+      return __raApply(function(hl){return hl.show(text,start,end);});
+    }
+
+    function raHighlightChunk(text){
+      __raLast={text:text,start:-1,end:-1};
+      return __raApply(function(hl){return hl.showChunk(text);});
+    }
+
+    function raClearHighlight(){
+      __raLast=null;
+      __raEachContents(function(c){if(c.__raHl)c.__raHl.clear();});
+    }
+
+    function raResetHighlight(){
+      __raLast=null;
+      __raEachContents(function(c){if(c.__raHl)c.__raHl.reset();});
+    }
+
+    function __raReapply(){
+      var last=__raLast;
+      if(!last)return;
+      if(last.start<0)raHighlightChunk(last.text);
+      else raHighlightWord(last.text,last.start,last.end);
+    }
 
     // Poll for ReactNativeWebView bridge before signaling ready
     (function waitForBridge(){
@@ -781,8 +1062,31 @@ export default function EpubViewerScreen() {
             setError((msg as WVErrorMsg).data.message);
             break;
 
+          // Bookmarks: the on-screen page, as markup and as text.
+          case "visible-html": {
+            const waiters = visibleHtmlWaitersRef.current;
+            visibleHtmlWaitersRef.current = [];
+            const payload = msg.data as
+              | { html?: string; css?: string }
+              | undefined;
+            for (const resolve of waiters) {
+              resolve({ html: payload?.html ?? "", css: payload?.css ?? "" });
+            }
+            break;
+          }
+          case "visible-text": {
+            const waiters = visibleTextWaitersRef.current;
+            visibleTextWaitersRef.current = [];
+            const text = typeof msg.data?.text === "string" ? msg.data.text : "";
+            for (const resolve of waiters) resolve(text);
+            break;
+          }
+
           case "location": {
             const loc = (msg as WVLocationMsg).data;
+            // A relocation is reading activity (R2's guard).
+            noteActivityRef.current?.();
+            currentCfiRef.current = loc.cfi || null;
             setProgress(loc.percentage);
             // Persist progress
             if (uri) {
@@ -812,6 +1116,13 @@ export default function EpubViewerScreen() {
             setSearchMatchCount(sr.count);
             setSearchCurrent(sr.current);
             setSearchLoading(false);
+            const fallbackChapter = pendingChapterFallbackRef.current;
+            if (fallbackChapter !== null) {
+              pendingChapterFallbackRef.current = null;
+              if (sr.count === 0) {
+                webViewRef.current?.injectJavaScript(epubShowChapterScript(fallbackChapter));
+              }
+            }
             break;
           }
 
@@ -863,6 +1174,222 @@ export default function EpubViewerScreen() {
     });
     if (!result.success) showOpenFailedAlert(displayName, result.error);
   }, [uri, displayName]);
+
+  // ── Saved Pages (R1) + reading sessions (R2) ─────────────────────
+  /**
+   * The WHOLE text of the current position: the visible text from the epub.js
+   * rendition, over its own `visible-text` message. This is the page the
+   * bookmark keeps — useSavePage stores it as the snapshot and takes the list
+   * excerpt from its first EXCERPT_MAX characters.
+   *
+   * Resolves "" rather than hanging, and never blocks the save.
+   */
+  const captureEpubPageText = useCallback((): Promise<string> => {
+    const webView = webViewRef.current;
+    if (!webView) return Promise.resolve("");
+    return new Promise<string>((resolve) => {
+      // Only HORIZONTAL whitespace is collapsed — the blank lines between
+      // blocks are the page's paragraph structure.
+      const done = (text: string) =>
+        resolve(
+          (text || "")
+            .replace(/[ \t\u00a0]+/g, " ")
+            .trim()
+            .slice(0, SNAPSHOT_MAX),
+        );
+      const timer = setTimeout(() => {
+        visibleTextWaitersRef.current = visibleTextWaitersRef.current.filter(
+          (w) => w !== wrapped,
+        );
+        resolve("");
+      }, 4000);
+      const wrapped = (text: string) => {
+        clearTimeout(timer);
+        done(text);
+      };
+      visibleTextWaitersRef.current.push(wrapped);
+      webView.injectJavaScript("captureVisibleText();true;");
+    });
+  }, []);
+
+  /** The chapter label for the current position, when the TOC offers one. */
+  const chapterLabel = useMemo(() => {
+    if (toc.length === 0) return undefined;
+    const index = Math.min(
+      toc.length - 1,
+      Math.max(0, Math.round((progress / 100) * (toc.length - 1))),
+    );
+    return toc[index]?.label?.trim() || undefined;
+  }, [toc, progress]);
+
+  /**
+   * The MARKUP of the current position, over its own `visible-html` message.
+   * Resolves empty rather than hanging, and never blocks the save.
+   */
+  const captureEpubPageHtml = useCallback((): Promise<{
+    html: string;
+    css: string;
+  }> => {
+    const webView = webViewRef.current;
+    if (!webView) return Promise.resolve({ html: "", css: "" });
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        visibleHtmlWaitersRef.current = visibleHtmlWaitersRef.current.filter(
+          (w) => w !== wrapped,
+        );
+        resolve({ html: "", css: "" });
+      }, 4000);
+      const wrapped = (result: { html: string; css: string }) => {
+        clearTimeout(timer);
+        resolve(result);
+      };
+      visibleHtmlWaitersRef.current.push(wrapped);
+      webView.injectJavaScript("captureVisibleHtml();true;");
+    });
+  }, []);
+
+  const savePageState = useSavePage({
+    uri,
+    name: displayName,
+    location: {
+      locatorType: "chapter",
+      cfi: currentCfiRef.current ?? undefined,
+      chapterLabel,
+    },
+    capturePageText: captureEpubPageText,
+    capturePageHtml: captureEpubPageHtml,
+  });
+
+  const [bookmarkToast, setBookmarkToast] = useState<{
+    message: string;
+    ok: boolean;
+  } | null>(null);
+  const bookmarkToastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const showBookmarkToast = useCallback((message: string, ok: boolean) => {
+    setBookmarkToast({ message, ok });
+    if (bookmarkToastTimer.current) clearTimeout(bookmarkToastTimer.current);
+    bookmarkToastTimer.current = setTimeout(() => setBookmarkToast(null), 2400);
+  }, []);
+  useEffect(
+    () => () => {
+      if (bookmarkToastTimer.current) clearTimeout(bookmarkToastTimer.current);
+    },
+    [],
+  );
+
+  /** Bookmark or un-bookmark the current place, and confirm it on screen. */
+  const handleSavePageToggle = useCallback(
+    async (seedExcerpt?: string) => {
+      const wasSaved = savePageState.isSaved;
+      const result = await savePageState.toggle(seedExcerpt);
+      if (wasSaved) {
+        showBookmarkToast("Bookmark removed", true);
+        return;
+      }
+      if ("ok" in result && result.ok) {
+        showBookmarkToast(
+          chapterLabel ? `${chapterLabel} bookmarked` : "Page bookmarked",
+          true,
+        );
+        return;
+      }
+      showBookmarkToast(
+        "message" in result ? result.message : "Could not bookmark this page.",
+        false,
+      );
+    },
+    [savePageState, chapterLabel, showBookmarkToast],
+  );
+
+  const { noteActivity } = useReadingSession({
+    uri,
+    name: displayName,
+    isSpeaking: showReadAloud,
+    pageLabel: chapterLabel,
+    enabled: !loading && !error,
+  });
+  noteActivityRef.current = noteActivity;
+
+  // ── Citation navigation (W4) ─────────────────────────────────────
+  // The book's full-text search finds the cited words and shows the match;
+  // if nothing matches, the cited chapter opens instead.
+  const goToEpubCitation = useCallback((chapterIndex: number, quoteText: string) => {
+    const chapter = Math.floor(chapterIndex);
+    const run = pickSearchRun(quoteText || "", 4, 7);
+    if (run) {
+      pendingChapterFallbackRef.current = chapter > 0 ? chapter : null;
+      setShowSearch(true);
+      setSearchQuery(run);
+      setSearchLoading(true);
+      webViewRef.current?.injectJavaScript(`epubSearch(${JSON.stringify(run)});true;`);
+      return true;
+    }
+    if (chapter > 0) {
+      webViewRef.current?.injectJavaScript(epubShowChapterScript(chapter));
+      return true;
+    }
+    return false;
+  }, []);
+
+  const locatorTarget = useMemo(
+    () => parseLocatorParams({ locatorType, locatorIndex, quote }),
+    [locatorType, locatorIndex, quote],
+  );
+  const locatorAppliedRef = useRef(false);
+  const [sourceCard, setSourceCard] = useState<{ label: string; quote: string } | null>(null);
+  const closeSourceCard = useCallback(() => setSourceCard(null), []);
+  useEffect(() => {
+    if (!locatorTarget || locatorAppliedRef.current || loading || !webViewReady) return;
+    locatorAppliedRef.current = true;
+    setSourceCard({
+      label: locatorLabel(locatorTarget.locatorType, locatorTarget.index),
+      quote: locatorTarget.quote,
+    });
+    setTimeout(() => {
+      if (isMountedRef.current) {
+        goToEpubCitation(
+          locatorTarget.locatorType === "chapter" ? locatorTarget.index : 0,
+          locatorTarget.quote,
+        );
+      }
+    }, 600);
+  }, [locatorTarget, loading, webViewReady, goToEpubCitation]);
+
+  // ── In-reader Gozlin panel (AI_READER_PANEL, W7) ─────────────────
+  const aiPanelRef = useRef<ReaderAIPanelHandle>(null);
+  const panelDocument = useMemo(() => {
+    const docUri = dataReady ? normalizedUriRef.current || uri : uri;
+    return docUri
+      ? { uri: docUri, name: name || "document.epub", mimeType: "application/epub+zip" }
+      : null;
+  }, [uri, name, dataReady]);
+  const handlePanelCitation = useCallback(
+    (citation: AICitation) =>
+      goToEpubCitation(
+        citation.locator?.type === "chapter" ? citation.locator.index : 0,
+        citation.quote,
+      ),
+    [goToEpubCitation],
+  );
+  const openChatWithDocumentScreen = useCallback(() => {
+    const docUri = normalizedUriRef.current || uri;
+    if (!docUri) return;
+    router.push({
+      pathname: "/chat-with-document",
+      params: {
+        uri: docUri,
+        name: name || "document.epub",
+        mimeType: "application/epub+zip",
+      },
+    });
+  }, [uri, name]);
+  const handleChatWithDocument = useCallback(() => {
+    if (AI_READER_PANEL) {
+      aiPanelRef.current?.open({ state: "expanded" });
+      return;
+    }
+    openChatWithDocumentScreen();
+  }, [openChatWithDocumentScreen]);
 
   const handleTocSelect = useCallback((href: string) => {
     webViewRef.current?.injectJavaScript(`goToHref("${href}");true;`);
@@ -1090,6 +1617,11 @@ export default function EpubViewerScreen() {
 
   const handleSelectionSearch = useCallback(() => {
     if (!selectionText) return;
+    if (AI_READER_PANEL) {
+      aiPanelRef.current?.open({ selection: selectionText });
+      setSelectionVisible(false);
+      return;
+    }
     router.push({ pathname: "/gozlin", params: { prompt: selectionText } });
     setSelectionVisible(false);
   }, [selectionText]);
@@ -1197,6 +1729,9 @@ export default function EpubViewerScreen() {
     <SafeAreaView
       style={[styles.container, { backgroundColor: theme.background.primary }]}
       edges={["top"]}
+      // R2's activity signal. onTouchStart does not capture or consume the
+      // touch, so every existing gesture behaves exactly as before.
+      onTouchStart={() => noteActivityRef.current?.()}
     >
       <View onLayout={(e) => setHeaderHeight(e.nativeEvent.layout.height)}>
         <Header
@@ -1210,18 +1745,15 @@ export default function EpubViewerScreen() {
           onToggleSettings={() => setShowSettings(true)}
           onReadAloud={readAloudEnabled ? () => setShowReadAloud(true) : undefined}
           onSearchText={handleOpenSearch}
-          onChatWithDocument={() => {
-            const docUri = normalizedUriRef.current || uri;
-            if (!docUri) return;
-            router.push({
-              pathname: "/chat-with-document",
-              params: {
-                uri: docUri,
-                name: name || "document.epub",
-                mimeType: "application/epub+zip",
-              },
-            });
-          }}
+          onChatWithDocument={handleChatWithDocument}
+          onSavePage={
+            SAVED_PAGES && savePageState.enabled
+              ? () => {
+                  void handleSavePageToggle();
+                }
+              : undefined
+          }
+          isPageSaved={savePageState.isSaved}
         />
       </View>
 
@@ -1341,7 +1873,25 @@ export default function EpubViewerScreen() {
           epubReadAloud.chunks.length > 0
         }
         colorScheme={colorScheme}
+        sectionLabel="chapter"
         onVoicePress={() => setShowVoicePicker(true)}
+        onPronunciationPress={() => {
+          // The sheet's Test button speaks — pause so the two do not compete
+          // for the engine and leave playback stalled mid-chunk.
+          if (epubReadAloud.controls.status === "speaking") {
+            epubReadAloud.controls.pause();
+          }
+          setShowPronunciation(true);
+        }}
+      />
+
+      {/* Pronunciation rules */}
+      <PronunciationEditor
+        visible={showPronunciation}
+        onClose={() => setShowPronunciation(false)}
+        documentId={readAloudFilePath || undefined}
+        documentName={bookInfo.title || displayName}
+        colorScheme={colorScheme}
       />
 
       {/* ── Text selection toolbar ────────────────────────────────── */}
@@ -1359,6 +1909,20 @@ export default function EpubViewerScreen() {
         onCopy={handleSelectionCopy}
         onSearch={handleSelectionSearch}
         onDismiss={handleSelectionDismiss}
+        onSavePage={
+          SAVED_PAGES && savePageState.enabled
+            ? (selectedText) => {
+                void handleSavePageToggle(selectedText);
+              }
+            : undefined
+        }
+      />
+
+      {/* ── Bookmark confirmation (R1) ─────────────────────────── */}
+      <BookmarkToast
+        message={bookmarkToast?.message ?? null}
+        ok={bookmarkToast?.ok}
+        bottomOffset={showReadAloud ? READ_ALOUD_PANEL_CLEARANCE : 0}
       />
 
       <VoicePicker
@@ -1366,8 +1930,33 @@ export default function EpubViewerScreen() {
         onClose={() => setShowVoicePicker(false)}
         colorScheme={colorScheme}
       />
+
+      {/* ── Source card for a citation opened from Chat with File ── */}
+      {sourceCard && (
+        <View style={SOURCE_CARD_OVERLAY_STYLE} pointerEvents="box-none">
+          <SourceCard label={sourceCard.label} quote={sourceCard.quote} onClose={closeSourceCard} />
+        </View>
+      )}
+
+      {/* ── In-reader Gozlin panel (AI_READER_PANEL) ─────────────── */}
+      {AI_READER_PANEL && (
+        <ReaderAIPanel
+          ref={aiPanelRef}
+          document={panelDocument}
+          readerKind="epub"
+          onNavigateToCitation={handlePanelCitation}
+          bottomOffset={showReadAloud ? READ_ALOUD_PANEL_CLEARANCE : 0}
+          onOpenFullScreen={openChatWithDocumentScreen}
+        />
+      )}
     </SafeAreaView>
   );
+}
+
+/** JS that opens a chapter (1-based spine index) inside the epub.js WebView. */
+function epubShowChapterScript(chapter: number): string {
+  const index = Math.max(0, Math.floor(chapter) - 1);
+  return `(function(){try{var s=book.spine.get(${index});if(s){rendition.display(s.href);}}catch(e){}})();true;`;
 }
 
 // ============================================================================
@@ -1387,6 +1976,9 @@ interface HeaderProps {
   onReadAloud?: () => void;
   onSearchText?: () => void;
   onChatWithDocument?: () => void;
+  /** Bookmarks (R1) — omitted when the feature is off, as for the other entries. */
+  onSavePage?: () => void;
+  isPageSaved?: boolean;
 }
 
 function Header({
@@ -1401,6 +1993,8 @@ function Header({
   onReadAloud,
   onSearchText,
   onChatWithDocument,
+  onSavePage,
+  isPageSaved = false,
 }: HeaderProps) {
   const [showOverflow, setShowOverflow] = React.useState(false);
 
@@ -1540,6 +2134,28 @@ function Header({
                   style={[styles.overflowLabel, { color: theme.text.primary }]}
                 >
                   Chat with File
+                </Text>
+              </Pressable>
+            )}
+
+            {/* Bookmark */}
+            {onSavePage && (
+              <Pressable
+                style={styles.overflowItem}
+                onPress={() => {
+                  setShowOverflow(false);
+                  onSavePage();
+                }}
+              >
+                <MaterialIcons
+                  name={isPageSaved ? "bookmark" : "bookmark-border"}
+                  size={20}
+                  color={theme.text.primary}
+                />
+                <Text
+                  style={[styles.overflowLabel, { color: theme.text.primary }]}
+                >
+                  {isPageSaved ? "Remove Bookmark" : "Bookmark"}
                 </Text>
               </Pressable>
             )}

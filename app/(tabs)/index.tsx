@@ -10,6 +10,7 @@ import { colors } from "@/constants/theme";
 import { useRecentDocuments as useDocLibRecentDocuments } from "@/hooks/useDocLib";
 import { useFileIndex } from "@/hooks/useFileIndex";
 import { useReadingProgressFor } from "@/hooks/useReadingProgress";
+import { useTabDockInset } from "@/hooks/useTabDock";
 import {
   FileInfo,
   formatDate,
@@ -210,6 +211,10 @@ export default function HomeScreen() {
   const activityAccents = noir ? NOIR_ACCENTS : ACTIVITY_ACCENTS;
   const backgroundColor = t.background;
   const textColor = t.text;
+  // Room for the floating tab dock at the end of the scroll, so the last card
+  // can be scrolled clear of it. It goes on the scroll *content*, never on the
+  // screen container — the background is meant to run on underneath it.
+  const dockInset = useTabDockInset();
   // Theme-aware container outline: light in dark mode, darker in light mode
   const containerBorderColor =
     mode === "dark" ? "rgba(255,255,255,0.28)" : "#B0B0B0";
@@ -541,7 +546,10 @@ export default function HomeScreen() {
   }, []);
 
   return (
-    <SafeAreaView style={[styles.safeArea, { backgroundColor }]}>
+    <SafeAreaView
+      style={[styles.safeArea, { backgroundColor }]}
+      edges={["top"]}
+    >
       {/* Modern Header with Gradient Effect */}
       <AppHeaderContainer>
         <GradientView
@@ -635,7 +643,10 @@ export default function HomeScreen() {
         <ScrollView
           style={styles.scrollView}
           showsVerticalScrollIndicator={false}
-          contentContainerStyle={styles.scrollContent}
+          contentContainerStyle={[
+            styles.scrollContent,
+            { paddingBottom: dockInset + 8 },
+          ]}
         >
           {/* Activity header + Bento — scale/fade together */}
           <RNAnimated.View

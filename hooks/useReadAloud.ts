@@ -8,23 +8,37 @@
  *  - Provides play / pause / stop / skip / setRate / jumpToChunk actions
  *  - Page-based skipping (next/prev page)
  *  - Time-based skipping (~10 s forward/backward via chunk estimation)
+ *  - Owns the sleep timer, so it can never drift from playback state
+ *  - Applies pronunciation rules on the way to the engine
  *  - Cleans up on unmount
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { AppState } from "react-native";
 
 import {
-  notifyReadAloudEndOfFile,
-  notifyReadAloudPlaying,
-  notifyReadAloudStopped,
-} from "@/services/notificationService";
+    getRulesForSync,
+    loadRules,
+    subscribeRules,
+} from "@/services/pronunciationService";
 import { readAloudPersistence } from "@/services/readAloudPersistence";
+import { loadSettings } from "@/services/settingsService";
 import {
-    speakChunk,
+    getPitch,
+    isSpeaking,
+    pauseSpeaking,
+    resumeSpeaking,
+    speakSpokenText,
     stopSpeaking,
+    setPitch as ttsSetPitch,
     setRate as ttsSetRate,
 } from "@/services/ttsService";
-import type { TextChunk } from "@/utils/chunkText";
+import {
+    CHUNK_LAYOUT_VERSION,
+    mapLegacyChunkIndex,
+    type TextChunk,
+} from "@/utils/chunkText";
+import { applyPronunciation } from "@/utils/pronunciation";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -42,18 +56,58 @@ export type SkipResult =
   | { kind: "jumped"; message: string }
   | { kind: "boundary"; message: string };
 
+/**
+ * Where the engine is, word by word.
+ *
+ * Two coordinate spaces, because the consumers need different ones:
+ *  - `chunkStart`/`chunkEnd` are offsets inside the chunk's own text, which is
+ *    what the WebView highlighters use — they locate the chunk in the rendered
+ *    DOM first, then the word inside it.
+ *  - `displayStart`/`displayEnd` are absolute within the page or chapter's
+ *    **cleaned** text. Useful for progress and analysis, but note that a
+ *    renderer shows the raw source, which cleaning has changed.
+ *
+ * All offsets are in display coordinates: pronunciation replacements have
+ * already been mapped back, so a respelled word reports the span of the word
+ * as written.
+ */
+export interface WordBoundaryPosition {
+  chunkIndex: number;
+  pageIndex: number;
+  chunkStart: number;
+  chunkEnd: number;
+  displayStart: number;
+  displayEnd: number;
+}
+
 export interface UseReadAloudOptions {
   /** Full flat chunk list (across all pages). */
   chunks: TextChunk[];
   /** Called whenever playback advances to a new chunk. */
   onChunkChange?: (chunk: TextChunk) => void;
+  /**
+   * Called as each word is spoken, where the engine reports word boundaries.
+   *
+   * Throttled and suppressed while the app is backgrounded — see
+   * MIN_BOUNDARY_INTERVAL_MS. Never called at all on engines that report no
+   * ranges, which is the signal to stay with chunk-level highlighting.
+   */
+  onWordBoundary?: (position: WordBoundaryPosition) => void;
   /** Initial playback rate (0.75 – 2.0). Defaults to 1.0. */
   initialRate?: number;
+  /** Initial voice pitch (0.5 – 2.0). Defaults to 1.0. */
+  initialPitch?: number;
+  /** Initial inter-paragraph pause in ms (0 – 2000). Defaults to 0 (off). */
+  initialParagraphPauseMs?: number;
   /** Document ID for persistence. If provided, state will be saved/restored. */
   documentId?: string;
   /** Whether to persist Read Aloud state. Defaults to true if documentId is provided. */
   persistState?: boolean;
-  /** Display name of the document — used in Read Aloud notifications. */
+  /**
+   * Display name of the document. Currently unused by playback itself —
+   * retained because the forthcoming MediaSession/Now-Playing integration
+   * needs a title to show on the lock screen.
+   */
   documentName?: string;
 }
 
@@ -62,6 +116,8 @@ export interface ReadAloudControls {
   currentChunkIndex: number;
   currentPageIndex: number;
   rate: number;
+  /** Voice pitch (0.5 – 2.0). 1.0 is the voice's natural pitch. */
+  pitch: number;
   totalChunks: number;
   totalPages: number;
   play: (fromIndex?: number) => void;
@@ -77,6 +133,22 @@ export interface ReadAloudControls {
   skipBack10s: () => void;
   jumpToChunk: (index: number) => void;
   setRate: (rate: number) => void;
+  /** Set the voice pitch. Clamped to 0.5 – 2.0 and saved per document. */
+  setPitch: (pitch: number) => void;
+  /** Silence inserted between paragraphs, in ms. 0 disables it. */
+  paragraphPauseMs: number;
+  /** Set the inter-paragraph pause. Clamped to 0 – 2000 ms. */
+  setParagraphPauseMs: (ms: number) => void;
+
+  // ── Sleep timer ──────────────────────────────────────
+
+  /** Minutes remaining on the sleep timer, or null when unset. */
+  sleepTimerMinutesLeft: number | null;
+  /** Arm the timer. Pass null to cancel. */
+  setSleepTimer: (minutes: number | null) => void;
+  /** Stop at the end of the current page/chapter instead of at a wall-clock time. */
+  setSleepAtSectionEnd: (enabled: boolean) => void;
+  sleepAtSectionEnd: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -85,6 +157,15 @@ export interface ReadAloudControls {
 
 /** Average words-per-minute at 1× speed (conservative estimate). */
 const BASE_WPM = 155;
+
+/**
+ * Floor on the gap between word-boundary callbacks, ~10/s.
+ *
+ * Speech runs at roughly 3 words a second at 1×, so this almost never drops
+ * anything; it is a ceiling on bridge traffic for fast rates and engines that
+ * report sub-word ranges, not a feature of normal playback.
+ */
+const MIN_BOUNDARY_INTERVAL_MS = 100;
 
 /** Count words in a string. */
 function wordCount(text: string): number {
@@ -103,12 +184,18 @@ function estimateChunkDuration(chunk: TextChunk, rate: number): number {
 // Persistence helper
 // ---------------------------------------------------------------------------
 
+/**
+ * `saveState` replaces the whole stored record, so every call site must pass
+ * the full set of per-book playback preferences — omitting `pitch` here would
+ * silently erase a pitch the user had chosen for this document.
+ */
 function saveReadAloudState(
   documentId: string | undefined,
   persistState: boolean,
   status: ReadAloudStatus,
   chunkIndex: number,
   rate: number,
+  pitch: number,
 ): void {
   if (persistState && documentId) {
     readAloudPersistence
@@ -117,6 +204,8 @@ function saveReadAloudState(
         chunkIndex,
         status,
         rate,
+        pitch,
+        chunkLayout: CHUNK_LAYOUT_VERSION,
         timestamp: Date.now(),
       })
       .catch((error) => {
@@ -132,26 +221,190 @@ function saveReadAloudState(
 export function useReadAloud({
   chunks,
   onChunkChange,
+  onWordBoundary,
   initialRate = 1.0,
+  initialPitch = 1.0,
+  initialParagraphPauseMs = 0,
   documentId,
   persistState = !!documentId,
-  documentName,
 }: UseReadAloudOptions): ReadAloudControls {
   const [status, setStatus] = useState<ReadAloudStatus>("idle");
   const [currentChunkIndex, setCurrentChunkIndex] = useState(0);
   const [rate, setRateState] = useState(initialRate);
+  const [pitch, setPitchState] = useState(initialPitch);
+  const [paragraphPauseMs, setParagraphPauseMsState] = useState(
+    initialParagraphPauseMs,
+  );
 
   // Keep refs so TTS callbacks always read the latest values
   const indexRef = useRef(0);
   const statusRef = useRef<ReadAloudStatus>("idle");
   const chunksRef = useRef<TextChunk[]>(chunks);
   const rateRef = useRef(initialRate);
+  const pitchRef = useRef(initialPitch);
   const mountedRef = useRef(true);
   const documentIdRef = useRef(documentId);
   const persistStateRef = useRef(persistState);
-  const documentNameRef = useRef(documentName ?? "document");
-  // Tracks whether we've fired the "playing" notification for the current session
-  const hasNotifiedPlayingRef = useRef(false);
+  // Set once the user explicitly picks a rate/pitch, so the async global-default
+  // resolution below can never overwrite a deliberate choice made while it was
+  // still reading from storage.
+  const userTouchedRateRef = useRef(false);
+  const userTouchedPitchRef = useRef(false);
+  const userTouchedPauseRef = useRef(false);
+
+  // ── Word boundaries ────────────────────────────────────────────
+  // Held in refs so the speak callbacks never need re-creating, and so a
+  // backgrounded app stops paying to cross the bridge for invisible updates.
+  const onWordBoundaryRef = useRef(onWordBoundary);
+  const lastBoundaryEmitRef = useRef(0);
+  const appActiveRef = useRef(true);
+
+  useEffect(() => {
+    onWordBoundaryRef.current = onWordBoundary;
+  }, [onWordBoundary]);
+
+  /**
+   * Lifecycle.
+   *
+   * Two things happen around a trip to the background, and neither used to be
+   * handled at all:
+   *
+   *  - **Leaving.** The OS can reclaim the process without warning. Position
+   *    is normally written when a chunk starts, which could be minutes ago,
+   *    so it is written again here — otherwise a reader who gets a phone call
+   *    and never comes back loses their place.
+   *  - **Returning.** iOS keeps speaking behind the lock screen once the
+   *    audio background mode is configured; Android's TTS engine goes down
+   *    with the app. If we come back still believing we are speaking while
+   *    the device is silent, the bar shows Pause on a stopped reader and the
+   *    only way out is to stop and start again. Asking the engine what is
+   *    actually happening and settling on "paused" keeps the controls honest.
+   */
+  useEffect(() => {
+    // Start from "active" rather than trusting AppState.currentState: a reader
+    // is mounting because someone is looking at it, and an "unknown" or stale
+    // initial value would silently drop every word boundary until the app next
+    // changed state.
+    appActiveRef.current = true;
+
+    const sub = AppState.addEventListener("change", (next) => {
+      const wasActive = appActiveRef.current;
+      appActiveRef.current = next === "active";
+
+      if (next !== "active") {
+        if (statusRef.current === "speaking" || statusRef.current === "paused") {
+          saveReadAloudState(
+            documentIdRef.current,
+            persistStateRef.current,
+            statusRef.current,
+            indexRef.current,
+            rateRef.current,
+            pitchRef.current,
+          );
+        }
+        return;
+      }
+
+      if (!wasActive && statusRef.current === "speaking") {
+        isSpeaking()
+          .then((speaking) => {
+            // Re-check: the user may have pressed play while we were asking.
+            if (!mountedRef.current) return;
+            if (speaking || statusRef.current !== "speaking") return;
+
+            statusRef.current = "paused";
+            setStatus("paused");
+            saveReadAloudState(
+              documentIdRef.current,
+              persistStateRef.current,
+              "paused",
+              indexRef.current,
+              rateRef.current,
+              pitchRef.current,
+            );
+          })
+          .catch(() => {
+            // No engine to ask — leave the state alone rather than guessing.
+          });
+      }
+    });
+
+    return () => sub.remove();
+  }, []);
+
+  /**
+   * Forward one word boundary to the consumer.
+   *
+   * `charIndex`/`charLength` arrive already mapped to display coordinates by
+   * ttsService, so nothing here needs to know pronunciation rules exist.
+   */
+  const emitWordBoundary = useCallback(
+    (chunk: TextChunk, charIndex: number, charLength: number) => {
+      const cb = onWordBoundaryRef.current;
+      if (!cb || !appActiveRef.current) return;
+
+      const now = Date.now();
+      if (now - lastBoundaryEmitRef.current < MIN_BOUNDARY_INTERVAL_MS) return;
+      lastBoundaryEmitRef.current = now;
+
+      const chunkStart = Math.max(0, Math.min(charIndex, chunk.text.length));
+      const chunkEnd = Math.max(
+        chunkStart,
+        Math.min(chunkStart + charLength, chunk.text.length),
+      );
+      const base = chunk.charStart ?? 0;
+
+      cb({
+        chunkIndex: chunk.chunkIndex,
+        pageIndex: chunk.pageIndex,
+        chunkStart,
+        chunkEnd,
+        displayStart: base + chunkStart,
+        displayEnd: base + chunkEnd,
+      });
+    },
+    [],
+  );
+
+  // ── Pronunciation ──────────────────────────────────────────────
+  // Read synchronously on the speak path — an await between chunks would be
+  // audible — so rules are mirrored into a ref and kept fresh by subscription.
+  const rulesRef = useRef(getRulesForSync(documentId));
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const sync = () => {
+      if (!cancelled) rulesRef.current = getRulesForSync(documentIdRef.current);
+    };
+
+    loadRules().then(sync);
+    const unsubscribe = subscribeRules(sync);
+    sync();
+
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, [documentId]);
+
+  // ── Inter-paragraph pause ──────────────────────────────────────
+  const paragraphPauseRef = useRef(initialParagraphPauseMs);
+  const paragraphTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const clearParagraphTimer = useCallback(() => {
+    if (paragraphTimerRef.current) {
+      clearTimeout(paragraphTimerRef.current);
+      paragraphTimerRef.current = null;
+    }
+  }, []);
+
+  const setParagraphPauseMs = useCallback((ms: number) => {
+    userTouchedPauseRef.current = true;
+    const clamped = Math.min(2000, Math.max(0, Math.round(ms)));
+    paragraphPauseRef.current = clamped;
+    setParagraphPauseMsState(clamped);
+  }, []);
   // Ensures persisted state is restored at most once — otherwise streamed text
   // (chunks growing page-by-page) would re-run the restore and could yank
   // playback back to an earlier chunk.
@@ -169,20 +422,30 @@ export function useReadAloud({
     hasRestoredRef.current = false;
   }, [documentId, persistState]);
 
-  useEffect(() => {
-    documentNameRef.current = documentName ?? "document";
-  }, [documentName]);
-
   // Load persisted state on mount
   useEffect(() => {
     if (persistState && documentId) {
       readAloudPersistence.getState(documentId).then((savedState) => {
         if (savedState && mountedRef.current && !hasRestoredRef.current) {
+          // Positions saved before sentences were packed into chunks count
+          // single sentences; map those onto the current layout exactly. -1
+          // means that sentence has not streamed in yet, so the restore is
+          // left for a later pass (hasRestoredRef stays false) rather than
+          // landing somewhere wrong.
+          const restoredIndex =
+            savedState.chunkLayout === CHUNK_LAYOUT_VERSION
+              ? savedState.chunkIndex
+              : mapLegacyChunkIndex(chunksRef.current, savedState.chunkIndex);
+
           // Only restore if we have the same document and chunks are loaded
-          if (chunks.length > 0 && savedState.chunkIndex < chunks.length) {
+          if (
+            chunks.length > 0 &&
+            restoredIndex >= 0 &&
+            restoredIndex < chunks.length
+          ) {
             hasRestoredRef.current = true;
-            indexRef.current = savedState.chunkIndex;
-            setCurrentChunkIndex(savedState.chunkIndex);
+            indexRef.current = restoredIndex;
+            setCurrentChunkIndex(restoredIndex);
             statusRef.current = savedState.status;
             setStatus(savedState.status);
             if (savedState.rate !== rate) {
@@ -190,15 +453,85 @@ export function useReadAloud({
               rateRef.current = savedState.rate;
               ttsSetRate(savedState.rate);
             }
+            // Records written before pitch existed have none — those books fall
+            // through to the global-default resolution below instead.
+            if (
+              savedState.pitch !== undefined &&
+              savedState.pitch !== pitchRef.current
+            ) {
+              setPitchState(savedState.pitch);
+              pitchRef.current = savedState.pitch;
+              ttsSetPitch(savedState.pitch);
+            }
           }
         }
       });
     }
   }, [persistState, documentId, chunks.length, rate]);
 
-  // Bootstrap rate
+  // ── Global reading defaults ────────────────────────────────────
+  // Supplies settingsService defaults for values this book has never saved.
+  // The per-book restore above owns every value that *is* saved, so the two
+  // paths are disjoint: whichever resolves first, the outcome is the same.
+  // Guarded so it applies at most once per document, and skipped entirely for
+  // a value the user has already chosen by hand this session.
+  const hasAppliedGlobalDefaultsRef = useRef(false);
+
+  useEffect(() => {
+    hasAppliedGlobalDefaultsRef.current = false;
+  }, [documentId]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    (async () => {
+      const saved =
+        persistState && documentId
+          ? await readAloudPersistence.getState(documentId)
+          : null;
+      if (cancelled || !mountedRef.current) return;
+
+      const needsRate = saved?.rate === undefined;
+      const needsPitch = saved?.pitch === undefined;
+      if (hasAppliedGlobalDefaultsRef.current) return;
+
+      const settings = await loadSettings();
+      if (cancelled || !mountedRef.current) return;
+      if (hasAppliedGlobalDefaultsRef.current) return;
+      hasAppliedGlobalDefaultsRef.current = true;
+
+      if (needsRate && !userTouchedRateRef.current) {
+        ttsSetRate(settings.readingSpeed);
+        setRateState(settings.readingSpeed);
+        rateRef.current = settings.readingSpeed;
+      }
+      if (needsPitch && !userTouchedPitchRef.current) {
+        ttsSetPitch(settings.readingPitch);
+        const applied = getPitch();
+        setPitchState(applied);
+        pitchRef.current = applied;
+      }
+      // The paragraph pause is a global preference only — it is not stored
+      // per book, so it is resolved here every time a document loads.
+      if (!userTouchedPauseRef.current) {
+        const ms = Math.min(
+          2000,
+          Math.max(0, Math.round(settings.readingParagraphPauseMs ?? 0)),
+        );
+        paragraphPauseRef.current = ms;
+        setParagraphPauseMsState(ms);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [persistState, documentId]);
+
+  // Bootstrap rate & pitch
   useEffect(() => {
     ttsSetRate(initialRate);
+    ttsSetPitch(initialPitch);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Track mount status
@@ -228,6 +561,78 @@ export function useReadAloud({
 
   const totalPages = sortedPages.length;
 
+  // ── Sleep timer ────────────────────────────────────────────────
+  const [sleepTimerMinutesLeft, setSleepTimerMinutesLeft] = useState<
+    number | null
+  >(null);
+  const [sleepAtSectionEnd, setSleepAtSectionEndState] = useState(false);
+
+  const sleepIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const sleepMinutesLeftRef = useRef<number | null>(null);
+  const sleepAtSectionEndRef = useRef(false);
+  /**
+   * Latest pause(). The timer tick and the section-end guard both need to stop
+   * playback *through the state machine* — so position is saved and the UI
+   * reads "paused" — without speakAt() taking a dependency on pause() and
+   * re-creating itself mid-playback.
+   */
+  const pauseRef = useRef<() => void>(() => {});
+
+  const clearSleepInterval = useCallback(() => {
+    if (sleepIntervalRef.current) {
+      clearInterval(sleepIntervalRef.current);
+      sleepIntervalRef.current = null;
+    }
+  }, []);
+
+  const cancelSleepTimer = useCallback(() => {
+    clearSleepInterval();
+    sleepMinutesLeftRef.current = null;
+    sleepAtSectionEndRef.current = false;
+    if (mountedRef.current) {
+      setSleepTimerMinutesLeft(null);
+      setSleepAtSectionEndState(false);
+    }
+  }, [clearSleepInterval]);
+
+  const setSleepTimer = useCallback(
+    (minutes: number | null) => {
+      clearSleepInterval();
+
+      if (minutes === null || minutes <= 0) {
+        sleepMinutesLeftRef.current = null;
+        setSleepTimerMinutesLeft(null);
+        return;
+      }
+
+      const whole = Math.round(minutes);
+      sleepMinutesLeftRef.current = whole;
+      setSleepTimerMinutesLeft(whole);
+
+      // One ticker at minute resolution — the bar only ever shows whole minutes.
+      sleepIntervalRef.current = setInterval(() => {
+        const next = (sleepMinutesLeftRef.current ?? 0) - 1;
+
+        if (next > 0) {
+          sleepMinutesLeftRef.current = next;
+          if (mountedRef.current) setSleepTimerMinutesLeft(next);
+          return;
+        }
+
+        clearSleepInterval();
+        sleepMinutesLeftRef.current = null;
+        if (mountedRef.current) setSleepTimerMinutesLeft(null);
+        pauseRef.current();
+      }, 60_000);
+    },
+    [clearSleepInterval],
+  );
+
+  const setSleepAtSectionEnd = useCallback((enabled: boolean) => {
+    sleepAtSectionEndRef.current = enabled;
+    setSleepAtSectionEndState(enabled);
+  }, []);
+
   // ---------------------------------------------------------------------------
   // Core: speak a specific chunk by index
   // ---------------------------------------------------------------------------
@@ -240,7 +645,6 @@ export function useReadAloud({
           setStatus("finished");
           statusRef.current = "finished";
           setCurrentChunkIndex(Math.max(0, list.length - 1));
-          hasNotifiedPlayingRef.current = false;
           // Save finished state
           saveReadAloudState(
             documentIdRef.current,
@@ -248,9 +652,8 @@ export function useReadAloud({
             "finished",
             Math.max(0, list.length - 1),
             rateRef.current,
+            pitchRef.current,
           );
-          // Notify end of file
-          notifyReadAloudEndOfFile(documentNameRef.current).catch(() => {});
         }
         return;
       }
@@ -264,12 +667,6 @@ export function useReadAloud({
       statusRef.current = "speaking";
       onChunkChange?.(chunk);
 
-      // Fire "playing" notification once per play session
-      if (!hasNotifiedPlayingRef.current) {
-        hasNotifiedPlayingRef.current = true;
-        notifyReadAloudPlaying(documentNameRef.current).catch(() => {});
-      }
-
       // Save state when starting playback
       saveReadAloudState(
         documentIdRef.current,
@@ -277,9 +674,12 @@ export function useReadAloud({
         "speaking",
         index,
         rateRef.current,
+        pitchRef.current,
       );
 
-      // Stop any current speech before starting a new one
+      // Stop any current speech before starting a new one. A pending
+      // inter-paragraph pause belongs to the chunk we just superseded.
+      clearParagraphTimer();
       stopSpeaking();
 
       // Small delay to ensure previous stop completes
@@ -287,11 +687,59 @@ export function useReadAloud({
         if (!mountedRef.current) return;
         // Guard: if status changed while waiting (e.g. user paused/stopped)
         if (statusRef.current !== "speaking") return;
-        speakChunk(chunk.text, {
+
+        // Rewrite for the engine, keeping a map back to what is on screen so
+        // boundary offsets stay meaningful to the UI.
+        const spoken = applyPronunciation(chunk.text, rulesRef.current);
+
+        speakSpokenText(spoken, {
+          onBoundary: ({ charIndex, charLength }) => {
+            emitWordBoundary(chunk, charIndex, charLength);
+          },
           onDone: () => {
             // Auto-advance when we're still speaking (not manually stopped)
             if (statusRef.current === "speaking" && mountedRef.current) {
-              speakAt(indexRef.current + 1);
+              const next = indexRef.current + 1;
+              const list2 = chunksRef.current;
+
+              // "Stop at end of section": pageIndex is the page for PDF/DOCX
+              // and the chapter for EPUB, so this one check covers both.
+              if (
+                sleepAtSectionEndRef.current &&
+                next < list2.length &&
+                list2[next].pageIndex !== list2[indexRef.current].pageIndex
+              ) {
+                // Park at the *start of the next section* so pressing play
+                // continues forward rather than replaying what just finished.
+                indexRef.current = next;
+                setCurrentChunkIndex(next);
+                onChunkChange?.(list2[next]);
+
+                // One-shot, like the countdown: disarm so the next play()
+                // isn't cut short at the very next boundary too.
+                sleepAtSectionEndRef.current = false;
+                setSleepAtSectionEndState(false);
+
+                pauseRef.current();
+                return;
+              }
+
+              // Breathe between paragraphs. Status stays "speaking" through
+              // the gap so pause/stop behave normally and the bar does not
+              // flicker.
+              const gap = paragraphPauseRef.current;
+              if (gap > 0 && next < list2.length && list2[next].startsParagraph) {
+                clearParagraphTimer();
+                paragraphTimerRef.current = setTimeout(() => {
+                  paragraphTimerRef.current = null;
+                  if (mountedRef.current && statusRef.current === "speaking") {
+                    speakAt(next);
+                  }
+                }, gap);
+                return;
+              }
+
+              speakAt(next);
             }
           },
           onStopped: () => {
@@ -306,39 +754,92 @@ export function useReadAloud({
         });
       }, 50);
     },
-    [onChunkChange],
+    [onChunkChange, clearParagraphTimer, emitWordBoundary],
   );
 
   // ---------------------------------------------------------------------------
   // Public actions
   // ---------------------------------------------------------------------------
 
+  /**
+   * Play, or resume in place.
+   *
+   * With no explicit index this first asks the TTS service to resume: iOS
+   * continues the suspended utterance, Android re-speaks the tail of the chunk
+   * from the last word boundary. Only when there is nothing to resume — a cold
+   * start, or an engine that reports no boundaries — does it fall back to
+   * replaying the whole chunk.
+   */
   const play = useCallback(
     (fromIndex?: number) => {
-      const idx = fromIndex !== undefined ? fromIndex : indexRef.current;
-      speakAt(idx);
+      if (fromIndex !== undefined) {
+        speakAt(fromIndex);
+        return;
+      }
+
+      const index = indexRef.current;
+
+      // Enter "speaking" synchronously. The resumed utterance's onDone must
+      // see the right status to auto-advance, and this also disarms the
+      // delayed safety-pause that pause() schedules.
+      statusRef.current = "speaking";
+      setStatus("speaking");
+
+      const replay = () => {
+        if (mountedRef.current && statusRef.current === "speaking") {
+          speakAt(index);
+        }
+      };
+
+      resumeSpeaking()
+        .then((resumed) => {
+          if (!mountedRef.current || statusRef.current !== "speaking") return;
+          if (!resumed) {
+            replay();
+            return;
+          }
+          saveReadAloudState(
+            documentIdRef.current,
+            persistStateRef.current,
+            "speaking",
+            index,
+            rateRef.current,
+            pitchRef.current,
+          );
+        })
+        .catch(replay);
     },
     [speakAt],
   );
 
   /**
-   * Pause: freeze at the current chunk. On resume, playback restarts from
-   * this chunk (the best granularity expo-speech supports).
+   * Pause where we are.
    *
-   * CRITICAL: set statusRef BEFORE calling stopSpeaking() so that any
-   * synchronous onDone/onStopped callback from Speech.stop() sees "paused"
+   * Resolution depends on the platform, and pauseSpeaking() hides which: iOS
+   * suspends the utterance and resumes at the exact same word; Android stops
+   * and remembers the last reported word boundary, so a resume re-speaks only
+   * the tail of the chunk rather than all ~300 characters of it.
+   *
+   * CRITICAL: set statusRef BEFORE pausing so that any synchronous
+   * onDone/onStopped callback from the underlying Speech.stop() sees "paused"
    * and does NOT auto-advance.
+   *
+   * Pausing deliberately leaves the sleep timer running: someone who pauses to
+   * answer a question still wants to fall asleep on schedule. Only stop()
+   * cancels it.
    */
   const pause = useCallback(() => {
     statusRef.current = "paused";
     setStatus("paused");
-    hasNotifiedPlayingRef.current = false;
-    stopSpeaking();
-    // Add a small delay to ensure stop completes and prevent race conditions
+    clearParagraphTimer();
+    void pauseSpeaking();
+    // Safety net for engines that do not honour the first request. Routed
+    // through pauseSpeaking() rather than stopSpeaking() so it cannot discard
+    // the resume offset, and guarded on status so a play() in the meantime
+    // is not silenced.
     setTimeout(() => {
       if (mountedRef.current && statusRef.current === "paused") {
-        // Double-check we're still paused and stop again if needed
-        stopSpeaking();
+        void pauseSpeaking();
       }
     }, 100);
     saveReadAloudState(
@@ -347,26 +848,24 @@ export function useReadAloud({
       "paused",
       indexRef.current,
       rateRef.current,
+      pitchRef.current,
     );
-  }, []);
+  }, [clearParagraphTimer]);
 
   const stop = useCallback(() => {
-    const wasPlaying = statusRef.current === "speaking";
     statusRef.current = "idle";
     setStatus("idle");
+    clearParagraphTimer();
     stopSpeaking();
     indexRef.current = 0;
     setCurrentChunkIndex(0);
-    hasNotifiedPlayingRef.current = false;
+    // Stopping ends the listening session — the sleep timer goes with it.
+    cancelSleepTimer();
     // Clear persisted state when stopped
     if (persistStateRef.current && documentIdRef.current) {
       readAloudPersistence.clearState(documentIdRef.current);
     }
-    // Notify stopped only if playback was active
-    if (wasPlaying) {
-      notifyReadAloudStopped(documentNameRef.current).catch(() => {});
-    }
-  }, []);
+  }, [cancelSleepTimer, clearParagraphTimer]);
 
   // ── Page-based skipping ────────────────────────────────────────
 
@@ -505,6 +1004,7 @@ export function useReadAloud({
   );
 
   const setRate = useCallback((newRate: number) => {
+    userTouchedRateRef.current = true;
     ttsSetRate(newRate);
     setRateState(newRate);
     rateRef.current = newRate;
@@ -514,8 +1014,38 @@ export function useReadAloud({
       statusRef.current,
       indexRef.current,
       newRate,
+      pitchRef.current,
     );
   }, []);
+
+  /**
+   * Pitch is a set-once preference rather than a live control, so it takes
+   * effect on the *next* utterance — changing it mid-sentence would mean
+   * restarting the chunk and repeating audio.
+   */
+  const setPitch = useCallback((newPitch: number) => {
+    userTouchedPitchRef.current = true;
+    ttsSetPitch(newPitch);
+    // Read back through the service so the clamp lives in exactly one place.
+    const applied = getPitch();
+    setPitchState(applied);
+    pitchRef.current = applied;
+    saveReadAloudState(
+      documentIdRef.current,
+      persistStateRef.current,
+      statusRef.current,
+      indexRef.current,
+      rateRef.current,
+      applied,
+    );
+  }, []);
+
+  // Keep pauseRef pointing at the live pause() for the sleep timer and the
+  // section-end guard. Assigned in an effect rather than during render so the
+  // React Compiler never sees a ref mutated mid-render.
+  useEffect(() => {
+    pauseRef.current = pause;
+  }, [pause]);
 
   // ---------------------------------------------------------------------------
   // Cleanup on unmount
@@ -523,6 +1053,14 @@ export function useReadAloud({
   useEffect(() => {
     return () => {
       stopSpeaking();
+      if (sleepIntervalRef.current) {
+        clearInterval(sleepIntervalRef.current);
+        sleepIntervalRef.current = null;
+      }
+      if (paragraphTimerRef.current) {
+        clearTimeout(paragraphTimerRef.current);
+        paragraphTimerRef.current = null;
+      }
     };
   }, []);
 
@@ -559,5 +1097,13 @@ export function useReadAloud({
     skipBack10s,
     jumpToChunk,
     setRate,
+    pitch,
+    setPitch,
+    paragraphPauseMs,
+    setParagraphPauseMs,
+    sleepTimerMinutesLeft,
+    setSleepTimer,
+    sleepAtSectionEnd,
+    setSleepAtSectionEnd,
   };
 }

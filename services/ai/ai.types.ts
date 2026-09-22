@@ -2,6 +2,10 @@
 // AI Types – shared across providers and UI
 // ============================================
 
+import type { AICitation, AILocatorType } from "./citations";
+
+export type { AICitation, AICitationLocator, AILocatorType } from "./citations";
+
 /** Every AI action the app supports. */
 export type AIAction =
   | "chat"
@@ -26,6 +30,19 @@ export interface AIChatMessage {
   timestamp: number; // epoch ms
   /** Optional structured data attached to the message (for fill-form, classify, etc.) */
   structuredData?: Record<string, unknown>;
+  /**
+   * "markdown" when the content kept its formatting (AI_MARKDOWN). Absent on
+   * messages from before the upgrade, which render exactly as they always did.
+   */
+  format?: "markdown" | "text";
+  /** Verified document citations for `[n]` markers (AI_CITATIONS_V2). */
+  citations?: AICitation[];
+  /** Locator unit of the cited document ("page", "chapter", …). */
+  locatorType?: AILocatorType;
+  /** A short honest note shown under the answer (truncation, coverage). */
+  notice?: string;
+  /** Streaming state of an assistant message (AI_STREAMING). */
+  streamState?: "streaming" | "stopped" | "interrupted";
 }
 
 /** Metadata about a document attached to an AI session. */
@@ -51,28 +68,51 @@ export interface AISession {
 
 // ─── Request / Response shapes ────────────────────────────────────────────────
 
-export interface AISummarizeRequest {
+/**
+ * Optional contract-v2 fields shared by whole-document tasks (C5). The service
+ * sets them only when AI_DOCID_TASKS and the backend's `docIdTasks` capability
+ * are both on; otherwise requests are exactly the legacy text requests.
+ */
+export interface AIDocTaskFields {
+  /** Backend docId from a prior extract-pdf / extract-document call. */
+  docId?: string;
+  /** The user's extra request about the document (≤ 2,000 chars). */
+  instruction?: string;
+  /**
+   * True when `docId` should replace `text` as the document content (C5). The
+   * legacy quiz request also carries docId, so this is what tells them apart.
+   */
+  wholeDocument?: boolean;
+  /**
+   * Ask the service to keep Markdown in `content` (C9). Honored only for
+   * free-text tasks when AI_MARKDOWN and the `markdown` capability are on, and
+   * only by callers that render with MarkdownText.
+   */
+  preserveMarkdown?: boolean;
+}
+
+export interface AISummarizeRequest extends AIDocTaskFields {
   text: string;
   documentName?: string;
   /** Optional abort signal for cancellation (see runCancelable). */
   signal?: AbortSignal;
 }
 
-export interface AITranslateRequest {
+export interface AITranslateRequest extends AIDocTaskFields {
   text: string;
   targetLanguage: string;
   documentName?: string;
   signal?: AbortSignal;
 }
 
-export interface AIAnalyzeRequest {
+export interface AIAnalyzeRequest extends AIDocTaskFields {
   text: string;
   analysisType?: string; // "sentiment" | "readability" | "structure" | "full"
   documentName?: string;
   signal?: AbortSignal;
 }
 
-export interface AITasksRequest {
+export interface AITasksRequest extends AIDocTaskFields {
   text: string;
   documentName?: string;
   signal?: AbortSignal;
@@ -94,6 +134,8 @@ export interface AIChatRequest {
   documentText?: string;
   documentName?: string;
   signal?: AbortSignal;
+  /** See AIDocTaskFields.preserveMarkdown. */
+  preserveMarkdown?: boolean;
 }
 
 // ─── Devil's Advocate ────────────────────────────────────────────────────────
@@ -124,7 +166,7 @@ export const CHALLENGER_ROLES: { key: ChallengerRole; label: string }[] = [
   { key: "evaluation-committee", label: "Evaluation Cmte" },
 ];
 
-export interface AIDevilsAdvocateRequest {
+export interface AIDevilsAdvocateRequest extends AIDocTaskFields {
   text: string;
   documentName?: string;
   /** Auto-inferred challenger unless the user overrides it. */
@@ -133,19 +175,23 @@ export interface AIDevilsAdvocateRequest {
   customRole?: string;
   /** Optional second context document (RFP, competitor doc, rejection letter…). */
   contextText?: string;
+  /** docId of the context document, sent instead of contextText (C8). */
+  contextDocId?: string;
   contextName?: string;
   signal?: AbortSignal;
 }
 
 export type DocFormat = "pptx" | "docx" | "pdf";
 
-export interface AINarrativeArcRequest {
+export interface AINarrativeArcRequest extends AIDocTaskFields {
   text: string;
   documentName?: string;
   /** Drives the expected structure + whether reorder is actionable. */
   format?: DocFormat;
   /** Optional RFP/context document for cross-document section coverage. */
   contextText?: string;
+  /** docId of the context document, sent instead of contextText (C8). */
+  contextDocId?: string;
   contextName?: string;
   signal?: AbortSignal;
 }
@@ -238,7 +284,7 @@ export interface NarrativeArcData {
   editable: boolean;
 }
 
-export interface AIHighlightRequest {
+export interface AIHighlightRequest extends AIDocTaskFields {
   text: string;
   documentName?: string;
   signal?: AbortSignal;
@@ -293,7 +339,7 @@ export type ExplainMode =
 
 export type ExplainDepth = "short" | "medium" | "deep";
 
-export interface AIExplainRequest {
+export interface AIExplainRequest extends AIDocTaskFields {
   text: string;
   mode?: ExplainMode;
   depth?: ExplainDepth;
@@ -331,7 +377,7 @@ export interface QuizQuestion {
   topic: string;
 }
 
-export interface AIQuizRequest {
+export interface AIQuizRequest extends AIDocTaskFields {
   text: string;
   /** Backend docId from a prior extract-pdf/extract-document call. Enables true RAG grounding. */
   docId?: string;
@@ -344,9 +390,28 @@ export interface AIQuizRequest {
   signal?: AbortSignal;
 }
 
+/** How much of a document a whole-document task actually processed (C5). */
+export interface AICoverage {
+  totalChars: number;
+  processedChars: number;
+  chunked: boolean;
+  chunkCount: number;
+  truncated: boolean;
+}
+
 export interface AIResponse {
   content: string;
   structuredData?: Record<string, unknown>;
+  /** "markdown" when `content` kept its formatting; otherwise absent. */
+  format?: "markdown" | "text" | "json";
+  /** Coverage of a whole-document task, when the backend reported it. */
+  coverage?: AICoverage;
+  /** Verified citations (document chat answered through Gozlin). */
+  citations?: AICitation[];
+  /** Locator unit for `citations`. */
+  locatorType?: AILocatorType;
+  /** A short honest note to show under the answer (e.g. truncation). */
+  notice?: string;
 }
 
 // ─── Language list (used by translate) ────────────────────────────────────────

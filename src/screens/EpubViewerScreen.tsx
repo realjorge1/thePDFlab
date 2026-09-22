@@ -178,7 +178,11 @@ export const EpubViewerScreen: React.FC<Props> = ({ route }) => {
       <View style={styles.body}>{renderBody()}</View>
 
       {/* ── Read-Aloud bar ── */}
-      <ReadAloudBar {...epub.controls} visible={epub.ready} />
+      <ReadAloudBar
+        {...epub.controls}
+        visible={epub.ready}
+        sectionLabel="chapter"
+      />
 
       {/* ── Voice picker ── */}
       <VoicePicker

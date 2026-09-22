@@ -8,9 +8,21 @@
 
 import { getWebViewFontInjectionScript } from "@/services/editorFontService";
 import type { EditorWebViewMessage } from "@/src/types/editor.types";
-import React, { useCallback, useEffect, useRef } from "react";
-import { InteractionManager, StyleSheet, View } from "react-native";
+import MaterialIcons from "@expo/vector-icons/MaterialIcons";
+import React, { useCallback, useEffect, useRef, useState } from "react";
+import {
+  InteractionManager,
+  Pressable,
+  StyleSheet,
+  Text,
+  View,
+} from "react-native";
 import { WebView } from "react-native-webview";
+import { AI_PROOFREAD } from "@/constants/featureFlags";
+import {
+  ProofreadController,
+  type ProofreadControllerHandle,
+} from "./ProofreadController";
 import { useDocument } from "./DocumentContext";
 
 // ── Editor HTML ────────────────────────────────────────────────────────────
@@ -173,6 +185,29 @@ div[contenteditable]{outline:none;}
 }
 .crop-btn.apply{background:#1976D2;color:#fff;}
 .crop-btn.cancel{background:#fff;color:#424242;border:1px solid #BDBDBD;}
+
+/* ── Proofread marks (R3) ────────────────────────────────────────────────
+   Decoration only: no layout impact, no text of their own, and stripped
+   before every save/export/print (see __pf_stripHtml).
+
+   These sit ALONGSIDE the OS spellchecker, which stays on via
+   spellcheck="true" on #editor. Two underline styles coexisting is fine;
+   silently losing the native one is not, so nothing here disables it.
+   text-decoration-color is used rather than border-bottom so the mark does
+   not change line height or shift a single pixel of the document. */
+.pf{
+  text-decoration:underline;
+  text-decoration-style:wavy;
+  text-decoration-skip-ink:none;
+  text-underline-offset:2px;
+  cursor:pointer;
+}
+.pf-spelling{text-decoration-color:#E53935;}
+.pf-grammar{text-decoration-color:#1E88E5;}
+.pf-punctuation{text-decoration-color:#8E24AA;}
+.pf-clarity{text-decoration-color:#00897B;}
+.pf-tone{text-decoration-color:#F4511E;}
+.pf-style{text-decoration-color:#6D4C41;}
 </style>
 </head>
 <body>
@@ -212,6 +247,46 @@ document.addEventListener('selectionchange',saveSelection);
 editor.addEventListener('keyup',saveSelection);
 editor.addEventListener('mouseup',saveSelection);
 editor.addEventListener('touchend',saveSelection);
+
+// ── PROOFREAD MARKS ARE DECORATION ONLY ───────────────────────────────────
+// Proofread marks are <span class="pf ..."> wrappers drawn over located
+// ranges. They must NEVER reach the document's text, its undo history, or a
+// save/export/print — otherwise a user who saves while marks are on screen
+// gets spans baked into their .docx.
+//
+// The single choke point is this function. Every place that serializes the
+// editor passes through it: _snap() (the undo history) and getContent()
+// (SAVE_CONTENT). Together with __pf_clearMarks() below, and the clone-strip
+// in create-blank-docx/pdf's getEditorHtml, that is every path out.
+//
+// When no marks exist — which is always, with AI_PROOFREAD off — the
+// indexOf() guard returns the string untouched, so this costs one substring
+// scan and changes nothing.
+function __pf_stripHtml(h){
+  if(!h)return h;
+  // Two kinds of residue, and BOTH have to go or the save is not identical:
+  //   • span.pf wrappers — the visible marks;
+  //   • data-pfid attributes — the stable per-paragraph ids. Those must
+  //     persist in the LIVE dom (they are what lets a paragraph's results
+  //     survive edits elsewhere), but they are still editor bookkeeping and
+  //     must never be written into the user's document.
+  if(h.indexOf('class="pf')===-1&&h.indexOf("class='pf")===-1&&h.indexOf('data-pfid')===-1)return h;
+  try{
+    var d=document.createElement('div');
+    d.innerHTML=h;
+    var ns=d.querySelectorAll('span.pf');
+    for(var i=0;i<ns.length;i++){
+      var n=ns[i],p=n.parentNode;
+      if(!p)continue;
+      while(n.firstChild)p.insertBefore(n.firstChild,n);
+      p.removeChild(n);
+    }
+    var ids=d.querySelectorAll('[data-pfid]');
+    for(var j=0;j<ids.length;j++)ids[j].removeAttribute('data-pfid');
+    d.normalize();
+    return d.innerHTML;
+  }catch(e){return h;}
+}
 
 // ── WORD-LEVEL HISTORY (undo/redo with cursor preservation) ───────────────
 var _hist=[{h:'',c:0}],_hidx=0,_htimer=null;
@@ -260,7 +335,8 @@ function _setCur(off){
 }
 
 function _snap(){
-  var h=editor.innerHTML;
+  // Mark-free, so undo/redo can never restore decoration into the document.
+  var h=__pf_stripHtml(editor.innerHTML);
   var c=_curOff();
   if(h===_hist[_hidx].h)return;
   _hist=_hist.slice(0,_hidx+1);
@@ -818,7 +894,9 @@ function notifyContent(){
   rn({type:'CONTENT_CHANGE',wordCount:words,charCount:text.length});
 }
 window.getContent=function(){
-  rn({type:'SAVE_CONTENT',html:editor.innerHTML,text:editor.innerText||''});
+  // Marks are stripped on the way out — a save is never allowed to carry
+  // decoration. Identical to editor.innerHTML when nothing is marked.
+  rn({type:'SAVE_CONTENT',html:__pf_stripHtml(editor.innerHTML),text:editor.innerText||''});
 };
 
 window.loadContent=function(html){
@@ -830,6 +908,266 @@ window.loadContent=function(html){
 function rn(data){
   if(window.ReactNativeWebView)window.ReactNativeWebView.postMessage(JSON.stringify(data));
 }
+
+// ══════════════════════════════════════════════════════════════════════════
+// PROOFREAD (R3) — inert until __pf_setEnabled(true), which only happens
+// behind AI_PROOFREAD. With the flag off none of this ever runs.
+// ══════════════════════════════════════════════════════════════════════════
+var __pf_on=false;
+var __pf_seq=0;
+
+window.__pf_setEnabled=function(on){
+  __pf_on=!!on;
+  if(!__pf_on)window.__pf_clearMarks();
+};
+
+// ── SELECTION SAFETY ──────────────────────────────────────────────────────
+// Marking splits text nodes, which can invalidate a live selection. The
+// editor's whole formatting system depends on _savedRange surviving (see the
+// SELECTION SAVE/RESTORE note at the top of this file), so every mutation
+// below is bracketed by these two functions: character offsets are immune to
+// node splitting in a way that Range objects are not.
+function __pf_getSel(){
+  try{
+    var sel=window.getSelection();
+    if(!sel||!sel.rangeCount)return null;
+    var r=sel.getRangeAt(0);
+    if(!editor.contains(r.commonAncestorContainer)&&r.commonAncestorContainer!==editor)return null;
+    var pre=document.createRange();
+    pre.selectNodeContents(editor);
+    pre.setEnd(r.startContainer,r.startOffset);
+    var start=pre.toString().length;
+    pre.setEnd(r.endContainer,r.endOffset);
+    var end=pre.toString().length;
+    return {start:start,end:end,had:document.activeElement===editor};
+  }catch(e){return null;}
+}
+
+function __pf_nodeAt(off){
+  var tw=document.createTreeWalker(editor,NodeFilter.SHOW_TEXT,null,false);
+  var cnt=0,nd;
+  while(nd=tw.nextNode()){
+    var len=nd.textContent.length;
+    if(cnt+len>=off)return {node:nd,offset:off-cnt};
+    cnt+=len;
+  }
+  return null;
+}
+
+function __pf_setSel(saved){
+  if(!saved)return;
+  try{
+    var a=__pf_nodeAt(saved.start),b=__pf_nodeAt(saved.end);
+    if(!a||!b)return;
+    var r=document.createRange();
+    r.setStart(a.node,a.offset);
+    r.setEnd(b.node,b.offset);
+    var sel=window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(r);
+    // Keep the editor's own saved range in step, so the very next toolbar
+    // command restores the same selection it would have before marking.
+    _savedRange=r.cloneRange();
+  }catch(e){}
+}
+
+/** Run a DOM mutation without disturbing the caret or the selection. */
+function __pf_preserving(fn){
+  var saved=__pf_getSel();
+  try{fn();}catch(e){}
+  __pf_setSel(saved);
+}
+
+// ── BLOCKS ────────────────────────────────────────────────────────────────
+// A block is a paragraph: the editor's block-level children. Each gets a
+// stable data-pfid minted ONCE and kept across edits, so a paragraph's
+// results survive typing elsewhere in the document.
+function __pf_blockEls(){
+  var out=[];
+  var kids=editor.children;
+  for(var i=0;i<kids.length;i++){
+    var el=kids[i];
+    var tag=el.tagName;
+    if(tag==='UL'||tag==='OL'){
+      var lis=el.querySelectorAll('li');
+      for(var j=0;j<lis.length;j++)out.push(lis[j]);
+    }else if(tag==='TABLE'||tag==='HR'||tag==='IMG'){
+      continue;
+    }else{
+      out.push(el);
+    }
+  }
+  return out;
+}
+
+function __pf_hash(s){
+  var h=0;
+  for(var i=0;i<s.length;i++){h=((h<<5)-h)+s.charCodeAt(i);h=h&h;}
+  return Math.abs(h).toString(36);
+}
+
+window.__pf_collectBlocks=function(){
+  if(!__pf_on){rn({type:'PF_BLOCKS',blocks:[]});return;}
+  var els=__pf_blockEls();
+  var blocks=[];
+  for(var i=0;i<els.length;i++){
+    var el=els[i];
+    if(!el.getAttribute('data-pfid')){
+      __pf_seq++;
+      el.setAttribute('data-pfid','pf'+__pf_seq);
+    }
+    // textContent, not innerText: marks are inline spans and contribute no
+    // text of their own, so the text is identical marked or unmarked.
+    var text=el.textContent||'';
+    if(!text.trim())continue;
+    blocks.push({id:el.getAttribute('data-pfid'),text:text,hash:__pf_hash(text)});
+  }
+  rn({type:'PF_BLOCKS',blocks:blocks});
+};
+
+function __pf_blockById(id){
+  return editor.querySelector('[data-pfid="'+id+'"]');
+}
+
+// ── MARKS ─────────────────────────────────────────────────────────────────
+function __pf_clearIn(el){
+  var ns=el.querySelectorAll('span.pf');
+  for(var i=0;i<ns.length;i++){
+    var n=ns[i],p=n.parentNode;
+    if(!p)continue;
+    while(n.firstChild)p.insertBefore(n.firstChild,n);
+    p.removeChild(n);
+  }
+  el.normalize();
+}
+
+/**
+ * Remove every mark. Called before save, export and print, when proofreading
+ * is switched off, and before any accept.
+ */
+window.__pf_clearMarks=function(blockId){
+  __pf_preserving(function(){
+    if(blockId){
+      var el=__pf_blockById(blockId);
+      if(el)__pf_clearIn(el);
+    }else{
+      __pf_clearIn(editor);
+    }
+  });
+};
+
+/** Character offset → {node, offset} within one block element. */
+function __pf_locate(el,offset){
+  var tw=document.createTreeWalker(el,NodeFilter.SHOW_TEXT,null,false);
+  var cnt=0,nd;
+  while(nd=tw.nextNode()){
+    var len=nd.textContent.length;
+    if(cnt+len>=offset)return {node:nd,offset:offset-cnt};
+    cnt+=len;
+  }
+  return null;
+}
+
+/**
+ * Draw marks for one block. items is [{id,start,end,type}] with offsets
+ * already resolved on the RN side against this block's text.
+ *
+ * Applied back-to-front so each wrap cannot shift the offsets of the ones
+ * still to come.
+ */
+window.__pf_applyMarks=function(blockId,items){
+  if(!__pf_on)return;
+  var el=__pf_blockById(blockId);
+  if(!el)return;
+  __pf_preserving(function(){
+    __pf_clearIn(el);
+    var sorted=(items||[]).slice().sort(function(a,b){return b.start-a.start;});
+    for(var i=0;i<sorted.length;i++){
+      var it=sorted[i];
+      try{
+        var s=__pf_locate(el,it.start),e=__pf_locate(el,it.end);
+        if(!s||!e)continue;
+        var r=document.createRange();
+        r.setStart(s.node,s.offset);
+        r.setEnd(e.node,e.offset);
+        var span=document.createElement('span');
+        span.className='pf pf-'+(it.type||'grammar');
+        span.setAttribute('data-pf-id',it.id);
+        span.setAttribute('data-pf-block',blockId);
+        // surroundContents throws when the range partially selects a node
+        // (e.g. it straddles a <b>); extractContents handles that case.
+        try{r.surroundContents(span);}
+        catch(err){span.appendChild(r.extractContents());r.insertNode(span);}
+      }catch(err2){}
+    }
+  });
+};
+
+// ── ACCEPT ────────────────────────────────────────────────────────────────
+/**
+ * Replace one located range with replacement, as a SINGLE undoable step.
+ *
+ * Order matters: marks come off FIRST, so the history snapshot taken after
+ * the edit contains no decoration and undo restores clean text. The RN side
+ * then re-checks the paragraph, which redraws whatever marks still apply —
+ * positions are never shifted arithmetically.
+ */
+window.__pf_accept=function(blockId,start,end,replacement){
+  var el=__pf_blockById(blockId);
+  if(!el){rn({type:'PF_ACCEPTED',blockId:blockId,ok:false});return;}
+  // Flush any pending debounced snapshot so the pre-edit state is the
+  // previous undo step, making this edit exactly one step of its own.
+  clearTimeout(_htimer);
+  if(__pf_stripHtml(editor.innerHTML)!==_hist[_hidx].h)_snap();
+
+  __pf_clearIn(el);
+  var ok=false;
+  try{
+    var s=__pf_locate(el,start),e=__pf_locate(el,end);
+    if(s&&e){
+      var r=document.createRange();
+      r.setStart(s.node,s.offset);
+      r.setEnd(e.node,e.offset);
+      r.deleteContents();
+      if(replacement)r.insertNode(document.createTextNode(replacement));
+      el.normalize();
+      // Caret just after the replacement, which is where a writer expects it.
+      try{
+        var after=__pf_locate(el,start+(replacement?replacement.length:0));
+        if(after){
+          var cr=document.createRange();
+          cr.setStart(after.node,after.offset);
+          cr.collapse(true);
+          var sel=window.getSelection();
+          sel.removeAllRanges();sel.addRange(cr);
+          _savedRange=cr.cloneRange();
+        }
+      }catch(e3){}
+      ok=true;
+    }
+  }catch(e2){}
+
+  pushHistory();
+  notifyContent();
+  rn({type:'PF_ACCEPTED',blockId:blockId,ok:ok});
+};
+
+// Tapping a mark opens its card on the RN side.
+editor.addEventListener('click',function(ev){
+  if(!__pf_on)return;
+  var node=ev.target;
+  while(node&&node!==editor){
+    if(node.classList&&node.classList.contains('pf')){
+      rn({
+        type:'PF_MARK_TAP',
+        blockId:node.getAttribute('data-pf-block'),
+        suggestionId:node.getAttribute('data-pf-id')
+      });
+      return;
+    }
+    node=node.parentNode;
+  }
+});
 
 // ── EVENT LISTENERS ───────────────────────────────────────────────────────
 // ── SCROLL-TO-CARET (keyboard avoidance) ──────────────────────────────
@@ -927,13 +1265,43 @@ export default React.memo(function WebEditor() {
   } | null>(null);
   const pendingSelectionState = useRef<any>(null);
 
+  // ── Proofread (R3) ──────────────────────────────────────────────────
+  // Lives here because this is where onMessage is. With AI_PROOFREAD off the
+  // controller renders nothing, injects nothing and sends nothing.
+  const proofreadRef = useRef<ProofreadControllerHandle | null>(null);
+  const [proofreadCount, setProofreadCount] = useState(0);
+  /**
+   * Bumped on every content change. This is what the controller debounces on
+   * — never a keystroke, always a settled edit.
+   */
+  const [changeToken, setChangeToken] = useState(0);
+  const handleProofreadHandle = useCallback(
+    (handle: ProofreadControllerHandle) => {
+      proofreadRef.current = handle;
+      setProofreadCount(handle.count);
+    },
+    [],
+  );
+
   const handleMessage = useCallback(
     (event: { nativeEvent: { data: string } }) => {
       try {
         const data: EditorWebViewMessage = JSON.parse(event.nativeEvent.data);
 
+        // Proofread messages are handled first and consumed; everything else
+        // falls through to the switch below exactly as before.
+        if (
+          AI_PROOFREAD &&
+          proofreadRef.current?.handleMessage(data as Record<string, unknown>)
+        ) {
+          return;
+        }
+
         switch (data.type) {
           case "CONTENT_CHANGE":
+            // Proofread's debounce trigger. The controller waits ~1.8 s after
+            // this stops changing before it checks anything.
+            if (AI_PROOFREAD) setChangeToken((n) => n + 1);
             // Debounce word/char count updates (fire at most every 300ms)
             pendingContentChange.current = {
               wordCount: data.wordCount,
@@ -1039,6 +1407,29 @@ export default React.memo(function WebEditor() {
         allowUniversalAccessFromFileURLs
         mixedContentMode="always"
       />
+
+      {/* ── Proofread (R3) ──────────────────────────────────────────
+           Renders nothing at all when AI_PROOFREAD is off. */}
+      {AI_PROOFREAD && (
+        <>
+          <ProofreadController
+            webViewRef={webViewRef}
+            changeToken={changeToken}
+            onHandle={handleProofreadHandle}
+          />
+          {proofreadCount > 0 && (
+            <Pressable
+              style={styles.proofreadPill}
+              onPress={() => proofreadRef.current?.openSummary()}
+              accessibilityRole="button"
+              accessibilityLabel={`${proofreadCount} writing suggestions`}
+            >
+              <MaterialIcons name="spellcheck" size={16} color="#FFFFFF" />
+              <Text style={styles.proofreadPillText}>{proofreadCount}</Text>
+            </Pressable>
+          )}
+        </>
+      )}
     </View>
   );
 });
@@ -1046,4 +1437,24 @@ export default React.memo(function WebEditor() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#fff" },
   webview: { flex: 1, backgroundColor: "transparent" },
+  // Bottom-LEFT, so it never sits under the formatting toolbar's controls on
+  // the right or over the caret area in the middle.
+  proofreadPill: {
+    position: "absolute",
+    left: 12,
+    bottom: 12,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 999,
+    backgroundColor: "rgba(17,24,39,0.85)",
+    elevation: 5,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 6,
+  },
+  proofreadPillText: { color: "#FFFFFF", fontSize: 13, fontWeight: "700" },
 });

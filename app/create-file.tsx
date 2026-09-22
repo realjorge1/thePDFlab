@@ -14,19 +14,16 @@ import {
   File,
   FileText,
   Images,
-  Layers,
-  Mic,
   MonitorPlay,
   ScanLine,
   Sheet,
 } from "lucide-react-native";
-import React, { useCallback, useMemo, useRef, useState } from "react";
+import React, { useCallback, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
   Animated,
   Dimensions,
-  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -45,7 +42,7 @@ interface CreationOption {
   bgColor: string;
   accentColor: string;
   fileType: FileType | null;
-  method: "blank" | "image" | "scan" | "voice" | "merge";
+  method: "blank" | "image" | "scan";
   comingSoon?: boolean;
 }
 
@@ -118,18 +115,6 @@ const CREATION_OPTIONS: CreationOption[] = [
     method: "scan",
   },
   {
-    id: "voice-to-doc",
-    title: "Voice to Document",
-    subtitle: "Record speech → text → PDF/Word",
-    icon: Mic,
-    iconColor: "#A855F7",
-    bgColor: "#F3E8FF",
-    accentColor: "#A855F7",
-    fileType: null,
-    method: "voice",
-    comingSoon: true,
-  },
-  {
     id: "blank-ppt",
     title: "Presentation",
     subtitle: "Create a .pptx slideshow",
@@ -152,17 +137,6 @@ const CREATION_OPTIONS: CreationOption[] = [
     method: "blank",
     comingSoon: true,
   },
-  {
-    id: "merge-files",
-    title: "Merge Files",
-    subtitle: "Combine multiple PDFs",
-    icon: Layers,
-    iconColor: colors.success,
-    bgColor: "#D1FAE5",
-    accentColor: colors.success,
-    fileType: null,
-    method: "merge",
-  },
 ];
 
 // ─── Section grouping ───────────────────────────────────────────────────────
@@ -183,14 +157,6 @@ const SECTIONS: Section[] = [
   {
     title: "Scan to Text",
     items: CREATION_OPTIONS.filter((o) => o.method === "scan"),
-  },
-  {
-    title: "Dictate",
-    items: CREATION_OPTIONS.filter((o) => o.method === "voice"),
-  },
-  {
-    title: "Quick Actions",
-    items: CREATION_OPTIONS.filter((o) => o.method === "merge"),
   },
 ];
 
@@ -278,34 +244,6 @@ const CreationCard = React.memo(function CreationCard({
   );
 });
 
-// ─── Bottom Quick Action ────────────────────────────────────────────────────
-interface QuickActionProps {
-  icon: typeof File;
-  label: string;
-  onPress: () => void;
-  color: string;
-}
-
-const QuickAction = React.memo(function QuickAction({
-  icon: Icon,
-  label,
-  onPress,
-  color,
-}: QuickActionProps) {
-  return (
-    <Pressable
-      onPress={onPress}
-      android_ripple={{ color: color + "20", borderless: true }}
-      style={styles.quickAction}
-    >
-      <View style={[styles.quickActionIcon, { backgroundColor: color + "15" }]}>
-        <Icon color={color} size={20} strokeWidth={2.2} />
-      </View>
-      <Text style={[styles.quickActionLabel, { color }]}>{label}</Text>
-    </Pressable>
-  );
-});
-
 // ─── Main Screen ────────────────────────────────────────────────────────────
 export default function CreateFileScreen() {
   const router = useRouter();
@@ -314,9 +252,6 @@ export default function CreateFileScreen() {
   const insets = useSafeAreaInsets();
   const [isProcessing, setIsProcessing] = useState(false);
   const { requestPrime, primer } = usePermissionPrimer();
-
-  // Bottom bar height: bar content + safe area
-  const bottomBarHeight = 72 + Math.max(insets.bottom, Platform.OS === "ios" ? 20 : 8);
 
   const handleCreation = useCallback(
     async (option: CreationOption) => {
@@ -337,21 +272,6 @@ export default function CreateFileScreen() {
       }
       if (option.method === "blank" && option.fileType === "docx") {
         router.push("/create-blank-docx");
-        return;
-      }
-
-      // Merge → navigate to tool processor
-      if (option.method === "merge") {
-        router.push({
-          pathname: "/tool-processor",
-          params: { tool: "merge" },
-        });
-        return;
-      }
-
-      // Voice → navigate to on-device speech-to-text screen
-      if (option.method === "voice") {
-        router.push("/voice-to-document" as any);
         return;
       }
 
@@ -398,41 +318,6 @@ export default function CreateFileScreen() {
     [router, requestPrime],
   );
 
-  // Quick actions for bottom bar
-  const quickActions = useMemo(
-    () => [
-      {
-        icon: ScanLine,
-        label: "Scan",
-        color: "#EC4899",
-        onPress: () =>
-          router.push({
-            pathname: "/scan-to-text",
-            params: { fileType: "pdf" },
-          }),
-      },
-      {
-        icon: Images,
-        label: "Import",
-        color: colors.secondary,
-        onPress: () =>
-          handleCreation(
-            CREATION_OPTIONS.find((o) => o.id === "pdf-from-images")!,
-          ),
-      },
-      {
-        icon: Layers,
-        label: "Merge",
-        color: colors.success,
-        onPress: () =>
-          handleCreation(
-            CREATION_OPTIONS.find((o) => o.id === "merge-files")!,
-          ),
-      },
-    ],
-    [handleCreation],
-  );
-
   return (
     <PINGate screen="createFiles">
     <SafeAreaView edges={['top']} style={[styles.screen, { backgroundColor: t.background }]}>
@@ -462,7 +347,7 @@ export default function CreateFileScreen() {
         style={styles.scrollView}
         contentContainerStyle={[
           styles.scrollContent,
-          { paddingBottom: bottomBarHeight + 16 },
+          { paddingBottom: insets.bottom + 24 },
         ]}
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
@@ -491,33 +376,6 @@ export default function CreateFileScreen() {
           </View>
         ))}
       </ScrollView>
-
-      {/* ── Fixed Bottom Bar ── */}
-      <View
-        style={[
-          styles.bottomBar,
-          {
-            backgroundColor: t.card,
-            borderTopColor: t.borderLight,
-            paddingBottom: Math.max(
-              insets.bottom,
-              Platform.OS === "ios" ? 20 : 8,
-            ),
-          },
-        ]}
-      >
-        <View style={styles.bottomBarContent}>
-          {quickActions.map((action) => (
-            <QuickAction
-              key={action.label}
-              icon={action.icon}
-              label={action.label}
-              onPress={action.onPress}
-              color={action.color}
-            />
-          ))}
-        </View>
-      </View>
 
       {/* ── Processing Overlay ── */}
       {isProcessing && (
@@ -623,41 +481,6 @@ const styles = StyleSheet.create({
     fontSize: 12,
     lineHeight: 16,
     fontWeight: "500",
-  },
-
-  // Bottom Bar — layout-isolated, always fixed
-  bottomBar: {
-    position: "absolute",
-    left: 0,
-    right: 0,
-    bottom: 0,
-    borderTopWidth: StyleSheet.hairlineWidth,
-  },
-  bottomBarContent: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-evenly",
-    paddingTop: 10,
-    paddingHorizontal: 16,
-  },
-
-  // Quick Action
-  quickAction: {
-    alignItems: "center",
-    gap: 4,
-    minWidth: 64,
-  },
-  quickActionIcon: {
-    width: 44,
-    height: 44,
-    borderRadius: 14,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  quickActionLabel: {
-    fontSize: 11,
-    fontWeight: "600",
-    letterSpacing: 0.1,
   },
 
   // Processing overlay

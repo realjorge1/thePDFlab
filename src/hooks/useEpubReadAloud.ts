@@ -14,7 +14,11 @@
  *   <ReadAloudBar {...epub.controls} visible={epub.ready} />
  */
 
-import { ReadAloudControls, useReadAloud } from "@/hooks/useReadAloud";
+import {
+  ReadAloudControls,
+  useReadAloud,
+  type WordBoundaryPosition,
+} from "@/hooks/useReadAloud";
 import { chunkEpubChapters, TextChunk } from "@/utils/chunkText";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { EpubBook, EpubChapter, extractEpub } from "../utils/epubExtractor";
@@ -31,6 +35,15 @@ export interface UseEpubReadAloudOptions {
   onChapterChange?: (chapterIndex: number, chapter: EpubChapter) => void;
   /** Called on every chunk change with chunk and total count (for auto-scroll). */
   onChunkChange?: (chunk: TextChunk, totalChunks: number) => void;
+  /**
+   * Called as each word is spoken, with the text of its chunk so the caller
+   * can locate it in the rendered iframe. Silent on engines that report no
+   * word boundaries, which leaves chunk-level scroll sync as the fallback.
+   */
+  onWordBoundary?: (
+    position: WordBoundaryPosition,
+    chunkText: string,
+  ) => void;
   initialRate?: number;
 }
 
@@ -58,6 +71,7 @@ export function useEpubReadAloud({
   filePath,
   onChapterChange,
   onChunkChange: onChunkChangeProp,
+  onWordBoundary,
   initialRate = 1.0,
 }: UseEpubReadAloudOptions): UseEpubReadAloudReturn {
   const [loadStatus, setLoadStatus] = useState<EpubLoadStatus>("idle");
@@ -152,6 +166,10 @@ export function useEpubReadAloud({
       }
       // Forward chunk change for auto-scroll
       onChunkChangeProp?.(chunk, chunks.length);
+    },
+    onWordBoundary: (position) => {
+      const chunk = chunks[position.chunkIndex];
+      if (chunk) onWordBoundary?.(position, chunk.text);
     },
   });
 

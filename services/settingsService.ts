@@ -57,6 +57,8 @@ export interface AppSettings {
   autoDetectLanguage: boolean;
   readingVoice: ReadingVoice;
   readingSpeed: number; // 0.5 – 2.0
+  readingPitch: number; // 0.5 – 2.0 — default for books with no saved pitch
+  readingParagraphPauseMs: number; // 0 – 2000; 0 disables the pause
 
   // ── Voice & OCR ──
   enableVoiceDictation: boolean;
@@ -67,15 +69,25 @@ export interface AppSettings {
   notifyProcessingComplete: boolean;
   notifyDownloadsComplete: boolean;
   notifyAIComplete: boolean;
-  notifyReadAloudPlaying: boolean;
-  notifyReadAloudStopped: boolean;
-  notifyReadAloudEndOfFile: boolean;
 
   // ── Security & Privacy ──
   appLock: boolean;
   pinHash: string; // SHA-256 hash of PIN
   screenLocks: ScreenLockSettings;
   hideRecentFiles: boolean;
+
+  // ── Reading (R2) ──
+  /**
+   * Hide the "continue where you left off" card on the home tab. Mirrors
+   * hideRecentFiles above, which sits right next to it in Settings.
+   */
+  hideContinueReading: boolean;
+  /**
+   * Local reminders to pick a book back up. OPT-IN: default false, and off
+   * means no reminder is ever scheduled. These are local scheduled
+   * notifications only — no push infrastructure and no backend.
+   */
+  readingReminders: boolean;
 
   // ── Auth (mock) ──
   auth: AuthState;
@@ -103,6 +115,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   autoDetectLanguage: true,
   readingVoice: "system",
   readingSpeed: 1.0,
+  readingPitch: 1.0,
+  readingParagraphPauseMs: 0,
 
   enableVoiceDictation: false,
   autoCreateDocFromVoice: false,
@@ -111,9 +125,6 @@ export const DEFAULT_SETTINGS: AppSettings = {
   notifyProcessingComplete: true,
   notifyDownloadsComplete: true,
   notifyAIComplete: true,
-  notifyReadAloudPlaying: true,
-  notifyReadAloudStopped: true,
-  notifyReadAloudEndOfFile: true,
 
   appLock: false,
   pinHash: "",
@@ -126,6 +137,11 @@ export const DEFAULT_SETTINGS: AppSettings = {
     ai: false,
   },
   hideRecentFiles: false,
+
+  hideContinueReading: false,
+  // Opt-in, per R2.5. A reminder the user did not ask for is a notification
+  // they did not ask for.
+  readingReminders: false,
 
   auth: {
     isSignedIn: false,

@@ -24,7 +24,16 @@ const READTIME_KEY = "@wordsinscribed/ws_reading_time_v1";
 const WORKSPACE_KEY = "@wordsinscribed/ai_workspace_state_v1";
 
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
-const BOOK_DONE = 0.9; // progress >= 0.9 counts as "read"
+/**
+ * Progress >= this counts as "read".
+ *
+ * Exported (additively — nothing that used it privately changes) so the
+ * "continue reading" card in services/readingSessionService.ts imports the
+ * same number instead of copying the literal 0.9. Two thresholds that can
+ * drift apart is exactly how the resume card and this dashboard would start
+ * disagreeing about which books are finished.
+ */
+export const BOOK_DONE = 0.9;
 
 // ─── Persisted shapes ─────────────────────────────────────────────────────────
 interface AIRecord {

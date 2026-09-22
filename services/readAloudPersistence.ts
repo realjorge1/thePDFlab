@@ -20,7 +20,19 @@ export interface ReadAloudState {
   chunkIndex: number;
   status: "idle" | "speaking" | "paused" | "finished" | "error";
   rate: number;
+  /**
+   * Per-book voice pitch (0.5 – 2.0). Optional because records written
+   * before pitch existed have no value — callers fall back to the global
+   * `settingsService.readingPitch` default in that case.
+   */
+  pitch?: number;
   voiceId?: string;
+  /**
+   * Chunk layout `chunkIndex` was saved under — see CHUNK_LAYOUT_VERSION in
+   * utils/chunkText.ts. Absent on records from before sentences were packed
+   * into chunks, whose index counts single sentences.
+   */
+  chunkLayout?: number;
   timestamp: number;
 }
 

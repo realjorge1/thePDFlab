@@ -180,6 +180,21 @@ function PdfEditorScreen() {
           clone.querySelectorAll('.crop-overlay').forEach(function(e){ e.remove(); });
           clone.querySelectorAll('.crop-btn-bar').forEach(function(e){ e.remove(); });
           clone.querySelectorAll('.img-resize-handle').forEach(function(e){ e.remove(); });
+          // Proofread marks (R3) are DECORATION ONLY: unwrap every
+          // <span class="pf"> so the exported document is byte-identical
+          // to one exported with no marks on screen. normalize() re-merges
+          // the text nodes the wrapping split, so the serialized HTML is
+          // exactly what it was before marking.
+          clone.querySelectorAll('span.pf').forEach(function(n){
+            var parent = n.parentNode;
+            if (!parent) return;
+            while (n.firstChild) parent.insertBefore(n.firstChild, n);
+            parent.removeChild(n);
+          });
+          clone.querySelectorAll('[data-pfid]').forEach(function(e){
+            e.removeAttribute('data-pfid');
+          });
+          clone.normalize();
           clone.querySelectorAll('.img-resize-wrap').forEach(function(w){
             var img = w.querySelector('img');
             if (img) { w.parentNode.insertBefore(img, w); }

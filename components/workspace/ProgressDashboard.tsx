@@ -31,11 +31,14 @@ import {
   type WorkspaceInsights,
 } from "@/services/workspaceInsightsService";
 import { personalizedSuggestions } from "@/components/workspace/aiActions";
+import { ContinueReadingCard } from "@/components/ContinueReadingCard";
+import { useSettings } from "@/services/settingsService";
 
 const ACCENT = "#9333EA";
 
 export default function ProgressDashboard({ mode, t }: { mode: "light" | "dark"; t: any }) {
   const router = useRouter();
+  const { settings } = useSettings();
   const [insights, setInsights] = useState<WorkspaceInsights | null>(null);
   const [suggestions, setSuggestions] = useState<string[] | null>(null);
   const [suggesting, setSuggesting] = useState(false);
@@ -87,6 +90,10 @@ export default function ProgressDashboard({ mode, t }: { mode: "light" | "dark";
 
   return (
     <ScrollView contentContainerStyle={styles.body} showsVerticalScrollIndicator={false}>
+      {/* Pick up where you left off (R2). Premium by construction: the whole
+          WorkSpace is inside <PremiumGate>. */}
+      <ContinueReadingCard hidden={settings.hideContinueReading} />
+
       <Text style={[styles.sectionTitle, { color: t.text }]}>Your activity</Text>
 
       <View style={styles.grid}>

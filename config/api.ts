@@ -1,5 +1,15 @@
 import Constants from "expo-constants";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import {
+  AIError,
+  aiErrorFromResponseBody,
+  normalizeAIError,
+} from "@/services/ai/aiErrors";
+import {
+  getAIRequestHeaders,
+  isAIApiPath,
+  mergeHeaders,
+} from "@/services/ai/aiRequestHeaders";
 
 // ─── Backend pool (primary + failover backups) ───────────────────────────────
 // The app talks to a POOL of interchangeable backends, tried in priority order.
@@ -124,7 +134,6 @@ export const API_ENDPOINTS = {
     REPAIR_ENHANCED: `${API_BASE_URL}/pdf/repair-enhanced`,
     OPTIMIZE_IMAGES: `${API_BASE_URL}/pdf/optimize-images`,
     REMOVE_DUPLICATES: `${API_BASE_URL}/pdf/remove-duplicates`,
-    FLATTEN: `${API_BASE_URL}/pdf/flatten`,
     PROTECT: `${API_BASE_URL}/pdf/protect`,
     UNLOCK: `${API_BASE_URL}/pdf/unlock`,
     ENCRYPT: `${API_BASE_URL}/pdf/encrypt`,
@@ -175,6 +184,12 @@ export const API_ENDPOINTS = {
     EXPLAIN: `${API_BASE_URL}/ai/explain`,
     QUIZ: `${API_BASE_URL}/ai/quiz`,
     OCR_SCAN: `${API_BASE_URL}/ai/ocr-scan`,
+    /**
+     * High-frequency, low-latency proofreading (contract P5.1): answered in
+     * 15 s, allowed 20 s by the app — never the 180 s document-task budget.
+     * Gated by AI_PROOFREAD plus the backend's `proofread` capability.
+     */
+    PROOFREAD: `${API_BASE_URL}/ai/proofread`,
   },
 
   // Document Operations
@@ -204,8 +219,6 @@ export const API_ENDPOINTS = {
     BATCH_COMPRESS: `${API_BASE_URL}/batch-compress`,
     FIND_REPLACE: `${API_BASE_URL}/find-replace`,
     FIND_REPLACE_PREVIEW: `${API_BASE_URL}/find-replace/preview`,
-    QRCODE: `${API_BASE_URL}/qrcode`,
-    QRCODE_PREVIEW: `${API_BASE_URL}/qrcode/preview`,
     HEADER_FOOTER: `${API_BASE_URL}/header-footer`,
     HIGHLIGHT_EXPORT: `${API_BASE_URL}/highlight-export`,
     CITATIONS_EXTRACT: `${API_BASE_URL}/citations/extract`,
@@ -277,6 +290,13 @@ export async function resilientFetch(
   const callerSignal = init.signal as AbortSignal | null | undefined;
   let lastErr: unknown;
 
+  // Contract v2 (C3): every /ai/* request identifies the app, user, version and
+  // request. One Request-Id per logical request, shared across failover tries.
+  if (isAIApiPath(path)) {
+    const aiHeaders = await getAIRequestHeaders();
+    init = { ...init, headers: mergeHeaders(init.headers, aiHeaders) };
+  }
+
   for (let i = 0; i < order.length; i++) {
     const idx = order[i];
     const url = `${BACKEND_BASES[idx]}${path}`;
@@ -320,6 +340,240 @@ export async function resilientFetch(
   throw lastErr instanceof Error
     ? lastErr
     : new Error("All backends are unavailable. Please try again shortly.");
+}
+
+// ─── Streaming (Server-Sent Events) ──────────────────────────────────────────
+
+export interface ResilientStreamOptions {
+  /** Per-attempt time allowed until response headers arrive (default 30 s). */
+  connectTimeoutMs?: number;
+  /** Abort when no bytes arrive for this long while streaming (default 45 s). Pings reset it. */
+  idleTimeoutMs?: number;
+  /** Response statuses that trigger failover before the stream starts. */
+  retryStatuses?: Set<number>;
+}
+
+/** A started 2xx stream. It is never failed over once returned. */
+export interface ResilientStream {
+  status: number;
+  headers: { get(name: string): string | null };
+  /**
+   * Read the body until it ends, delivering each chunk (bytes, or text when the
+   * runtime cannot stream). Rejects with AIError CANCELLED / TIMEOUT / NETWORK.
+   */
+  read(onChunk: (chunk: Uint8Array | string) => void): Promise<void>;
+  /** Abort the request and stop network traffic. */
+  cancel(): void;
+}
+
+interface StreamFetchResponse {
+  ok: boolean;
+  status: number;
+  headers: { get(name: string): string | null };
+  body?: { getReader(): { read(): Promise<{ done: boolean; value?: Uint8Array }>; cancel(): Promise<void> } } | null;
+  text(): Promise<string>;
+}
+
+type StreamFetch = (
+  url: string,
+  init: { method?: string; headers?: Record<string, string>; body?: any; signal?: AbortSignal },
+) => Promise<StreamFetchResponse>;
+
+let _streamFetchOverride: StreamFetch | null = null;
+
+/** Test-only: replace the streaming fetch implementation. */
+export function __setStreamFetchForTests(fn: StreamFetch | null): void {
+  _streamFetchOverride = fn;
+}
+
+function _getStreamFetch(): StreamFetch {
+  if (_streamFetchOverride) return _streamFetchOverride;
+  try {
+    // expo/fetch exposes a real ReadableStream body on iOS and Android.
+    const mod = require("expo/fetch");
+    if (typeof mod?.fetch === "function") return mod.fetch as StreamFetch;
+  } catch {
+    // fall back to the global fetch (no incremental body on RN, read as text)
+  }
+  return fetch as unknown as StreamFetch;
+}
+
+/**
+ * Streaming fetch with backend failover — the SSE sibling of resilientFetch.
+ *
+ * Failover happens ONLY until response headers arrive (network error, connect
+ * timeout, or a failover status). Once a 2xx stream has started it is never
+ * retried elsewhere, because that would duplicate the answer. A non-2xx
+ * response is read and thrown as an AIError. A caller abort cancels without
+ * failover.
+ */
+export async function resilientStream(
+  input: string,
+  init: RequestInit = {},
+  opts: ResilientStreamOptions = {},
+): Promise<ResilientStream> {
+  const path = _toApiPath(input);
+  const order = _backendOrder();
+  const retryStatuses = opts.retryStatuses ?? FAILOVER_STATUSES;
+  const connectTimeoutMs = opts.connectTimeoutMs ?? 30_000;
+  const idleTimeoutMs = opts.idleTimeoutMs ?? 45_000;
+  const callerSignal = init.signal as AbortSignal | null | undefined;
+  const streamFetch = _getStreamFetch();
+
+  let headers = mergeHeaders(init.headers, { Accept: "text/event-stream" });
+  if (isAIApiPath(path)) headers = mergeHeaders(headers, await getAIRequestHeaders());
+
+  let lastErr: AIError | null = null;
+
+  for (let i = 0; i < order.length; i++) {
+    const idx = order[i];
+    const url = `${BACKEND_BASES[idx]}${path}`;
+    const isLast = i === order.length - 1;
+
+    if (callerSignal?.aborted) throw new AIError("CANCELLED", "Cancelled");
+    const controller = new AbortController();
+    const onCallerAbort = () => controller.abort();
+    callerSignal?.addEventListener("abort", onCallerAbort);
+    let connectTimedOut = false;
+    const connectTimer =
+      connectTimeoutMs > 0
+        ? setTimeout(() => {
+            connectTimedOut = true;
+            controller.abort();
+          }, connectTimeoutMs)
+        : null;
+
+    let res: StreamFetchResponse;
+    try {
+      res = await streamFetch(url, {
+        method: init.method ?? "POST",
+        headers,
+        body: init.body as any,
+        signal: controller.signal,
+      });
+    } catch (e) {
+      if (connectTimer) clearTimeout(connectTimer);
+      callerSignal?.removeEventListener("abort", onCallerAbort);
+      if (callerSignal?.aborted) throw new AIError("CANCELLED", "Cancelled");
+      lastErr = connectTimedOut
+        ? new AIError("TIMEOUT", "The server took too long to respond.")
+        : normalizeAIError(e, { signal: callerSignal ?? null });
+      if (isLast) break;
+      continue; // network error / connect timeout → next backend
+    }
+    if (connectTimer) clearTimeout(connectTimer);
+
+    if (!res.ok) {
+      if (retryStatuses.has(res.status) && !isLast) {
+        callerSignal?.removeEventListener("abort", onCallerAbort);
+        lastErr = new AIError("UNAVAILABLE", `Backend ${BACKEND_BASES[idx]} → ${res.status}`, {
+          status: res.status,
+        });
+        try {
+          controller.abort();
+        } catch {
+          // ignore
+        }
+        continue;
+      }
+      _applyActive(idx);
+      _persistActive();
+      const bodyText = await res.text().catch(() => "");
+      callerSignal?.removeEventListener("abort", onCallerAbort);
+      throw aiErrorFromResponseBody(res.status, bodyText, {
+        headers: res.headers,
+        message: `Backend AI error (${res.status}): ${bodyText}`.trim(),
+      });
+    }
+
+    // Headers are in on a 2xx: this backend owns the answer from here on.
+    _applyActive(idx);
+    _persistActive();
+    return _makeStreamHandle(res, controller, callerSignal, onCallerAbort, idleTimeoutMs);
+  }
+
+  throw lastErr ?? new AIError("UNAVAILABLE", "All backends are unavailable. Please try again shortly.");
+}
+
+function _makeStreamHandle(
+  res: StreamFetchResponse,
+  controller: AbortController,
+  callerSignal: AbortSignal | null | undefined,
+  onCallerAbort: () => void,
+  idleTimeoutMs: number,
+): ResilientStream {
+  let released = false;
+  const release = () => {
+    if (released) return;
+    released = true;
+    callerSignal?.removeEventListener("abort", onCallerAbort);
+  };
+
+  return {
+    status: res.status,
+    headers: res.headers,
+    cancel() {
+      try {
+        controller.abort();
+      } catch {
+        // ignore
+      }
+      release();
+    },
+    async read(onChunk) {
+      const reader = res.body && typeof res.body.getReader === "function" ? res.body.getReader() : null;
+      if (!reader) {
+        // Runtime without an incremental body: deliver the whole text at once.
+        try {
+          const text = await res.text();
+          if (callerSignal?.aborted) throw new AIError("CANCELLED", "Cancelled");
+          if (text) onChunk(text);
+          return;
+        } catch (e) {
+          if (callerSignal?.aborted) throw new AIError("CANCELLED", "Cancelled");
+          throw normalizeAIError(e, { signal: callerSignal ?? null });
+        } finally {
+          release();
+        }
+      }
+
+      let idleTimedOut = false;
+      let idleTimer: ReturnType<typeof setTimeout> | null = null;
+      const armIdle = () => {
+        if (idleTimer) clearTimeout(idleTimer);
+        if (idleTimeoutMs <= 0) return;
+        idleTimer = setTimeout(() => {
+          idleTimedOut = true;
+          try {
+            controller.abort();
+          } catch {
+            // ignore
+          }
+          reader.cancel().catch(() => {});
+        }, idleTimeoutMs);
+      };
+
+      armIdle();
+      try {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          armIdle(); // any bytes — including ": ping" comments — keep it alive
+          if (value && value.byteLength) onChunk(value);
+          if (callerSignal?.aborted || idleTimedOut) break;
+        }
+      } catch (e) {
+        if (callerSignal?.aborted) throw new AIError("CANCELLED", "Cancelled");
+        if (idleTimedOut) throw new AIError("TIMEOUT", "The answer stopped arriving.");
+        throw normalizeAIError(e, { signal: callerSignal ?? null });
+      } finally {
+        if (idleTimer) clearTimeout(idleTimer);
+        release();
+      }
+      if (callerSignal?.aborted) throw new AIError("CANCELLED", "Cancelled");
+      if (idleTimedOut) throw new AIError("TIMEOUT", "The answer stopped arriving.");
+    },
+  };
 }
 
 /**

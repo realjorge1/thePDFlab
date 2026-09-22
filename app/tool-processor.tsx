@@ -87,7 +87,6 @@ const TOOL_TITLES: Record<string, string> = {
   repair: "Repair PDF",
   "optimize-images": "Optimize Images",
   "remove-duplicates": "Remove Duplicates",
-  flatten: "Flatten PDF",
   redact: "Redact Content",
   annotate: "Annotate PDF",
   "add-text": "Add Text",
@@ -99,8 +98,6 @@ const TOOL_TITLES: Record<string, string> = {
   compare: "Compare PDFs",
   "header-footer": "Add Header & Footer",
   resize: "Resize Pages",
-  "fill-form": "Fill Form",
-  "extract-data": "Extract Form Data",
   diff: "Show Differences",
   "merge-review": "Merge Reviews",
   "fix-orientation": "Fix Orientation",
@@ -130,7 +127,6 @@ const TOOL_TITLES: Record<string, string> = {
   "extract-images": "Extract Images",
   "batch-compress": "Batch Compress",
   "find-replace": "Find & Replace",
-  "qr-code": "QR Code",
   "highlight-export": "Export Highlights",
   "citation-extractor": "Citation Extractor",
 };
@@ -173,8 +169,6 @@ const TOOL_DESCRIPTIONS: Record<string, string> = {
   metadata: "Edit the title, author, subject, and keywords.",
   search: "Search for text within your PDF.",
   validate: "Check your PDF for structural errors.",
-  "fill-form": "Fill in form fields of a PDF.",
-  "extract-data": "Extract form field data from your PDF.",
   diff: "Compare two PDFs side by side.",
   compare: "Compare two PDFs side by side.",
   "merge-review": "Compare two PDFs side by side.",
@@ -205,13 +199,11 @@ const TOOL_DESCRIPTIONS: Record<string, string> = {
   redact: "Black out a rectangular area to hide sensitive content.",
   crop: "Trim page edges by setting crop margins.",
   "page-numbers": "Add page numbers to every page of your PDF.",
-  flatten: "Flatten form fields into static content.",
   ocr: "Run optical character recognition on scanned pages.",
   "black-white": "Convert all pages to grayscale (black & white).",
   "extract-images": "Extract all embedded images from your PDF.",
   "batch-compress": "Compress multiple PDFs at once.",
   "find-replace": "Find and replace text in your PDF.",
-  "qr-code": "Add QR codes to your PDF pages.",
   "highlight-export": "Export annotations and highlights from your PDF.",
   "citation-extractor": "Extract and format academic references.",
 };
@@ -384,12 +376,6 @@ export default function ToolProcessorScreen() {
   const [redactWidth, setRedactWidth] = useState("100");
   const [redactHeight, setRedactHeight] = useState("20");
   const [selectedRedactPreset, setSelectedRedactPreset] = useState("top-banner");
-  // Fill-form state: extracted field names + user-entered values
-  const [fillFormFields, setFillFormFields] = useState<
-    Array<{ name: string; value: string; type?: string; options?: string[] }>
-  >([]);
-  const [fillFormLoading, setFillFormLoading] = useState(false);
-  const [fillFormLoaded, setFillFormLoaded] = useState(false);
   // Attachments state: files to attach
   const [attachmentFiles, setAttachmentFiles] = useState<
     Array<{ uri: string; name: string; mimeType: string }>
@@ -501,57 +487,6 @@ export default function ToolProcessorScreen() {
   useEffect(() => {
     wakeUpBackend().catch(console.warn);
   }, []);
-
-  // Extract existing form field names for fill-form tool
-  const loadFormFields = async () => {
-    if (!fileUri || fillFormLoaded) return;
-    setFillFormLoading(true);
-    try {
-      const result = await processWithTool(
-        {
-          toolId: "extract-data",
-          fileUri: fileUri as string,
-          fileName: file as string,
-          fileMimeType: (fileMimeType as string) || "application/pdf",
-          params: {},
-        },
-        () => {},
-      );
-      if (result.success && result.jsonData) {
-        const data = result.jsonData;
-        // New API returns { fields: [{name, type, value, options}], count }
-        const fields: Array<{ name: string; type?: string; value?: string; options?: string[] }> =
-          data.fields || [];
-        if (fields.length > 0) {
-          setFillFormFields(
-            fields.map((f) => ({
-              name: f.name,
-              type: f.type || "text",
-              value: f.value || "",
-              options: f.options,
-            })),
-          );
-        } else {
-          setFillFormFields([{ name: "", value: "", type: "text" }]);
-        }
-      } else {
-        setFillFormFields([{ name: "", value: "", type: "text" }]);
-      }
-    } catch (e) {
-      console.warn("Failed to extract form fields:", e);
-      setFillFormFields([{ name: "", value: "" }]);
-    } finally {
-      setFillFormLoading(false);
-      setFillFormLoaded(true);
-    }
-  };
-
-  // Auto-load form fields when tool is fill-form
-  useEffect(() => {
-    if (tool === "fill-form" && fileUri && !fillFormLoaded) {
-      loadFormFields();
-    }
-  }, [tool, fileUri]);
 
   // Pick attachment files from device
   const handlePickAttachmentsFromDevice = async () => {
@@ -759,19 +694,6 @@ export default function ToolProcessorScreen() {
     if (tool === "hyperlinks" && !linkUrl.trim()) {
       Alert.alert("Input Required", "Please enter a URL.");
       return;
-    }
-
-    if (tool === "fill-form") {
-      const hasValues = fillFormFields.some(
-        (f) => f.name.trim() && f.value.trim(),
-      );
-      if (!hasValues) {
-        Alert.alert(
-          "Input Required",
-          "Please enter a value for at least one form field.",
-        );
-        return;
-      }
     }
 
     if (tool === "attachments") {
@@ -1042,17 +964,6 @@ export default function ToolProcessorScreen() {
           params.replace = frReplaceText;
           params.caseSensitive = frCaseSensitive ? "true" : "false";
           break;
-        case "fill-form": {
-          // Build key-value map from fill form fields
-          const fillData: Record<string, string> = {};
-          fillFormFields.forEach((f) => {
-            if (f.name.trim() && f.value.trim()) {
-              fillData[f.name] = f.value;
-            }
-          });
-          params.data = JSON.stringify(fillData);
-          break;
-        }
         case "attachments":
           // Pass attachment files as JSON for pdfToolsService to append
           params.attachmentFiles = JSON.stringify(attachmentFiles);
@@ -3061,180 +2972,6 @@ export default function ToolProcessorScreen() {
                       }}
                       t={t}
                     />
-                  </View>
-                )}
-
-                {/* Fill Form - Professional structured layout */}
-                {tool === "fill-form" && (
-                  <View style={{ gap: spacing.sm }}>
-                    {fillFormLoading && (
-                      <View style={{ alignItems: "center", paddingVertical: spacing.xl, backgroundColor: t.card, borderRadius: 12 }}>
-                        <ActivityIndicator size="large" color={t.primary} />
-                        <Text style={{ color: t.textSecondary, fontSize: 14, marginTop: spacing.md }}>
-                          Scanning for form fields…
-                        </Text>
-                      </View>
-                    )}
-
-                    {!fillFormLoading && (
-                      <>
-                        {/* Progress bar */}
-                        {fillFormFields.some((f) => f.name) && (
-                          <View style={{ backgroundColor: t.card, borderRadius: 12, padding: spacing.md }}>
-                            <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 6 }}>
-                              <Text style={{ color: t.textSecondary, fontSize: 12 }}>
-                                {fillFormFields[0]?.name
-                                  ? `${fillFormFields.length} field${fillFormFields.length !== 1 ? "s" : ""} detected`
-                                  : "Add fields below"}
-                              </Text>
-                              <Text style={{ color: t.primary, fontSize: 12, fontWeight: "700" }}>
-                                {fillFormFields.filter((f) => f.value.trim()).length}/{fillFormFields.length} filled
-                              </Text>
-                            </View>
-                            <View style={{ height: 4, borderRadius: 2, backgroundColor: t.backgroundSecondary, overflow: "hidden" }}>
-                              <View style={{
-                                height: "100%", borderRadius: 2, backgroundColor: t.primary,
-                                width: `${fillFormFields.length > 0 ? (fillFormFields.filter((f) => f.value.trim()).length / fillFormFields.length) * 100 : 0}%`,
-                              }} />
-                            </View>
-                          </View>
-                        )}
-
-                        {fillFormFields.map((field, index) => {
-                          const isCheckbox = field.type === "checkbox";
-                          const isDropdown = field.type === "dropdown" || field.type === "radio" || field.type === "listbox";
-                          const filled = field.value.trim().length > 0;
-                          return (
-                            <View
-                              key={index}
-                              style={{
-                                backgroundColor: t.card,
-                                borderRadius: 12,
-                                padding: spacing.md,
-                                borderLeftWidth: 3,
-                                borderLeftColor: filled ? "#10B981" : t.border,
-                              }}
-                            >
-                              {/* Field name row */}
-                              <View style={{ flexDirection: "row", alignItems: "center", marginBottom: isCheckbox ? 0 : 10 }}>
-                                <View style={{
-                                  width: 28, height: 28, borderRadius: 8, alignItems: "center", justifyContent: "center", marginRight: 10,
-                                  backgroundColor: isCheckbox ? "#F59E0B15" : isDropdown ? "#8B5CF615" : t.primary + "15",
-                                }}>
-                                  <Text style={{
-                                    fontSize: 10, fontWeight: "800",
-                                    color: isCheckbox ? "#F59E0B" : isDropdown ? "#8B5CF6" : t.primary,
-                                  }}>
-                                    {isCheckbox ? "☑" : isDropdown ? "▼" : "T"}
-                                  </Text>
-                                </View>
-                                <TextInput
-                                  value={field.name}
-                                  onChangeText={(v) => {
-                                    const updated = [...fillFormFields];
-                                    updated[index] = { ...updated[index], name: v };
-                                    setFillFormFields(updated);
-                                  }}
-                                  placeholder="Field name"
-                                  placeholderTextColor={t.textTertiary}
-                                  style={{ flex: 1, fontSize: 14, fontWeight: "600", color: t.text, paddingVertical: 0 }}
-                                  editable={!field.name || true}
-                                />
-                                {filled && <CheckCircle color="#10B981" size={16} style={{ marginLeft: 6 }} />}
-                                <TouchableOpacity
-                                  onPress={() => {
-                                    const updated = fillFormFields.filter((_, i) => i !== index);
-                                    setFillFormFields(updated.length > 0 ? updated : [{ name: "", value: "", type: "text" }]);
-                                  }}
-                                  style={{ padding: 4, marginLeft: 4 }}
-                                >
-                                  <Trash2 color={t.textTertiary} size={15} />
-                                </TouchableOpacity>
-                              </View>
-
-                              {/* Value input */}
-                              {isCheckbox ? (
-                                <TouchableOpacity
-                                  onPress={() => {
-                                    const updated = [...fillFormFields];
-                                    updated[index] = { ...updated[index], value: field.value === "true" ? "false" : "true" };
-                                    setFillFormFields(updated);
-                                  }}
-                                  style={{ flexDirection: "row", alignItems: "center", marginTop: 8, gap: 8 }}
-                                >
-                                  <View style={{
-                                    width: 22, height: 22, borderRadius: 4, borderWidth: 2,
-                                    borderColor: field.value === "true" ? "#10B981" : t.border,
-                                    backgroundColor: field.value === "true" ? "#10B981" : "transparent",
-                                    alignItems: "center", justifyContent: "center",
-                                  }}>
-                                    {field.value === "true" && <Check color="#fff" size={14} />}
-                                  </View>
-                                  <Text style={{ color: t.textSecondary, fontSize: 13 }}>
-                                    {field.value === "true" ? "Checked" : "Unchecked"}
-                                  </Text>
-                                </TouchableOpacity>
-                              ) : isDropdown && field.options && field.options.length > 0 ? (
-                                <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6, marginTop: 4 }}>
-                                  {field.options.map((opt) => (
-                                    <TouchableOpacity
-                                      key={opt}
-                                      onPress={() => {
-                                        const updated = [...fillFormFields];
-                                        updated[index] = { ...updated[index], value: opt };
-                                        setFillFormFields(updated);
-                                      }}
-                                      style={{
-                                        paddingHorizontal: 12, paddingVertical: 6, borderRadius: 20,
-                                        backgroundColor: field.value === opt ? "#8B5CF6" : t.backgroundSecondary,
-                                        borderWidth: 1, borderColor: field.value === opt ? "#8B5CF6" : t.border,
-                                      }}
-                                    >
-                                      <Text style={{ color: field.value === opt ? "#fff" : t.text, fontSize: 13 }}>{opt}</Text>
-                                    </TouchableOpacity>
-                                  ))}
-                                </View>
-                              ) : (
-                                <TextInput
-                                  value={field.value}
-                                  onChangeText={(v) => {
-                                    const updated = [...fillFormFields];
-                                    updated[index] = { ...updated[index], value: v };
-                                    setFillFormFields(updated);
-                                  }}
-                                  placeholder={`Enter ${field.name || "value"}…`}
-                                  placeholderTextColor={t.textTertiary}
-                                  style={[
-                                    styles.textInput,
-                                    {
-                                      backgroundColor: t.backgroundSecondary,
-                                      color: t.text,
-                                      borderWidth: 1,
-                                      borderColor: filled ? "#10B981" + "40" : t.border,
-                                      marginBottom: 0,
-                                    },
-                                  ]}
-                                />
-                              )}
-                            </View>
-                          );
-                        })}
-
-                        <TouchableOpacity
-                          onPress={() => setFillFormFields([...fillFormFields, { name: "", value: "", type: "text" }])}
-                          style={{
-                            flexDirection: "row", alignItems: "center", justifyContent: "center",
-                            backgroundColor: t.card, borderRadius: 12, padding: spacing.md,
-                            borderWidth: 1, borderColor: t.primary + "30",
-                          }}
-                        >
-                          <Plus color={t.primary} size={18} />
-                          <Text style={{ color: t.primary, fontWeight: "600", marginLeft: spacing.xs }}>
-                            Add Field
-                          </Text>
-                        </TouchableOpacity>
-                      </>
-                    )}
                   </View>
                 )}
 

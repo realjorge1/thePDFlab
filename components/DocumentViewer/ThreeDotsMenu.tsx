@@ -3,7 +3,7 @@
  * Renders as a full-screen overlay with a card positioned near the top-right.
  *
  * Menu items:
- *   Share · Search Text · Read Aloud · Chat with File
+ *   Share · Search Text · Read Aloud · Chat with File · Bookmark
  *   Lock File (PDF only) · Edit File · Delete · Star
  */
 import MaterialIcons from "@expo/vector-icons/MaterialIcons";
@@ -53,6 +53,13 @@ export interface ThreeDotsMenuProps {
   onDelete: () => void;
   onStar: () => void;
   isStarred: boolean;
+  /**
+   * Bookmarks (R1). Optional and additive: when onSavePage is omitted the
+   * menu is exactly what it was before. Follows the isStarred pattern above —
+   * the label toggles to reflect the CURRENT location's state.
+   */
+  onSavePage?: () => void;
+  isPageSaved?: boolean;
   /** "pdf" shows Lock File; "docx" hides it. */
   fileType: "pdf" | "docx";
 }
@@ -73,6 +80,8 @@ export function ThreeDotsMenu({
   onDelete,
   onStar,
   isStarred,
+  onSavePage,
+  isPageSaved = false,
   fileType,
 }: ThreeDotsMenuProps) {
   const items: MenuItem[] = [
@@ -81,6 +90,18 @@ export function ThreeDotsMenu({
     { id: "read-aloud", label: "Read Aloud", icon: "volume-up", onPress: onReadAloud },
     { id: "chat", label: "Chat with File", icon: "chat", onPress: onChatWithFile },
   ];
+
+  if (onSavePage) {
+    items.push({
+      id: "save-page",
+      label: isPageSaved ? "Remove Bookmark" : "Bookmark",
+      icon: isPageSaved ? "bookmark" : "bookmark-border",
+      onPress: onSavePage,
+      trailing: isPageSaved ? (
+        <MaterialIcons name="check" size={18} color="#10B981" />
+      ) : undefined,
+    });
+  }
 
   if (onAnalyze) {
     items.push({ id: "analyze", label: "Analyze", icon: "auto-awesome", onPress: onAnalyze });

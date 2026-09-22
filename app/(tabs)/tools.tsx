@@ -13,6 +13,7 @@ import { colors } from "@/constants/theme";
 import { toolCategories } from "@/constants/tools";
 import { useDocuments as useDocLibDocuments } from "@/hooks/useDocLib";
 import { useFileIndex } from "@/hooks/useFileIndex";
+import { useTabDockInset } from "@/hooks/useTabDock";
 import { pickFilesWithResult } from "@/services/document-manager";
 import { upsertFileRecord } from "@/services/fileIndexService";
 import { useTheme } from "@/services/ThemeProvider";
@@ -73,7 +74,6 @@ const TOOLS_REQUIRING_PDF = new Set([
   "page-numbers",
   "sign",
   "redact",
-  "flatten",
   "unlock",
   "protect",
   "compare",
@@ -90,8 +90,6 @@ const TOOLS_REQUIRING_PDF = new Set([
   "metadata",
   "search",
   "validate",
-  "fill-form",
-  "extract-data",
   "diff",
   "merge-review",
   "fix-orientation",
@@ -111,7 +109,6 @@ const DEDICATED_SCREEN_TOOLS: Record<string, string> = {
   "extract-images": "/extract-images",
   "batch-compress": "/batch-compress",
   "find-replace": "/find-replace",
-  "qr-code": "/qr-code",
   "highlight-export": "/highlight-export",
   "citation-extractor": "/citation-extractor",
 };
@@ -163,6 +160,8 @@ const CONVERSION_TOOLS: Record<
 export default function ToolsScreen() {
   const router = useRouter();
   const { colors: themeColors } = useTheme();
+  // Room for the floating tab dock at the end of the scroll (see Home).
+  const dockInset = useTabDockInset();
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const toggle = useCallback(
     (key: string) => setExpanded((p) => ({ ...p, [key]: !p[key] })),
@@ -216,12 +215,6 @@ export default function ToolsScreen() {
     // Batch compress: navigate directly (no file pre-pick needed, multi-file picker is in-screen)
     if (toolId === "batch-compress") {
       router.push("/batch-compress" as any);
-      return;
-    }
-
-    // QR Code: can start without a file (preview first, then pick)
-    if (toolId === "qr-code") {
-      router.push("/qr-code" as any);
       return;
     }
 
@@ -502,6 +495,7 @@ export default function ToolsScreen() {
   return (
     <SafeAreaView
       style={[styles.safe, { backgroundColor: themeColors.settingsBg }]}
+      edges={["top"]}
     >
       {/* Header */}
       <AppHeaderContainer>
@@ -531,7 +525,7 @@ export default function ToolsScreen() {
         contentContainerStyle={{
           paddingHorizontal: 12,
           paddingTop: 12,
-          paddingBottom: 40,
+          paddingBottom: dockInset + 16,
         }}
         showsVerticalScrollIndicator={false}
       >

@@ -13,6 +13,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 const STORAGE_KEY = "@inscribed/reader_settings";
 
 const VALID_THEMES: ReaderTheme[] = ["light", "sepia", "dark"];
+const VALID_ALIGNMENTS = ["left", "justify"] as const;
 
 function clamp(n: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, n));
@@ -31,6 +32,9 @@ export function getDefaultReaderSettings(
     lineHeight: 1.6,
     theme: colorScheme === "dark" ? "dark" : "light",
     fontFamily: "system-ui",
+    margin: 16,
+    textAlign: "left",
+    paragraphSpacing: 1,
   };
 }
 
@@ -51,6 +55,25 @@ export async function getSavedReaderSettings(): Promise<ReaderSettings | null> {
         typeof parsed.fontFamily === "string" && parsed.fontFamily
           ? parsed.fontFamily
           : "system-ui",
+      // `|| default` would be wrong for these two: 0 is a legitimate choice
+      // (full-bleed text, no gap between paragraphs) and would be silently
+      // rewritten to the default. Test explicitly for a finite number so a
+      // field written before it existed falls back without swallowing zero.
+      margin: clamp(
+        Number.isFinite(Number(parsed.margin)) ? Number(parsed.margin) : 16,
+        0,
+        64,
+      ),
+      textAlign: VALID_ALIGNMENTS.includes(parsed.textAlign)
+        ? parsed.textAlign
+        : "left",
+      paragraphSpacing: clamp(
+        Number.isFinite(Number(parsed.paragraphSpacing))
+          ? Number(parsed.paragraphSpacing)
+          : 1,
+        0,
+        2,
+      ),
     };
   } catch {
     return null;

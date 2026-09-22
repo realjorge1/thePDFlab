@@ -13,7 +13,16 @@ import type {
   Underline,
   WebViewMessage,
 } from "@/src/types/document-viewer.types";
+import {
+  buildHighlightChunk,
+  buildHighlightClear,
+  buildHighlightInstall,
+  buildHighlightReset,
+  buildHighlightShow,
+} from "@/utils/readAloudHighlightScript";
 import { injectSelectionBridge } from "@/utils/selectionScripts";
+import { SNAPSHOT_MAX } from "@/services/savedPagesTypes";
+import { PAGE_HTML_CAPTURE_JS } from "@/utils/pageHtmlCapture";
 import React, {
   forwardRef,
   useCallback,
@@ -72,6 +81,48 @@ export interface MobileRendererHandle {
   bridgeStrikethrough: (id: string, startOffset: number, endOffset: number) => void;
   /** Extract all visible text from the WebView for Read Aloud. */
   extractTextForReadAloud: () => void;
+  /**
+   * Post the text currently ON SCREEN as a `visible-text` message.
+   *
+   * Bookmarks capture the page being saved through this, so it returns the FULL
+   * visible text with its paragraph breaks intact — not a short preview.
+   *
+   * Saved Pages (R1) uses this for a reflow document's excerpt. It is a
+   * SEPARATE message type from `read-aloud-text` on purpose: that one returns
+   * the WHOLE document, which is the wrong thing to quote on a saved page,
+   * and repurposing it would break Read Aloud.
+   */
+  captureVisibleText: () => void;
+  /**
+   * Post the MARKUP currently on screen as a `visible-html` message.
+   *
+   * Bookmarks store this as the page, so it comes back on /saved-page with
+   * its fonts, tables and lists intact instead of flattened to text. The
+   * capture and its sanitiser live in utils/pageHtmlCapture.ts, shared with
+   * the EPUB reader so the two cannot drift.
+   */
+  captureVisibleHtml: () => void;
+  /**
+   * Highlight the word currently being spoken.
+   *
+   * `chunkText` locates the passage and the offsets locate the word inside
+   * it — see utils/readAloudHighlightScript.ts for why this is a search
+   * rather than a document offset.
+   */
+  highlightSpokenWord: (
+    chunkText: string,
+    wordStart: number,
+    wordEnd: number,
+  ) => void;
+  /**
+   * Band the passage being read. Called on every chunk change, so readers
+   * whose speech engine reports no word positions still see where they are.
+   */
+  highlightSpokenChunk: (chunkText: string) => void;
+  /** Remove the read-aloud highlight, keeping the search position. */
+  clearSpokenWord: () => void;
+  /** Forget the highlighter's cached index and search position. */
+  resetSpokenWord: () => void;
 }
 
 // ============================================================================
@@ -98,6 +149,9 @@ export const MobileRenderer = forwardRef<MobileRendererHandle, Props>(
     const webViewRef = useRef<WebView>(null);
     const [webViewReady, setWebViewReady] = useState(false);
     const pendingQueue = useRef<string[]>([]);
+    // Whether the read-aloud highlighter script is installed in the current
+    // document. Reset whenever a document loads, since that discards it.
+    const highlighterInstalledRef = useRef(false);
     // What we hand to the WebView: a staged file:// URI on Android, inline HTML
     // elsewhere (or as a disk-write fallback). Null while the file is staging.
     const [htmlSource, setHtmlSource] = useState<
@@ -105,6 +159,11 @@ export const MobileRenderer = forwardRef<MobileRendererHandle, Props>(
     >(null);
     const filePathRef = useRef<string | null>(null);
     const writeSeqRef = useRef(0);
+
+    // A new document discards anything injected into the old one.
+    useEffect(() => {
+      highlighterInstalledRef.current = false;
+    }, [htmlSource]);
 
     // Flush any JS that was queued before WebView was ready
     useEffect(() => {
@@ -265,6 +324,89 @@ export const MobileRenderer = forwardRef<MobileRendererHandle, Props>(
             })(); true;`,
           );
         },
+        captureVisibleText() {
+          // Walks block-level children and keeps the ones intersecting the
+          // viewport, so what comes back is the page the reader can actually
+          // see rather than the whole document. Read-only: it never mutates
+          // the DOM and never touches the selection.
+          //
+          // Blocks are joined with a BLANK LINE, not a space: this text is
+          // stored as the bookmarked PAGE and read back on /saved-page, where
+          // paragraph structure is the difference between a page and a wall of
+          // words. The cap is SNAPSHOT_MAX — the same bound the snapshot store
+          // applies — rather than an excerpt-sized 1200, because what is being
+          // captured is the page, not a preview of it.
+          inject(
+            `(function(){
+              var LIMIT = ${SNAPSHOT_MAX};
+              try {
+                var root = document.getElementById('reader-content') || document.body;
+                var vh = window.innerHeight || 0;
+                var nodes = root.querySelectorAll('p,li,h1,h2,h3,h4,h5,h6,blockquote,td,pre');
+                var parts = [];
+                var size = 0;
+                for (var i = 0; i < nodes.length; i++) {
+                  var r = nodes[i].getBoundingClientRect();
+                  if (r.bottom > 0 && r.top < vh && r.height > 0) {
+                    var t = (nodes[i].innerText || nodes[i].textContent || '').trim();
+                    if (t) { parts.push(t); size += t.length + 2; }
+                  }
+                  if (size > LIMIT) break;
+                }
+                var text = parts.join('\n\n');
+                if (!text) {
+                  // Nothing block-level on screen — fall back to the top of
+                  // the document rather than returning nothing at all.
+                  text = (root.innerText || root.textContent || '');
+                }
+                window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'visible-text', text: text.slice(0, LIMIT) }));
+              } catch (e) {
+                window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'visible-text', text: '' }));
+              }
+            })(); true;`,
+          );
+        },
+        captureVisibleHtml() {
+          inject(
+            `${PAGE_HTML_CAPTURE_JS}
+            (function(){
+              try {
+                var root = document.getElementById('reader-content') || document.body;
+                var res = __inscribedCaptureVisibleHtml(document, root, window.innerHeight || 0);
+                window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'visible-html', html: res.html, css: res.css }));
+              } catch (e) {
+                window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'visible-html', html: '', css: '' }));
+              }
+            })(); true;`,
+          );
+        },
+        highlightSpokenWord(
+          chunkText: string,
+          wordStart: number,
+          wordEnd: number,
+        ) {
+          // Send the ~10 KB highlighter once per document, then only the short
+          // call per word — re-sending the whole script with every spoken word
+          // was pure bridge and parse overhead.
+          if (!highlighterInstalledRef.current) {
+            inject(buildHighlightInstall());
+            highlighterInstalledRef.current = true;
+          }
+          inject(buildHighlightShow(chunkText, wordStart, wordEnd));
+        },
+        highlightSpokenChunk(chunkText: string) {
+          if (!highlighterInstalledRef.current) {
+            inject(buildHighlightInstall());
+            highlighterInstalledRef.current = true;
+          }
+          inject(buildHighlightChunk(chunkText));
+        },
+        clearSpokenWord() {
+          inject(buildHighlightClear());
+        },
+        resetSpokenWord() {
+          inject(buildHighlightReset());
+        },
       }),
       [inject],
     );
@@ -275,6 +417,8 @@ export const MobileRenderer = forwardRef<MobileRendererHandle, Props>(
         try {
           const msg: WebViewMessage = JSON.parse(event.nativeEvent.data);
           if (msg.type === "ready") {
+            // A freshly loaded document has no highlighter in it yet.
+            highlighterInstalledRef.current = false;
             setWebViewReady(true);
             onReady?.();
           }

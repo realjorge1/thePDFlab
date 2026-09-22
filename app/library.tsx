@@ -5,7 +5,13 @@ import { Ionicons } from "@expo/vector-icons";
 import MaterialIcons from "@expo/vector-icons/MaterialIcons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { router, useFocusEffect, useLocalSearchParams } from "expo-router";
-import { FolderOpen, Grid3x3, List, Search } from "lucide-react-native";
+import {
+  FolderOpen,
+  Grid3x3,
+  LibraryBig,
+  List,
+  Search,
+} from "lucide-react-native";
 import React, {
   useCallback,
   useEffect,
@@ -34,11 +40,20 @@ import { SafeAreaView } from "react-native-safe-area-context";
 
 import { PINGate } from "@/components/PINGate";
 import { usePermissionPrimer } from "@/components/PermissionPrimer";
+import {
+  ContinueReading,
+  ShelfCard,
+  type ShelfBook,
+} from "@/components/library/ShelfCard";
 import { ProgressRing } from "@/components/ProgressRing";
 import { PressableScale } from "@/components/ui/PressableScale";
+import { SAVED_PAGES } from "@/constants/featureFlags";
 import { colors } from "@/constants/theme";
 import { useFileIndex } from "@/hooks/useFileIndex";
-import { useReadingProgressFor } from "@/hooks/useReadingProgress";
+import {
+  useReadingProgress,
+  useReadingProgressFor,
+} from "@/hooks/useReadingProgress";
 import { upsertFileRecord } from "@/services/fileIndexService";
 import {
   useDocuments as useDocLibDocuments,
@@ -111,7 +126,17 @@ type SourceFilter =
   | "downloaded"
   | "shared"
   | "favorites";
-type ViewMode = "list" | "grid";
+/**
+ * Shelf is a third *mode on this screen*, not a fourth library screen.
+ *
+ * The app already has three library surfaces; a fourth would make it harder
+ * to use, not better. The FlatList below is keyed by viewMode and re-mounts
+ * cleanly on switch, which is what makes adding a mode safe.
+ */
+type ViewMode = "list" | "grid" | "shelf";
+
+/** Formats the shelf shows. Everything else stays in list and grid. */
+const READABLE_EXTENSIONS = new Set(["epub", "pdf", "docx", "doc"]);
 
 // ============================================================================
 // MAIN COMPONENT
@@ -277,6 +302,13 @@ export default function LibraryScreen() {
   }, [legacyFiles, indexFiles, doclibDocs]);
 
   const isLoading = legacyLoading || indexLoading;
+  // Skeletons are for the first load only. The focus refresh (e.g. coming back
+  // from a viewer) flips isLoading again; swapping the FlatList out for
+  // skeletons then would unmount it and throw the scroll position back to the
+  // top instead of leaving the user where they opened the file from.
+  const hasLoadedOnceRef = useRef(false);
+  if (!isLoading) hasLoadedOnceRef.current = true;
+  const showSkeletons = isLoading && !hasLoadedOnceRef.current;
 
   // Refresh all sources
   const refresh = useCallback(async () => {
@@ -675,9 +707,11 @@ export default function LibraryScreen() {
   }, []);
 
   // ── View mode toggle ─────────────────────────────────────────────────────
+  /** Cycles list → grid → shelf → list. */
   const toggleViewMode = useCallback(() => {
     setViewMode((prev) => {
-      const next = prev === "list" ? "grid" : "list";
+      const next: ViewMode =
+        prev === "list" ? "grid" : prev === "grid" ? "shelf" : "list";
       AsyncStorage.setItem(VIEW_MODE_KEY, next).catch(console.error);
       return next;
     });
@@ -933,6 +967,80 @@ export default function LibraryScreen() {
   // ============================================================================
   // RENDER HELPERS
   // ============================================================================
+  // ── Shelf mode ─────────────────────────────────────
+  // Readable formats only, most recently read first, so the book someone is
+  // part-way through is the first thing they see. Progress comes from the
+  // same subscription the viewers write to, so it updates without a refresh.
+  const progressMap = useReadingProgress();
+
+  const shelfBooks: ShelfBook[] = useMemo(() => {
+    const books = filteredFiles
+      .filter((f) => READABLE_EXTENSIONS.has((f.extension || "").toLowerCase()))
+      .map((f) => {
+        const entry = progressMap[f.uri];
+        return {
+          id: f.id,
+          uri: f.uri,
+          title: f.displayName,
+          extension: (f.extension || "").toLowerCase(),
+          progress: entry?.progress ?? 0,
+          currentPage: entry?.currentPage,
+          totalPages: entry?.totalPages,
+          // SAF URIs go stale when a file is moved or deleted elsewhere.
+          available: f.cacheValid !== false,
+          lastReadAt: entry?.lastReadAt ?? f.lastOpenedAt ?? f.dateAdded ?? 0,
+        };
+      });
+
+    books.sort((a, b) => b.lastReadAt - a.lastReadAt);
+    return books;
+  }, [filteredFiles, progressMap]);
+
+  /** The most recent book that is started but not finished. */
+  const continueBook = useMemo(
+    () =>
+      shelfBooks.find(
+        (b) => b.available && b.progress > 0.01 && b.progress < 0.99,
+      ) ?? null,
+    [shelfBooks],
+  );
+
+  const shelfTheme = useMemo(
+    () => ({
+      card: t.card,
+      text: t.text,
+      textSecondary: t.textSecondary,
+      border: containerBorderColor,
+      primary: t.primary,
+    }),
+    [t, containerBorderColor],
+  );
+
+  const shelfKeyExtractor = useCallback((item: ShelfBook) => item.id, []);
+
+  const renderShelfItem = useCallback(
+    ({ item }: { item: ShelfBook }) => {
+      const file = filteredFiles.find((f) => f.id === item.id);
+      return (
+        <ShelfCard
+          book={item}
+          theme={shelfTheme}
+          style={styles.shelfCard}
+          onPress={() => {
+            if (!file) return;
+            if (!item.available) {
+              handleFileLongPress(file);
+              return;
+            }
+            handleFilePress(file);
+          }}
+          onLongPress={() => file && handleFileLongPress(file)}
+        />
+      );
+    },
+    [filteredFiles, shelfTheme, handleFilePress, handleFileLongPress],
+  );
+
   const ITEM_HEIGHT = 72; // Fixed row height for getItemLayout
   const keyExtractor = useCallback((item: QuickAccessFile) => item.id, []);
   const getItemLayout = useCallback(
@@ -1315,6 +1423,8 @@ export default function LibraryScreen() {
               >
                 {viewMode === "list" ? (
                   <Grid3x3 color="#FFFFFF" size={18} strokeWidth={2.5} />
+                ) : viewMode === "grid" ? (
+                  <LibraryBig color="#FFFFFF" size={18} strokeWidth={2.5} />
                 ) : (
                   <List color="#FFFFFF" size={18} strokeWidth={2.5} />
                 )}
@@ -1638,6 +1748,35 @@ export default function LibraryScreen() {
                 </Text>
               </PressableScale>
 
+              {/* Bookmarks — the ONLY way into saved pages.
+                  Unlike its neighbours this opens a screen rather than
+                  filtering the grid: a bookmark is a page, not a file, and it
+                  outlives the file it came from, so it cannot be expressed as
+                  a filter over this list. */}
+              {SAVED_PAGES && (
+                <PressableScale
+                  haptic="selection"
+                  scaleTo={0.94}
+                  style={[
+                    styles.filterChip,
+                    {
+                      backgroundColor:
+                        colorScheme === "dark" ? "#334155" : "#DBEAFE",
+                      borderColor: "transparent",
+                    },
+                  ]}
+                  onPress={() => router.push("/saved-pages" as any)}
+                  accessibilityLabel="Bookmarks"
+                >
+                  <MaterialIcons name="bookmark" size={14} color="#3B82F6" />
+                  <Text
+                    style={[styles.filterChipText, { color: "#3B82F6" }]}
+                  >
+                    Bookmarks
+                  </Text>
+                </PressableScale>
+              )}
+
               {/* Source: Created */}
               <PressableScale
                 haptic="selection"
@@ -1865,7 +2004,7 @@ export default function LibraryScreen() {
         )}
 
         {/* Content */}
-        {isLoading ? (
+        {showSkeletons ? (
           renderSkeletons()
         ) : filteredFiles.length === 0 ? (
           <View style={{ flex: 1 }}>
@@ -1875,20 +2014,34 @@ export default function LibraryScreen() {
           </View>
         ) : (
           <View style={{ flex: 1 }}>
-            <FlatList
+            <FlatList<any>
               key={viewMode} // Force re-mount when switching layout
-              data={filteredFiles}
-              keyExtractor={keyExtractor}
-              renderItem={viewMode === "grid" ? renderGridItem : renderFileItem}
+              data={viewMode === "shelf" ? shelfBooks : filteredFiles}
+              keyExtractor={
+                viewMode === "shelf" ? shelfKeyExtractor : keyExtractor
+              }
+              renderItem={
+                viewMode === "shelf"
+                  ? renderShelfItem
+                  : viewMode === "grid"
+                    ? renderGridItem
+                    : renderFileItem
+              }
               {...(viewMode === "list"
                 ? { getItemLayout }
-                : { numColumns: 3, columnWrapperStyle: styles.gridRow })}
+                : viewMode === "grid"
+                  ? { numColumns: 3, columnWrapperStyle: styles.gridRow }
+                  : { numColumns: 3, columnWrapperStyle: styles.shelfRow })}
               initialNumToRender={12}
               maxToRenderPerBatch={8}
               windowSize={5}
               removeClippedSubviews={true}
               contentContainerStyle={
-                viewMode === "grid" ? styles.gridContent : styles.listContent
+                viewMode === "grid"
+                  ? styles.gridContent
+                  : viewMode === "shelf"
+                    ? styles.shelfContent
+                    : styles.listContent
               }
               refreshControl={
                 <RefreshControl
@@ -1899,6 +2052,38 @@ export default function LibraryScreen() {
               showsVerticalScrollIndicator={false}
               ListHeaderComponent={
                 <View style={styles.listHeaderContainer}>
+                  {/* Continue reading — shelf mode only */}
+                  {viewMode === "shelf" && continueBook && (
+                    <ContinueReading
+                      book={continueBook}
+                      theme={shelfTheme}
+                      onPress={() => {
+                        const file = filteredFiles.find(
+                          (f) => f.id === continueBook.id,
+                        );
+                        if (file) handleFilePress(file);
+                      }}
+                    />
+                  )}
+
+                  {/* Nothing readable to shelve yet */}
+                  {viewMode === "shelf" && shelfBooks.length === 0 && (
+                    <View style={styles.shelfEmpty}>
+                      <Text style={[styles.shelfEmptyTitle, { color: t.text }]}>
+                        Your shelf is empty
+                      </Text>
+                      <Text
+                        style={[
+                          styles.shelfEmptyBody,
+                          { color: t.textSecondary },
+                        ]}
+                      >
+                        Books you add — EPUB, PDF or Word — appear here with
+                        their covers and how far through you are.
+                      </Text>
+                    </View>
+                  )}
+
                   {/* Files Count & Sort By + Clear All */}
                   {files.length > 0 && !searchQuery && !hasActiveFilters && (
                     <View style={styles.filesHeader}>
@@ -2939,6 +3124,33 @@ const styles = StyleSheet.create({
   gridContent: {
     paddingHorizontal: 16,
     paddingBottom: 150,
+  },
+  shelfEmpty: {
+    paddingVertical: 40,
+    paddingHorizontal: 8,
+    gap: 8,
+  },
+  shelfEmptyTitle: {
+    fontSize: 16,
+    fontWeight: "700",
+    textAlign: "center",
+  },
+  shelfEmptyBody: {
+    fontSize: 13,
+    lineHeight: 19,
+    textAlign: "center",
+  },
+  shelfRow: {
+    justifyContent: "space-between",
+    gap: 12,
+  },
+  shelfContent: {
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    paddingBottom: 24,
+  },
+  shelfCard: {
+    maxWidth: "31%",
   },
   gridRow: {
     justifyContent: "flex-start",

@@ -6,11 +6,14 @@
 // ============================================
 
 import { API_ENDPOINTS, resilientFetch } from "@/config/api";
+import { AI_DOCID_TASKS } from "@/constants/featureFlags";
 import type { AIProvider } from "../ai.provider";
 import type {
     AIAnalyzeRequest,
     AIChatRequest,
+    AICoverage,
     AIDevilsAdvocateRequest,
+    AIDocTaskFields,
     AIExplainRequest,
     AIGenerateDocumentRequest,
     AIHighlightRequest,
@@ -21,6 +24,13 @@ import type {
     AITasksRequest,
     AITranslateRequest,
 } from "../ai.types";
+import { aiErrorFromResponseBody, normalizeAIError } from "../aiErrors";
+import { canUse, invalidateAICapabilities } from "../capabilities";
+
+/** Per-attempt timeout for ordinary requests. */
+const DEFAULT_TIMEOUT_MS = 60_000;
+/** Per-attempt timeout for whole-document (docId) requests (contract v2, C5). */
+export const WHOLE_DOCUMENT_TIMEOUT_MS = 180_000;
 
 /**
  * Calls the backend Express server's AI endpoints.
@@ -53,12 +63,24 @@ export class BackendAIProvider implements AIProvider {
 
   // ── Summarize ─────────────────────────────────────────────────────────────
   async summarize(req: AISummarizeRequest): Promise<AIResponse> {
+    if (isWholeDocument(req)) {
+      const res = await this.postWholeDocument("/summarize", docTaskBody(req), req.signal);
+      return { content: res.summary || res.data?.text || "", ...coverageOf(res) };
+    }
     const res = await this.post("/summarize", { text: req.text }, req.signal);
     return { content: res.summary || res.data?.text || "" };
   }
 
   // ── Translate ─────────────────────────────────────────────────────────────
   async translate(req: AITranslateRequest): Promise<AIResponse> {
+    if (isWholeDocument(req)) {
+      const res = await this.postWholeDocument(
+        "/translate",
+        docTaskBody(req, { targetLanguage: req.targetLanguage }),
+        req.signal,
+      );
+      return { content: res.translatedText || res.data?.text || "", ...coverageOf(res) };
+    }
     const res = await this.post(
       "/translate",
       {
@@ -72,30 +94,41 @@ export class BackendAIProvider implements AIProvider {
 
   // ── Analyze ───────────────────────────────────────────────────────────────
   async analyze(req: AIAnalyzeRequest): Promise<AIResponse> {
-    const res = await this.post(
-      "/analyze",
-      {
-        text: req.text,
-        analysisType: req.analysisType,
-      },
-      req.signal,
-    );
+    const wholeDoc = isWholeDocument(req);
+    const res = wholeDoc
+      ? await this.postWholeDocument(
+          "/analyze",
+          docTaskBody(req, { analysisType: req.analysisType }),
+          req.signal,
+        )
+      : await this.post(
+          "/analyze",
+          {
+            text: req.text,
+            analysisType: req.analysisType,
+          },
+          req.signal,
+        );
     const structured = pickStructured(res);
     return {
       content: res.analysis || res.data?.text || "",
       structuredData: structured,
+      ...(wholeDoc ? coverageOf(res) : {}),
     };
   }
 
   // ── Extract Tasks ─────────────────────────────────────────────────────────
   async extractTasks(req: AITasksRequest): Promise<AIResponse> {
-    const res = await this.post(
-      "/extract-tasks",
-      {
-        text: req.text,
-      },
-      req.signal,
-    );
+    const wholeDoc = isWholeDocument(req);
+    const res = wholeDoc
+      ? await this.postWholeDocument("/extract-tasks", docTaskBody(req), req.signal)
+      : await this.post(
+          "/extract-tasks",
+          {
+            text: req.text,
+          },
+          req.signal,
+        );
     const tasks = res.tasks || res.data?.tasks;
     const structured = pickStructured(res);
     const taskCount = Array.isArray(tasks) ? tasks.length : 0;
@@ -104,6 +137,7 @@ export class BackendAIProvider implements AIProvider {
         ? `Found ${taskCount} task${taskCount === 1 ? "" : "s"}.`
         : res.data?.text || "No tasks found.",
       structuredData: structured ?? (Array.isArray(tasks) ? { tasks } : undefined),
+      ...(wholeDoc ? coverageOf(res) : {}),
     };
   }
 
@@ -130,7 +164,14 @@ export class BackendAIProvider implements AIProvider {
   // The dedicated /ai/devils-advocate endpoint is not deployed on every backend
   // yet (returns 404). When it's missing we synthesize the same structured
   // output through the always-present /ai/chat endpoint.
+  //
+  // When the backend reports the `devilsAdvocate` capability (contract v2, C8)
+  // the real route is the only path: a 404 then means DOC_NOT_FOUND, never
+  // "route missing", so there is no /chat retry.
   async devilsAdvocate(req: AIDevilsAdvocateRequest): Promise<AIResponse> {
+    if (canUse(AI_DOCID_TASKS, "devilsAdvocate")) {
+      return this.devilsAdvocateV2(req);
+    }
     try {
       const res = await this.post(
         "/devils-advocate",
@@ -162,6 +203,39 @@ export class BackendAIProvider implements AIProvider {
     }
   }
 
+  /** Contract v2 route: docId / contextDocId aware, normalized output. */
+  private async devilsAdvocateV2(req: AIDevilsAdvocateRequest): Promise<AIResponse> {
+    const wholeDoc = isWholeDocument(req);
+    const body: Record<string, unknown> = wholeDoc ? docTaskBody(req) : { text: req.text };
+    body.documentName = req.documentName;
+    body.role = req.role;
+    body.customRole = req.customRole;
+    body.contextName = req.contextName;
+    if (req.contextDocId) body.contextDocId = req.contextDocId;
+    else if (req.contextText) body.contextText = req.contextText;
+
+    const res =
+      wholeDoc || req.contextDocId
+        ? await this.postWholeDocument("/devils-advocate", body, req.signal)
+        : await this.post("/devils-advocate", body, req.signal, { v2: true });
+    const serverText =
+      typeof res?.data?.text === "string" && res.data.text.trim() ? (res.data.text as string) : "";
+    const data = normalizeDevilsAdvocate(pickStructured(res), req);
+    if (!data) {
+      return {
+        content: serverText || "I couldn't generate grounded objections for this document.",
+        ...coverageOf(res),
+      };
+    }
+    return {
+      content:
+        serverText ||
+        `Surfaced the hardest objections${req.documentName ? ` for "${req.documentName}"` : ""}.`,
+      structuredData: { ...data, __kind: "devils-advocate" },
+      ...coverageOf(res),
+    };
+  }
+
   /** Synthesize Devil's Advocate output via the /chat endpoint. */
   private async devilsAdvocateViaChat(
     req: AIDevilsAdvocateRequest,
@@ -191,6 +265,9 @@ export class BackendAIProvider implements AIProvider {
   // ── Narrative Arc ────────────────────────────────────────────────────────
   // Same fallback contract as Devil's Advocate above.
   async narrativeArc(req: AINarrativeArcRequest): Promise<AIResponse> {
+    if (canUse(AI_DOCID_TASKS, "narrativeArc")) {
+      return this.narrativeArcV2(req);
+    }
     try {
       const res = await this.post(
         "/narrative-arc",
@@ -218,6 +295,38 @@ export class BackendAIProvider implements AIProvider {
       if (isEndpointMissing(err)) return this.narrativeArcViaChat(req);
       throw err;
     }
+  }
+
+  /** Contract v2 route: docId / contextDocId aware, normalized output. */
+  private async narrativeArcV2(req: AINarrativeArcRequest): Promise<AIResponse> {
+    const wholeDoc = isWholeDocument(req);
+    const body: Record<string, unknown> = wholeDoc ? docTaskBody(req) : { text: req.text };
+    body.documentName = req.documentName;
+    body.format = req.format;
+    body.contextName = req.contextName;
+    if (req.contextDocId) body.contextDocId = req.contextDocId;
+    else if (req.contextText) body.contextText = req.contextText;
+
+    const res =
+      wholeDoc || req.contextDocId
+        ? await this.postWholeDocument("/narrative-arc", body, req.signal)
+        : await this.post("/narrative-arc", body, req.signal, { v2: true });
+    const serverText =
+      typeof res?.data?.text === "string" && res.data.text.trim() ? (res.data.text as string) : "";
+    const data = normalizeNarrativeArc(pickStructured(res), req);
+    if (!data) {
+      return {
+        content: serverText || "I couldn't read enough structure to judge the narrative arc.",
+        ...coverageOf(res),
+      };
+    }
+    return {
+      content:
+        serverText ||
+        `Checked the narrative arc${req.documentName ? ` of "${req.documentName}"` : ""}.`,
+      structuredData: { ...data, __kind: "narrative-arc" },
+      ...coverageOf(res),
+    };
   }
 
   /** Synthesize Narrative Arc output via the /chat endpoint. */
@@ -248,7 +357,10 @@ export class BackendAIProvider implements AIProvider {
 
   // ── Highlight ──────────────────────────────────────────────────────────
   async highlight(req: AIHighlightRequest): Promise<AIResponse> {
-    const res = await this.post("/highlight", { text: req.text }, req.signal);
+    const wholeDoc = isWholeDocument(req);
+    const res = wholeDoc
+      ? await this.postWholeDocument("/highlight", docTaskBody(req), req.signal)
+      : await this.post("/highlight", { text: req.text }, req.signal);
     // res.data is either the structured { highlights, meta } object or a
     // fallback text string if the model returned non-JSON.
     const structured =
@@ -266,11 +378,30 @@ export class BackendAIProvider implements AIProvider {
           ? (res.data as string)
           : "",
       structuredData: structured,
+      ...(wholeDoc ? coverageOf(res) : {}),
     };
   }
 
   // ── Explain ────────────────────────────────────────────────────────────
   async explain(req: AIExplainRequest): Promise<AIResponse> {
+    if (isWholeDocument(req)) {
+      const res = await this.postWholeDocument(
+        "/explain",
+        docTaskBody(req, { mode: req.mode, depth: req.depth }),
+        req.signal,
+      );
+      return {
+        content: res.explanation || res.data?.text || "",
+        structuredData: {
+          __kind: "explain",
+          mode: req.mode || "simple",
+          depth: req.depth || "medium",
+          originalText: req.instruction ?? "",
+          docId: req.docId,
+        },
+        ...coverageOf(res),
+      };
+    }
     const res = await this.post(
       "/explain",
       {
@@ -293,22 +424,37 @@ export class BackendAIProvider implements AIProvider {
 
   // ── Quiz ───────────────────────────────────────────────────────────────
   async quiz(req: AIQuizRequest): Promise<AIResponse> {
-    const body: Record<string, unknown> = {
-      text: req.text,
-      questionType: req.questionType,
-      length: req.length,
-      difficulty: req.difficulty,
-      weakTopics: req.weakTopics ?? [],
-    };
-    if (req.docId) body.docId = req.docId;
-
-    const res = await this.post("/quiz", body, req.signal);
+    const wholeDoc = isWholeDocument(req);
+    let res: any;
+    if (wholeDoc) {
+      res = await this.postWholeDocument(
+        "/quiz",
+        docTaskBody(req, {
+          questionType: req.questionType,
+          length: req.length,
+          difficulty: req.difficulty,
+          weakTopics: req.weakTopics ?? [],
+        }),
+        req.signal,
+      );
+    } else {
+      const body: Record<string, unknown> = {
+        text: req.text,
+        questionType: req.questionType,
+        length: req.length,
+        difficulty: req.difficulty,
+        weakTopics: req.weakTopics ?? [],
+      };
+      if (req.docId) body.docId = req.docId;
+      res = await this.post("/quiz", body, req.signal);
+    }
     // res.data is the parsed JSON questions object or raw text envelope
     const structured =
       res?.data?.json ?? (res?.data && typeof res.data === "object" ? res.data : undefined);
     return {
       content: typeof res?.data?.text === "string" ? res.data.text : "",
       structuredData: structured,
+      ...(wholeDoc ? coverageOf(res) : {}),
     };
   }
 
@@ -318,12 +464,61 @@ export class BackendAIProvider implements AIProvider {
     path: string,
     body: Record<string, unknown>,
     signal?: AbortSignal,
+    opts: CallBackendOptions = {},
   ): Promise<any> {
-    return callBackend(this.baseUrl + path, body, signal);
+    return callBackend(this.baseUrl + path, body, signal, opts);
+  }
+
+  /** A contract-v2 whole-document request: longer timeout, v2 404 handling. */
+  private async postWholeDocument(
+    path: string,
+    body: Record<string, unknown>,
+    signal?: AbortSignal,
+  ): Promise<any> {
+    return callBackend(this.baseUrl + path, body, signal, {
+      timeoutMs: WHOLE_DOCUMENT_TIMEOUT_MS,
+      v2: true,
+    });
   }
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
+
+/** True when the request should send its docId instead of text (C5). */
+function isWholeDocument(req: AIDocTaskFields): req is AIDocTaskFields & { docId: string } {
+  return req.wholeDocument === true && typeof req.docId === "string" && req.docId.length > 0;
+}
+
+/** `{ docId, instruction?, ...extra }` — the C5 request body. */
+export function docTaskBody(
+  req: AIDocTaskFields,
+  extra: Record<string, unknown> = {},
+): Record<string, unknown> {
+  const body: Record<string, unknown> = { docId: req.docId };
+  if (typeof req.instruction === "string" && req.instruction.trim()) {
+    body.instruction = req.instruction.trim().slice(0, 2_000);
+  }
+  for (const [k, v] of Object.entries(extra)) {
+    if (v !== undefined) body[k] = v;
+  }
+  return body;
+}
+
+/** Read `data.coverage` from a C5 response, ignoring malformed values. */
+function coverageOf(res: any): { coverage?: AICoverage } {
+  const c = res?.data?.coverage;
+  if (!c || typeof c !== "object") return {};
+  const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : 0);
+  return {
+    coverage: {
+      totalChars: num(c.totalChars),
+      processedChars: num(c.processedChars),
+      chunked: c.chunked === true,
+      chunkCount: num(c.chunkCount),
+      truncated: c.truncated === true,
+    },
+  };
+}
 
 /** Try several shapes to get the structured JSON back from a backend response. */
 function pickStructured(
@@ -350,30 +545,49 @@ function pickStructured(
   return undefined;
 }
 
-async function callBackend(
+export interface CallBackendOptions {
+  /** Per-attempt timeout (default 60 s; whole-document requests use 180 s). */
+  timeoutMs?: number;
+  /** A contract-v2 route: a 404 marks the capability snapshot stale. */
+  v2?: boolean;
+}
+
+export async function callBackend(
   url: string,
   body: Record<string, unknown>,
   externalSignal?: AbortSignal,
+  opts: CallBackendOptions = {},
 ) {
-  // resilientFetch fails over across the backend pool (60s per-attempt timeout)
-  // and honors the caller's cancel signal (e.g. the user pulling down on the
-  // spring activity overlay) without failing over.
-  const response = await resilientFetch(
-    url,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-      signal: externalSignal,
-    },
-    { timeoutMs: 60_000 },
-  );
+  // resilientFetch fails over across the backend pool (60s per-attempt timeout
+  // by default) and honors the caller's cancel signal (e.g. the user pulling
+  // down on the spring activity overlay) without failing over. It also adds
+  // the contract-v2 AI request headers.
+  let response: Response;
+  try {
+    response = await resilientFetch(
+      url,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        signal: externalSignal,
+      },
+      { timeoutMs: opts.timeoutMs ?? DEFAULT_TIMEOUT_MS },
+    );
+  } catch (e) {
+    throw normalizeAIError(e, { signal: externalSignal ?? null });
+  }
 
   if (!response.ok) {
     const errorBody = await response.text().catch(() => "");
-    throw new Error(
-      `Backend AI error (${response.status}): ${errorBody || response.statusText}`,
-    );
+    if (opts.v2 && response.status === 404) invalidateAICapabilities();
+    // Keep the legacy message format: isEndpointMissing() and older screens
+    // match on "Backend AI error (status)".
+    throw aiErrorFromResponseBody(response.status, errorBody, {
+      headers: response.headers,
+      statusText: response.statusText,
+      message: `Backend AI error (${response.status}): ${errorBody || response.statusText}`,
+    });
   }
 
   return await response.json();

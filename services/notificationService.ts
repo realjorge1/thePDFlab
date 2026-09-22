@@ -1,7 +1,7 @@
 /**
  * Notification Service
  * Delivers REAL device notifications (status-bar / notification-drawer) for
- * processing, downloads, AI tasks, and Read Aloud — via expo-notifications.
+ * processing, downloads, and AI tasks — via expo-notifications.
  *
  * These are true OS notifications, never on-screen Alert dialogs. If the OS
  * notification permission is unavailable we silently no-op rather than fall
@@ -17,9 +17,6 @@ export type NotificationType =
   | "processing_complete"
   | "download_complete"
   | "ai_complete"
-  | "read_aloud_playing"
-  | "read_aloud_stopped"
-  | "read_aloud_end_of_file"
   | "task_reminder";
 
 interface NotificationPayload {
@@ -32,7 +29,7 @@ const ANDROID_CHANNEL_ID = "wordsinscribed-tasks";
 
 /**
  * One stable identifier shared by ALL transient status notifications
- * (processing / download / AI / Read Aloud). Posting a notification with an
+ * (processing / download / AI). Posting a notification with an
  * identifier that is already showing causes the OS to REPLACE the existing one
  * (same Android tag / iOS identifier) instead of stacking a new entry.
  *
@@ -248,50 +245,5 @@ export async function notifyAIComplete(taskName: string): Promise<void> {
     title: "AI Task Complete",
     body: `${taskName} has finished.`,
     type: "ai_complete",
-  });
-}
-
-/**
- * Notify user that Read Aloud has started playing.
- * Respects `notifyReadAloudPlaying` setting.
- */
-export async function notifyReadAloudPlaying(fileName: string): Promise<void> {
-  const settings = await loadSettings();
-  if (!settings.notifyReadAloudPlaying) return;
-
-  await sendLocalNotification({
-    title: "Read Aloud Playing",
-    body: `Now reading: "${fileName}"`,
-    type: "read_aloud_playing",
-  });
-}
-
-/**
- * Notify user that Read Aloud has been stopped.
- * Respects `notifyReadAloudStopped` setting.
- */
-export async function notifyReadAloudStopped(fileName: string): Promise<void> {
-  const settings = await loadSettings();
-  if (!settings.notifyReadAloudStopped) return;
-
-  await sendLocalNotification({
-    title: "Read Aloud Stopped",
-    body: `Stopped reading: "${fileName}"`,
-    type: "read_aloud_stopped",
-  });
-}
-
-/**
- * Notify user that Read Aloud has reached the end of the file.
- * Respects `notifyReadAloudEndOfFile` setting.
- */
-export async function notifyReadAloudEndOfFile(fileName: string): Promise<void> {
-  const settings = await loadSettings();
-  if (!settings.notifyReadAloudEndOfFile) return;
-
-  await sendLocalNotification({
-    title: "Read Aloud Finished",
-    body: `Finished reading: "${fileName}"`,
-    type: "read_aloud_end_of_file",
   });
 }

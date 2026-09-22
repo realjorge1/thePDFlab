@@ -55,6 +55,12 @@ interface Props {
   onCopy: () => void;
   onSearch: () => void;
   onDismiss: () => void;
+  /**
+   * Bookmarks (R1). Optional and additive: omitted → the toolbar is exactly
+   * what it was. The selected text seeds the bookmark's excerpt, which is
+   * the best excerpt available because the reader chose it themselves.
+   */
+  onSavePage?: (selectedText: string) => void;
 }
 
 // ── Component ──────────────────────────────────────────────────────────────────
@@ -68,6 +74,7 @@ export function SelectionToolbar({
   onCopy,
   onSearch,
   onDismiss,
+  onSavePage,
 }: Props) {
   const opacity = useRef(new Animated.Value(0)).current;
   const translateY = useRef(new Animated.Value(8)).current;
@@ -257,6 +264,22 @@ export function SelectionToolbar({
             <Text style={[styles.actionIcon, { color: "#A78BFA" }]}>⌕</Text>
             <Text style={styles.actionLabel}>Search</Text>
           </TouchableOpacity>
+
+          {/* ── Bookmark (seeds the excerpt from this selection) ── */}
+          {onSavePage && (
+            <TouchableOpacity
+              onPress={() => {
+                onSavePage(selectedText);
+                onDismiss();
+              }}
+              style={styles.actionBtn}
+              hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
+              accessibilityLabel="Bookmark"
+            >
+              <Text style={[styles.actionIcon, { color: "#FBBF24" }]}>🔖</Text>
+              <Text style={styles.actionLabel}>Bookmark</Text>
+            </TouchableOpacity>
+          )}
 
           <View style={styles.divider} />
 

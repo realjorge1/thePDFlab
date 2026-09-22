@@ -11,7 +11,7 @@ import { ChevronRight } from "lucide-react-native";
 import React from "react";
 import { StyleSheet, Text, View } from "react-native";
 
-const GROUP_ORDER: QcToolGroup[] = ["method-validation", "lot-verification"];
+const GROUP_ORDER: QcToolGroup[] = ["method-validation"];
 
 /**
  * Westgard QC hub: the calculator suite. Every tool runs entirely

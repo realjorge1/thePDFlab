@@ -4,8 +4,11 @@
 // that re-runs the Explain call using the cached original text.
 // ============================================
 
+import { AI_MARKDOWN } from "@/constants/featureFlags";
 import { explainText } from "@/services/ai/ai.service";
+import type { AIDocumentRef } from "@/services/ai/ai.types";
 import { useTheme } from "@/services/ThemeProvider";
+import { MarkdownText } from "../MarkdownText";
 import {
   Briefcase,
   Cpu,
@@ -43,6 +46,10 @@ interface Props {
   originalText?: string;
   initialMode?: ExplainMode;
   initialDepth?: ExplainDepth;
+  /** "markdown" when the explanation kept its formatting (AI_MARKDOWN). */
+  format?: "markdown" | "text";
+  /** Backend docId when the explanation covered a whole document. */
+  docId?: string;
   onAddToNotes?: () => void;
   onExport?: () => void;
 }
@@ -67,6 +74,8 @@ export function ExplainRenderer({
   originalText,
   initialMode = "simple",
   initialDepth = "medium",
+  format,
+  docId,
   onAddToNotes,
   onExport,
 }: Props) {
@@ -74,16 +83,27 @@ export function ExplainRenderer({
   const [mode, setMode] = useState<ExplainMode>(initialMode);
   const [depth, setDepth] = useState<ExplainDepth>(initialDepth);
   const [text, setText] = useState<string>(content);
+  const [textFormat, setTextFormat] = useState<"markdown" | "text" | undefined>(format);
   const [loading, setLoading] = useState(false);
 
   const rerun = async (nextMode: ExplainMode, nextDepth: ExplainDepth) => {
-    if (!originalText) return;
+    if (!originalText && !docId) return;
     setLoading(true);
     setMode(nextMode);
     setDepth(nextDepth);
     try {
-      const res = await explainText(originalText, nextMode, nextDepth);
+      const res =
+        docId || format === "markdown"
+          ? await explainText(originalText ?? "", nextMode, nextDepth, undefined, {
+              preserveMarkdown: format === "markdown",
+              instruction: docId ? originalText : undefined,
+              docRef: docId
+                ? ({ uri: "", name: "", mimeType: "", _extractionDocId: docId } as AIDocumentRef)
+                : undefined,
+            })
+          : await explainText(originalText ?? "", nextMode, nextDepth);
       setText(res.content);
+      setTextFormat(res.format === "markdown" ? "markdown" : format === "markdown" ? "text" : undefined);
     } catch (e: any) {
       setText(`Could not re-run explanation: ${e?.message || "unknown error"}.`);
     } finally {
@@ -96,7 +116,7 @@ export function ExplainRenderer({
     borderColor: themeMode === "dark" ? "#334155" : "#E2E8F0",
   };
 
-  const canSwitch = !!originalText;
+  const canSwitch = !!originalText || !!docId;
 
   return (
     <View style={styles.wrap}>
@@ -194,6 +214,8 @@ export function ExplainRenderer({
               Re-explaining in {mode} mode…
             </Text>
           </View>
+        ) : AI_MARKDOWN && textFormat === "markdown" ? (
+          <MarkdownText text={text} fontSize={13.5} lineHeight={21} accentColor="#9333EA" />
         ) : (
           <Text style={[styles.body, { color: t.text }]}>{text}</Text>
         )}

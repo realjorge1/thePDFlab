@@ -127,6 +127,7 @@ export const PRIVACY_POLICY_SECTIONS: LegalSection[] = [
           "Data is used solely to generate responses.",
           "We do not intentionally use your data to train AI models unless explicitly stated.",
           "AI outputs may be stored temporarily to improve session continuity.",
+          "If you use the writing assistant (spelling, grammar, and clarity suggestions), the relevant document text is sent to our servers to generate suggestions. Suggestions are shown to you and only applied to your document if you choose to accept them.",
         ],
       },
     ],

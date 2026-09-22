@@ -14,11 +14,25 @@ export type ViewMode = "original" | "mobile";
 // ============================================================================
 export type ReaderTheme = "light" | "sepia" | "dark";
 
+/**
+ * The single source of truth for reader typography across every viewer.
+ *
+ * Mobile View (DOCX/PDF reflow) consumes these values directly. The EPUB
+ * reader keeps its own persistence layer because epub.js wants a *percentage*
+ * font size rather than points — see readerFontSizeToEpubPercent() in
+ * services/epubService.ts, which is the one documented place that conversion
+ * happens.
+ */
 export interface ReaderSettings {
-  fontSize: number; // 12–32
+  fontSize: number; // 12–32 pt
   lineHeight: number; // 1.2–2.4
   theme: ReaderTheme;
   fontFamily: string;
+  /** Horizontal page margin in px, 0–64. */
+  margin: number;
+  textAlign: "left" | "justify";
+  /** Space between paragraphs as an em multiplier, 0–2. */
+  paragraphSpacing: number;
 }
 
 export const DEFAULT_READER_SETTINGS: ReaderSettings = {
@@ -26,6 +40,9 @@ export const DEFAULT_READER_SETTINGS: ReaderSettings = {
   lineHeight: 1.6,
   theme: "light",
   fontFamily: "system-ui",
+  margin: 16,
+  textAlign: "left",
+  paragraphSpacing: 1,
 };
 
 // ============================================================================
@@ -128,6 +145,13 @@ export type WebViewMessage =
       kind?: "highlight" | "underline" | "strikethrough";
     }
   | { type: "read-aloud-text"; text: string }
+  /** The text currently on screen. Bookmarks stores it as the page's text;
+   *  deliberately separate from "read-aloud-text", which is the whole doc. */
+  | { type: "visible-text"; text: string }
+  /** The MARKUP currently on screen, already sanitised — Bookmarks stores it
+   *  so a reflow page comes back looking like itself rather than as plain
+   *  text. `css` is a computed-style summary of the reading surface. */
+  | { type: "visible-html"; html: string; css: string }
   /** Posted by the reflow HTML when it cannot render the document
    *  (scanned PDF, parse failure, vendor script missing). Viewers fall
    *  back to Original view and surface the message. */

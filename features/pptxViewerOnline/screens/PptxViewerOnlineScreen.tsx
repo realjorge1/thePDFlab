@@ -19,7 +19,7 @@
 
 import MaterialIcons from "@expo/vector-icons/MaterialIcons";
 import { router, useLocalSearchParams } from "expo-router";
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   FlatList,
   Modal,
@@ -39,6 +39,11 @@ import { useTheme } from "@/services/ThemeProvider";
 
 import { AppHeaderContainer } from "@/components/AppHeaderContainer";
 import { AnalyzeSheet } from "@/components/ai/AnalyzeSheet";
+import { ReaderAIPanel, type ReaderAIPanelHandle } from "@/components/ai/ReaderAIPanel";
+import { SOURCE_CARD_OVERLAY_STYLE, SourceCard } from "@/components/ai/SourceCard";
+import { AI_READER_PANEL } from "@/constants/featureFlags";
+import { parseLocatorParams } from "@/services/ai/citationNavigator";
+import { locatorLabel, type AICitation } from "@/services/ai/citations";
 import { GradientView } from "@/components/GradientView";
 import { colors as brandColors } from "@/constants/theme";
 
@@ -60,7 +65,14 @@ const AUTO_HIDE_MS = 3500;
 type Orientation = "horizontal" | "vertical";
 
 export default function PptxViewerOnlineScreen() {
-  const params = useLocalSearchParams<{ uri: string; name?: string }>();
+  const params = useLocalSearchParams<{
+    uri: string;
+    name?: string;
+    /** Optional citation target (a tapped source in Chat with File). */
+    locatorType?: string;
+    locatorIndex?: string;
+    quote?: string;
+  }>();
   const fileUri = params.uri ?? "";
   const fileName = params.name ?? "Presentation";
 
@@ -118,6 +130,69 @@ export default function PptxViewerOnlineScreen() {
     viewerRef.current?.goToPage(page);
     offlineViewerRef.current?.goToPage(page);
   }, []);
+
+  // ── Citation target from route params (W4) ──────────────────────
+  const locatorTarget = useMemo(
+    () =>
+      parseLocatorParams({
+        locatorType: params.locatorType,
+        locatorIndex: params.locatorIndex,
+        quote: params.quote,
+      }),
+    [params.locatorType, params.locatorIndex, params.quote],
+  );
+  const locatorAppliedRef = useRef(false);
+  const [sourceCard, setSourceCard] = useState<{ label: string; quote: string } | null>(null);
+  const closeSourceCard = useCallback(() => setSourceCard(null), []);
+  const deckReady = stage.phase === "ready" || stage.phase === "ready_offline";
+  useEffect(() => {
+    if (!locatorTarget || locatorAppliedRef.current || !deckReady) return;
+    locatorAppliedRef.current = true;
+    if (locatorTarget.locatorType === "slide" || locatorTarget.locatorType === "page") {
+      const slide = Math.max(1, locatorTarget.index);
+      setCurrentPage(slide);
+      setTimeout(() => handleJump(slide), 400);
+    }
+    setSourceCard({
+      label: locatorLabel(locatorTarget.locatorType, locatorTarget.index),
+      quote: locatorTarget.quote,
+    });
+  }, [locatorTarget, deckReady, handleJump]);
+
+  // ── In-reader Gozlin panel (AI_READER_PANEL, W7) ─────────────────
+  const aiPanelRef = useRef<ReaderAIPanelHandle>(null);
+  const panelDocument = useMemo(
+    () =>
+      fileUri
+        ? {
+            uri: fileUri,
+            name: fileName,
+            mimeType: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+          }
+        : null,
+    [fileUri, fileName],
+  );
+  const handlePanelCitation = useCallback(
+    (citation: AICitation) => {
+      const type = citation.locator?.type;
+      if (type && type !== "slide" && type !== "page") return false;
+      const slide = citation.locator?.index ?? citation.page;
+      if (!slide || slide < 1) return false;
+      handleJump(slide);
+      return true;
+    },
+    [handleJump],
+  );
+  const handleOpenChatFullScreen = useCallback(() => {
+    router.push({
+      pathname: "/chat-with-document",
+      params: {
+        uri: fileUri,
+        name: fileName,
+        mimeType: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+      },
+    });
+  }, [fileUri, fileName]);
 
   const handleBack = useCallback(() => router.back(), []);
 
@@ -331,6 +406,20 @@ export default function PptxViewerOnlineScreen() {
                   <MaterialIcons name="auto-awesome" size={17} color="#FFFFFF" />
                   <Text style={styles.toolBtnText}>Analyze</Text>
                 </Pressable>
+
+                {/* Ask gozlin — the in-reader AI panel (AI_READER_PANEL) */}
+                {AI_READER_PANEL && (
+                  <Pressable
+                    onPress={() => aiPanelRef.current?.open({ state: "expanded" })}
+                    style={styles.toolBtn}
+                    hitSlop={6}
+                    accessibilityRole="button"
+                    accessibilityLabel="Ask gozlin about this deck"
+                  >
+                    <MaterialIcons name="chat" size={17} color="#FFFFFF" />
+                    <Text style={styles.toolBtnText}>Ask gozlin</Text>
+                  </Pressable>
+                )}
               </View>
             )}
           </GradientView>
@@ -500,6 +589,24 @@ export default function PptxViewerOnlineScreen() {
             : null
         }
       />
+
+      {/* ── Source card for a citation opened from Chat with File ── */}
+      {sourceCard && (
+        <View style={SOURCE_CARD_OVERLAY_STYLE} pointerEvents="box-none">
+          <SourceCard label={sourceCard.label} quote={sourceCard.quote} onClose={closeSourceCard} />
+        </View>
+      )}
+
+      {/* ── In-reader Gozlin panel (AI_READER_PANEL) ─────────────── */}
+      {AI_READER_PANEL && (
+        <ReaderAIPanel
+          ref={aiPanelRef}
+          document={panelDocument}
+          readerKind="pptx"
+          onNavigateToCitation={handlePanelCitation}
+          onOpenFullScreen={handleOpenChatFullScreen}
+        />
+      )}
     </View>
   );
 }

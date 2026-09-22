@@ -36,6 +36,7 @@ import {
 } from "lucide-react-native";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
+  AccessibilityInfo,
   ActivityIndicator,
   Alert,
   Dimensions,
@@ -55,7 +56,42 @@ import { colors as brandColors } from "@/constants/theme";
 import Animated from "react-native-reanimated";
 import { PressableScale } from "@/components/ui/PressableScale";
 import { useTypingGlow } from "@/hooks/useTypingGlow";
-import { isCancelError, runCancelable } from "@/services/activity/activityStore";
+import {
+  isCancelError,
+  runCancelable,
+  useActivityStore,
+} from "@/services/activity/activityStore";
+import {
+  AI_CITATIONS_V2,
+  AI_MARKDOWN,
+  AI_PERSISTENT_DOC_CACHE,
+  AI_STREAMING,
+} from "@/constants/featureFlags";
+import { generateId } from "@/services/ai/ai.types";
+import { isAIError } from "@/services/ai/aiErrors";
+import {
+  aiErrorInlineMessage,
+  isPresentableAIError,
+  presentAIError,
+} from "@/services/ai/aiErrorPresenter";
+import { canUse } from "@/services/ai/capabilities";
+import { navigateToCitation } from "@/services/ai/citationNavigator";
+import { locatorTypeForDocument, type AICitation } from "@/services/ai/citations";
+import { RELOADING_DOCUMENT_LABEL } from "@/services/ai/docRecovery";
+import { answerDocumentQuestion } from "@/services/ai/streamingChat";
+
+/**
+ * True when any contract-v2 document-chat feature is usable. When false the
+ * screen runs its original send flow, unchanged.
+ */
+function isV2DocumentChat(): boolean {
+  return (
+    canUse(AI_STREAMING, "streamChatDocument") ||
+    canUse(AI_CITATIONS_V2, "citationsV2") ||
+    canUse(AI_MARKDOWN, "markdown") ||
+    canUse(AI_PERSISTENT_DOC_CACHE, "persistentDocs")
+  );
+}
 
 const ACCENT = "#EC4899"; // pink-500 — matches the AI feature color
 const SCREEN_WIDTH = Dimensions.get("window").width;
@@ -205,10 +241,162 @@ export default function ChatWithDocumentScreen() {
     [processDocument],
   );
 
+  // ── Send message (contract v2: streaming, citations, Markdown, recovery) ──
+  const sendV2 = useCallback(
+    async (text: string) => {
+      if (!chatSession || !doc) return;
+      const userMsg = createMessage("user", text);
+      const userMsgId = userMsg.id;
+      const assistantId = generateId();
+      const streaming = canUse(AI_STREAMING, "streamChatDocument");
+      const locatorType =
+        chatSession.locatorType ??
+        locatorTypeForDocument({ name: chatSession.filename, fileType: chatSession.fileType });
+      const progress = { text: "", cancelled: false };
+
+      setMessages((prev) => [...prev, userMsg]);
+      setInputText("");
+      setIsLoading(true);
+      if (streaming) {
+        // The answer bubble appears at once (typing indicator), then fills in.
+        pendingTopRef.current = contentHeightRef.current;
+        setMessages((prev) => [
+          ...prev,
+          { id: assistantId, role: "assistant", content: "", timestamp: Date.now(), streamState: "streaming" },
+        ]);
+      }
+
+      try {
+        const result = await runCancelable(
+          (signal) =>
+            answerDocumentQuestion({
+              docRef: doc,
+              docId: chatSession.docId,
+              question: text,
+              history: messages,
+              signal,
+              locatorType,
+              preserveMarkdown: true,
+              onText: (t) => {
+                if (progress.cancelled) return;
+                progress.text = t;
+                setMessages((prev) => prev.map((m) => (m.id === assistantId ? { ...m, content: t } : m)));
+              },
+              onReloading: () => useActivityStore.getState().update({ label: RELOADING_DOCUMENT_LABEL }),
+              reupload: async (d) => {
+                const fresh = await extractDocumentForChat(d, { force: true });
+                setChatSession(fresh);
+                return fresh.docId;
+              },
+            }),
+          { kind: "ai", label: "Searching the document" },
+        );
+
+        let answerText = result.content;
+        if (!result.citations.length && result.legacyCitations.length > 0) {
+          const citationList = result.legacyCitations
+            .filter((c) => c.quote)
+            .map(
+              (c) =>
+                `> "${c.quote}" — ${chatSession.fileType === "epub" ? "Chapter" : "Page"} ${c.page}`,
+            )
+            .join("\n\n");
+          if (citationList) answerText += `\n\n---\n📌 Sources:\n${citationList}`;
+        }
+        if (!result.found) answerText = "⚠️ " + answerText;
+
+        const assistantMsg = createMessage("assistant", answerText, undefined, {
+          format: result.format,
+          citations: result.citations.length ? result.citations : undefined,
+          locatorType: result.locatorType,
+          streamState: result.streamState,
+        });
+        if (streaming) {
+          setMessages((prev) =>
+            prev.map((m) => (m.id === assistantId ? { ...assistantMsg, id: assistantId } : m)),
+          );
+        } else {
+          pendingTopRef.current = contentHeightRef.current;
+          setMessages((prev) => [...prev, { ...assistantMsg, id: assistantId }]);
+        }
+        if (result.streamed && !result.streamState) {
+          AccessibilityInfo.announceForAccessibility("Answer ready");
+        }
+      } catch (err) {
+        if (isCancelError(err)) {
+          progress.cancelled = true;
+          if (progress.text) {
+            // Keep what was already shown, marked "Stopped".
+            setMessages((prev) =>
+              prev.map((m) => (m.id === assistantId ? { ...m, streamState: "stopped" } : m)),
+            );
+          } else {
+            setMessages((prev) => prev.filter((m) => m.id !== userMsgId && m.id !== assistantId));
+            setInputText(text);
+          }
+          return;
+        }
+        setMessages((prev) => prev.filter((m) => m.id !== assistantId));
+
+        if (isPresentableAIError(err)) {
+          setMessages((prev) => prev.filter((m) => m.id !== userMsgId));
+          setInputText(text);
+          presentAIError(err, { onRetry: () => sendV2Ref.current(text) });
+          return;
+        }
+
+        const docGone = isAIError(err) && err.code === "DOC_NOT_FOUND";
+        const errMsg = docGone
+          ? "This document is no longer available on the server, and reloading it didn't work. Please select it again."
+          : (aiErrorInlineMessage(err) ?? (err instanceof Error ? err.message : "Something went wrong"));
+        setMessages((prev) => [
+          ...prev,
+          createMessage(
+            "assistant",
+            docGone ? `❌ ${errMsg}` : `❌ ${errMsg}\n\nPlease try rephrasing your question.`,
+          ),
+        ]);
+      } finally {
+        setIsLoading(false);
+      }
+    },
+    [chatSession, doc, messages],
+  );
+  const sendV2Ref = useRef(sendV2);
+  sendV2Ref.current = sendV2;
+
+  // ── Citation taps & retry of interrupted answers ─────────────────────────
+  const handleCitationPress = useCallback(
+    (citation: AICitation) => {
+      void navigateToCitation(citation, { source: "screen", document: doc });
+    },
+    [doc],
+  );
+
+  const handleRetryMessage = useCallback((message: AIChatMessage) => {
+    let question = "";
+    setMessages((prev) => {
+      const idx = prev.findIndex((m) => m.id === message.id);
+      if (idx < 1 || prev[idx - 1].role !== "user") return prev;
+      question = prev[idx - 1].content;
+      const next = prev.slice();
+      next.splice(idx - 1, 2);
+      return next;
+    });
+    setTimeout(() => {
+      if (question) void sendV2Ref.current(question);
+    }, 0);
+  }, []);
+
   // ── Send message ──────────────────────────────────────────────────────────
   const handleSend = useCallback(async (override?: string) => {
     const text = (override ?? inputText).trim();
     if (!text || isLoading || !chatSession) return;
+
+    if (isV2DocumentChat() && doc) {
+      await sendV2(text);
+      return;
+    }
 
     const userMsg = createMessage("user", text);
     const userMsgId = userMsg.id;
@@ -282,7 +470,7 @@ export default function ChatWithDocumentScreen() {
     } finally {
       setIsLoading(false);
     }
-  }, [inputText, isLoading, chatSession, messages, doc, processDocument]);
+  }, [inputText, isLoading, chatSession, messages, doc, processDocument, sendV2]);
 
   // ── Suggested prompt handler (auto-sends on tap) ──────────────────────────
   const handleSuggestedPrompt = useCallback(
@@ -527,9 +715,14 @@ export default function ChatWithDocumentScreen() {
           }}
         >
           {messages.map((msg) => (
-            <AIChatBubble key={msg.id} message={msg} />
+            <AIChatBubble
+              key={msg.id}
+              message={msg}
+              onCitationPress={handleCitationPress}
+              onRetry={handleRetryMessage}
+            />
           ))}
-          {isLoading && (
+          {isLoading && !messages.some((m) => m.streamState === "streaming") && (
             <View
               style={[
                 styles.loadingBubble,

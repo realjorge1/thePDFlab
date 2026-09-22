@@ -1,7 +1,11 @@
 /**
- * ReaderControls — Bottom sheet UI for Mobile View settings:
- * font size, line height, and theme.
+ * ReaderControls — Bottom sheet UI for reader settings: typeface, font size,
+ * line spacing, page margin, alignment, paragraph spacing and theme.
+ *
+ * These settings are app-wide: the EPUB reader reads the same record for
+ * everything except font size and theme, which epub.js owns directly.
  */
+import { READING_FACES } from "@/services/readingFontLoader";
 import type {
   ReaderSettings,
   ReaderTheme,
@@ -9,7 +13,14 @@ import type {
 import MaterialIcons from "@expo/vector-icons/MaterialIcons";
 import Slider from "@react-native-community/slider";
 import React, { useState } from "react";
-import { Modal, Pressable, StyleSheet, Text, View } from "react-native";
+import {
+  Modal,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from "react-native";
 
 interface Props {
   visible: boolean;
@@ -50,6 +61,38 @@ export function ReaderControls({ visible, settings, onApply, onClose }: Props) {
         <View style={styles.handle} />
         <Text style={styles.title}>Reader Settings</Text>
 
+        <ScrollView
+          style={styles.scroll}
+          contentContainerStyle={styles.scrollContent}
+          showsVerticalScrollIndicator={false}
+        >
+        {/* Typeface */}
+        <Text style={[styles.label, { marginBottom: 8 }]}>Typeface</Text>
+        <View style={styles.optionRow}>
+          {READING_FACES.map((face) => {
+            const active = draft.fontFamily === face.id;
+            return (
+              <Pressable
+                key={face.id}
+                style={[styles.optionBtn, active && styles.optionBtnActive]}
+                onPress={() => setDraft((p) => ({ ...p, fontFamily: face.id }))}
+                accessibilityRole="button"
+                accessibilityState={{ selected: active }}
+                accessibilityHint={face.hint}
+              >
+                <Text
+                  style={[
+                    styles.optionText,
+                    active && styles.optionTextActive,
+                  ]}
+                >
+                  {face.label}
+                </Text>
+              </Pressable>
+            );
+          })}
+        </View>
+
         {/* Font Size */}
         <View style={styles.row}>
           <Text style={styles.label}>Font Size</Text>
@@ -86,6 +129,73 @@ export function ReaderControls({ visible, settings, onApply, onClose }: Props) {
           thumbTintColor="#2196F3"
         />
 
+        {/* Page Margin */}
+        <View style={styles.row}>
+          <Text style={styles.label}>Page Margin</Text>
+          <Text style={styles.value}>{Math.round(draft.margin)}px</Text>
+        </View>
+        <Slider
+          style={styles.slider}
+          minimumValue={0}
+          maximumValue={64}
+          step={4}
+          value={draft.margin}
+          onValueChange={(v) => setDraft((p) => ({ ...p, margin: v }))}
+          minimumTrackTintColor="#2196F3"
+          maximumTrackTintColor="#ccc"
+          thumbTintColor="#2196F3"
+        />
+
+        {/* Paragraph Spacing */}
+        <View style={styles.row}>
+          <Text style={styles.label}>Paragraph Spacing</Text>
+          <Text style={styles.value}>
+            {draft.paragraphSpacing.toFixed(1)}em
+          </Text>
+        </View>
+        <Slider
+          style={styles.slider}
+          minimumValue={0}
+          maximumValue={2}
+          step={0.25}
+          value={draft.paragraphSpacing}
+          onValueChange={(v) =>
+            setDraft((p) => ({
+              ...p,
+              paragraphSpacing: parseFloat(v.toFixed(2)),
+            }))
+          }
+          minimumTrackTintColor="#2196F3"
+          maximumTrackTintColor="#ccc"
+          thumbTintColor="#2196F3"
+        />
+
+        {/* Alignment */}
+        <Text style={[styles.label, { marginBottom: 8 }]}>Alignment</Text>
+        <View style={styles.optionRow}>
+          {(["left", "justify"] as const).map((value) => {
+            const active = draft.textAlign === value;
+            return (
+              <Pressable
+                key={value}
+                style={[styles.optionBtn, active && styles.optionBtnActive]}
+                onPress={() => setDraft((p) => ({ ...p, textAlign: value }))}
+                accessibilityRole="button"
+                accessibilityState={{ selected: active }}
+              >
+                <Text
+                  style={[
+                    styles.optionText,
+                    active && styles.optionTextActive,
+                  ]}
+                >
+                  {value === "left" ? "Ragged right" : "Justified"}
+                </Text>
+              </Pressable>
+            );
+          })}
+        </View>
+
         {/* Theme */}
         <Text style={[styles.label, { marginBottom: 8 }]}>Theme</Text>
         <View style={styles.themeRow}>
@@ -111,6 +221,8 @@ export function ReaderControls({ visible, settings, onApply, onClose }: Props) {
             </Pressable>
           ))}
         </View>
+
+        </ScrollView>
 
         {/* Actions */}
         <View style={styles.actions}>
@@ -139,6 +251,21 @@ const styles = StyleSheet.create({
     paddingBottom: 34,
     paddingTop: 12,
   },
+  scroll: { maxHeight: 440 },
+  scrollContent: { paddingBottom: 4 },
+  optionRow: { flexDirection: "row", gap: 8, marginBottom: 18 },
+  optionBtn: {
+    flex: 1,
+    paddingVertical: 10,
+    paddingHorizontal: 8,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#ddd",
+    alignItems: "center",
+  },
+  optionBtnActive: { borderColor: "#2196F3", backgroundColor: "#E3F2FD" },
+  optionText: { fontSize: 13, fontWeight: "600", color: "#666" },
+  optionTextActive: { color: "#1565C0" },
   handle: {
     width: 36,
     height: 4,

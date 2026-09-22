@@ -91,7 +91,10 @@ const lightTheme: ThemeTokens = {
     tabBar: "#FFFFFF",
     tabBarBorder: "#E2E8F0",
     tabActive: brandColors.primary,
-    tabInactive: "#64748B",
+    // Resting dock icons, at full contrast so they read at a glance. Only the
+    // icons use this — the active tab is set apart by its gradient pill, not by
+    // being the darkest thing in the dock.
+    tabInactive: "#000000",
 
     settingsBg: "#F1F5F9",
     sectionHeader: "#64748B",
@@ -132,7 +135,7 @@ const darkTheme: ThemeTokens = {
     tabBar: "#000000",
     tabBarBorder: "#1A1A1A",
     tabActive: "#818CF8",
-    tabInactive: "#94A3B8",
+    tabInactive: "#FFFFFF",
 
     settingsBg: "#000000",
     sectionHeader: "#94A3B8",
@@ -177,7 +180,7 @@ const noirTheme: ThemeTokens = {
     tabBar: "#1A1A1A",
     tabBarBorder: "#2E2E2E",
     tabActive: "#E5E5E5",
-    tabInactive: "#737373",
+    tabInactive: "#FFFFFF",
 
     settingsBg: "#1A1A1A",
     sectionHeader: "#A3A3A3",

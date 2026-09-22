@@ -6,7 +6,6 @@
 import type { LucideIcon } from "lucide-react-native";
 import {
   Activity,
-  ArrowLeftRight,
   ClipboardList,
   Grid3x3,
   Hash,
@@ -26,14 +25,12 @@ export type QcToolId =
   | "rr-quantify"
   | "rr-record"
   | "dispersion"
-  | "critical-n"
-  | "lot-to-lot";
+  | "critical-n";
 
-export type QcToolGroup = "method-validation" | "lot-verification";
+export type QcToolGroup = "method-validation";
 
 export const QC_TOOL_GROUP_TITLES: Record<QcToolGroup, string> = {
   "method-validation": "Method Validation Tools",
-  "lot-verification": "Reagent Lot Verification",
 };
 
 export interface QcToolDefinition {
@@ -130,15 +127,6 @@ export const QC_TOOLS: QcToolDefinition[] = [
     group: "method-validation",
     accent: "#65A30D",
     tagline: "Sample size for an SD claim (χ²)",
-  },
-  {
-    id: "lot-to-lot",
-    name: "Lot-to-Lot Comparison",
-    description: "Verify a new reagent lot against the current lot",
-    icon: ArrowLeftRight,
-    group: "lot-verification",
-    accent: "#0D9488",
-    tagline: "Paired reagent lot verification",
   },
 ];
 

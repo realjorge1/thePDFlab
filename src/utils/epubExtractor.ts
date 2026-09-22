@@ -44,6 +44,101 @@ export interface EpubBook {
 // Entry point
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Cover art
+// ---------------------------------------------------------------------------
+
+/** A cover image lifted out of an EPUB archive. */
+export interface EpubCover {
+  /** Raw image bytes, base64-encoded. */
+  base64: string;
+  /** Media type declared in the manifest, e.g. "image/jpeg". */
+  mediaType: string;
+  /** Path of the image inside the archive, useful for debugging. */
+  entryPath: string;
+}
+
+/**
+ * Find the cover image in an already-parsed OPF.
+ *
+ * Three conventions, most authoritative first, because EPUBs in the wild use
+ * all of them and plenty use more than one:
+ *   1. EPUB 2 — <meta name="cover" content="<manifest id>"/>
+ *   2. EPUB 3 — a manifest item with properties="cover-image"
+ *   3. Neither — a manifest image whose href simply looks like a cover
+ */
+function resolveCoverItem(
+  opfXml: string,
+  manifest: Record<string, ManifestItem>,
+): ManifestItem | null {
+  const metaCover = opfXml.match(
+    /<meta\b[^>]*\bname\s*=\s*["']cover["'][^>]*\bcontent\s*=\s*["']([^"']+)["'][^>]*>/i,
+  );
+  if (metaCover) {
+    const item = manifest[metaCover[1]];
+    if (item && item.mediaType.startsWith("image/")) return item;
+  }
+
+  const byProperty = Object.values(manifest).find(
+    (item) =>
+      item.properties?.split(/\s+/).includes("cover-image") &&
+      item.mediaType.startsWith("image/"),
+  );
+  if (byProperty) return byProperty;
+
+  const byName = Object.values(manifest).find(
+    (item) =>
+      item.mediaType.startsWith("image/") &&
+      /(^|\/)cover[^/]*\.(jpe?g|png|gif|webp)$/i.test(item.href),
+  );
+  return byName ?? null;
+}
+
+/**
+ * Read just the cover image out of an EPUB.
+ *
+ * Deliberately separate from extractEpub(): a shelf needs covers for many
+ * books and no text at all, while Read Aloud needs text and no cover. Doing
+ * the cheap half on its own keeps a screenful of covers from parsing every
+ * chapter of every book.
+ *
+ * Returns null rather than throwing whenever anything is missing or
+ * malformed — a book with no cover is ordinary, not an error.
+ */
+export async function extractEpubCover(
+  filePath: string,
+): Promise<EpubCover | null> {
+  try {
+    const base64 = await RNFS.readFile(filePath, "base64");
+    const zip = await JSZip.loadAsync(base64, { base64: true });
+
+    const opfPath = await resolveOpfPath(zip);
+    const opfXml = await readZipEntry(zip, opfPath);
+    if (!opfXml) return null;
+
+    const { manifest } = await parseOpf(zip, opfPath);
+    const item = resolveCoverItem(opfXml, manifest);
+    if (!item) return null;
+
+    const opfDir = opfPath.includes("/")
+      ? opfPath.substring(0, opfPath.lastIndexOf("/") + 1)
+      : "";
+    const entryPath = resolveZipPath(opfDir, item.href);
+
+    const entry = zip.file(entryPath);
+    if (!entry) return null;
+
+    return {
+      base64: await entry.async("base64"),
+      mediaType: item.mediaType,
+      entryPath,
+    };
+  } catch (e) {
+    log("Cover extraction failed", e);
+    return null;
+  }
+}
+
 /**
  * Load an EPUB from a local file path and return its readable text.
  *
@@ -173,6 +268,8 @@ interface ManifestItem {
   id: string;
   href: string;
   mediaType: string;
+  /** EPUB 3 manifest properties, e.g. "cover-image". */
+  properties?: string;
 }
 
 interface OpfData {
@@ -208,6 +305,7 @@ async function parseOpf(zip: JSZip, opfPath: string): Promise<OpfData> {
       id,
       href: safeDecodeUriComponent(href),
       mediaType,
+      properties: attrs.properties,
     };
   }
 

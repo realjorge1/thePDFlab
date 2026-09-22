@@ -165,6 +165,21 @@ function DocxEditorScreen() {
           clone.querySelectorAll('.crop-btn-bar').forEach(function(e){ e.remove(); });
           // Remove image resize handles
           clone.querySelectorAll('.img-resize-handle').forEach(function(e){ e.remove(); });
+          // Proofread marks (R3) are DECORATION ONLY: unwrap every
+          // <span class="pf"> so the exported document is byte-identical
+          // to one exported with no marks on screen. normalize() re-merges
+          // the text nodes the wrapping split, so the serialized HTML is
+          // exactly what it was before marking.
+          clone.querySelectorAll('span.pf').forEach(function(n){
+            var parent = n.parentNode;
+            if (!parent) return;
+            while (n.firstChild) parent.insertBefore(n.firstChild, n);
+            parent.removeChild(n);
+          });
+          clone.querySelectorAll('[data-pfid]').forEach(function(e){
+            e.removeAttribute('data-pfid');
+          });
+          clone.normalize();
           // Unwrap img-resize-wrap: keep the <img>, discard wrapper
           clone.querySelectorAll('.img-resize-wrap').forEach(function(w){
             var img = w.querySelector('img');

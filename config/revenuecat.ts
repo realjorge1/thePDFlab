@@ -10,5 +10,9 @@ export const PREMIUM_ENTITLEMENT_ID = "premium";
 // ⚠️ TEST OVERRIDE — when true, every Premium feature/screen is unlocked
 // regardless of the user's real subscription status. This bypasses all
 // paywalls and the AI premium guard so upgrades can be tested end-to-end.
-// SET BACK TO false BEFORE RELEASE.
-export const FORCE_PREMIUM_UNLOCK = false;
+//
+// It can only be true in a development build (__DEV__) started with
+// EXPO_PUBLIC_FORCE_PREMIUM_UNLOCK=true. Release builds compile __DEV__ to
+// false, so real users always go through the real subscription check. Never
+// replace this with a hard-coded `true`.
+export const FORCE_PREMIUM_UNLOCK = __DEV__ && process.env.EXPO_PUBLIC_FORCE_PREMIUM_UNLOCK === "true";

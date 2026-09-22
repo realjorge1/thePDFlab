@@ -56,8 +56,8 @@ export interface BundledVoice {
   nameHint: string;
   /**
    * When true this voice is not yet active — shown as "Coming Soon" in the
-   * picker and cannot be selected. All voices except the universal default
-   * are marked coming soon until individually enabled.
+   * picker and cannot be selected. Voices are marked coming soon until
+   * individually enabled; the app default (DEFAULT_VOICE_ID) never is.
    */
   comingSoon?: boolean;
 }
@@ -173,12 +173,19 @@ export const BUNDLED_VOICES: BundledVoice[] = [
     gender: "Female",
     language: "en-AU",
     nameHint: "karen",
-    comingSoon: true,
+    // The app default — see DEFAULT_VOICE_ID below. Never "coming soon".
     iosIds: [
       "com.apple.ttsbundle.Karen-compact",
       "com.apple.voice.compact.en-AU.Karen",
     ],
-    androidIds: ["en-au-x-aub-local", "en-au-x-aud-local"],
+    // Google TTS en-AU female voices. "-local" (downloaded) first so playback
+    // never depends on the network, then the "-network" equivalents.
+    androidIds: [
+      "en-au-x-aub-local",
+      "en-au-x-auc-local",
+      "en-au-x-aub-network",
+      "en-au-x-auc-network",
+    ],
   },
 
   {
@@ -190,12 +197,18 @@ export const BUNDLED_VOICES: BundledVoice[] = [
     gender: "Male",
     language: "en-AU",
     nameHint: "lee",
-    comingSoon: true,
     iosIds: [
       "com.apple.ttsbundle.Lee-compact",
       "com.apple.voice.compact.en-AU.Lee",
     ],
-    androidIds: ["en-au-x-auc-local", "en-au-x-aud-local"],
+    // Google TTS en-AU male voices. "en-au-x-aud-local" used to be listed on
+    // Karen as well, which made both Australian voices resolve to the same one.
+    androidIds: [
+      "en-au-x-aua-local",
+      "en-au-x-aud-local",
+      "en-au-x-aua-network",
+      "en-au-x-aud-network",
+    ],
   },
 
   // ── INDIAN ────────────────────────────────────────────────────────────────
@@ -342,6 +355,18 @@ export const BUNDLED_VOICES: BundledVoice[] = [
     androidIds: ["en-za-x-xac-local"],
   },
 ];
+
+/**
+ * The voice Read Aloud uses when the user has never picked one.
+ *
+ * Resolves to a Google TTS Australian voice on Android ("en-au-x-aub-local"
+ * and friends); on iOS, where Google's engine is not reachable, it resolves to
+ * Karen, the system's Australian voice.
+ */
+export const DEFAULT_VOICE_ID = "en-au-female-1";
+
+/** Language used until a voice resolves — kept in sync with DEFAULT_VOICE_ID. */
+export const DEFAULT_LANGUAGE = "en-AU";
 
 // ---------------------------------------------------------------------------
 // Accent filter config (drives the picker chips)

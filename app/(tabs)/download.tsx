@@ -46,6 +46,7 @@ import { PINGate } from "@/components/PINGate";
 import { PremiumGate } from "@/components/PremiumGate";
 import { PressableScale } from "@/components/ui/PressableScale";
 import { colors } from "@/constants/theme";
+import { useTabDockInset } from "@/hooks/useTabDock";
 import { useTheme } from "@/services/ThemeProvider";
 import { upsertFileRecord } from "@/services/fileIndexService";
 import { notifyDownloadComplete } from "@/services/notificationService";
@@ -170,6 +171,8 @@ const downloadKeyExtractor = (item: DownloadItem) => item.id;
 export default function DownloadsScreen() {
   const { colors: t } = useTheme();
   const backgroundColor = t.background;
+  // Room for the floating tab dock at the end of both lists (see Home).
+  const dockInset = useTabDockInset();
   const { tab } = useLocalSearchParams<{ tab?: string }>();
 
   // State
@@ -1140,7 +1143,10 @@ export default function DownloadsScreen() {
               data={searchResults}
               renderItem={renderSearchResult}
               keyExtractor={searchKeyExtractor}
-              contentContainerStyle={styles.resultsList}
+              contentContainerStyle={[
+                styles.resultsList,
+                { paddingBottom: dockInset + 16 },
+              ]}
               ItemSeparatorComponent={() => (
                 <View style={[styles.rowSeparator, { backgroundColor: t.border }]} />
               )}
@@ -1210,7 +1216,10 @@ export default function DownloadsScreen() {
               data={downloads}
               renderItem={renderDownloadItem}
               keyExtractor={downloadKeyExtractor}
-              contentContainerStyle={styles.downloadsList}
+              contentContainerStyle={[
+                styles.downloadsList,
+                { paddingBottom: dockInset + 16 },
+              ]}
               ItemSeparatorComponent={() => (
                 <View style={[styles.rowSeparator, { backgroundColor: t.border }]} />
               )}

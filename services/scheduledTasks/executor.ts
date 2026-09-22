@@ -5,6 +5,11 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { generateDocument, generateQuiz, sendChat } from '@/services/ai/ai.service';
+import { AI_DOCID_TASKS, AI_PERSISTENT_DOC_CACHE } from '@/constants/featureFlags';
+import type { AIDocumentRef } from '@/services/ai/ai.types';
+import { isAIError } from '@/services/ai/aiErrors';
+import { canUse, canUseAsync } from '@/services/ai/capabilities';
+import { findCachedDocument } from '@/services/ai/docSessionCache';
 import type { ScheduledTask } from './types';
 import {
   buildGenerateDocumentMessage,
@@ -20,17 +25,52 @@ import {
 
 // ── Quiz ──────────────────────────────────────────────────────────────────────
 
+async function findScheduledQuizDocument(data: {
+  documentUri?: string;
+  documentName?: string;
+  documentMimeType?: string;
+}): Promise<AIDocumentRef | null> {
+  if (!data.documentUri || !data.documentName) return null;
+  if (!(await canUseAsync(AI_DOCID_TASKS, 'docIdTasks'))) return null;
+  if (!canUse(AI_PERSISTENT_DOC_CACHE, 'persistentDocs')) return null;
+  return findCachedDocument({
+    uri: data.documentUri,
+    name: data.documentName,
+    mimeType: data.documentMimeType || 'application/octet-stream',
+  });
+}
+
 async function executeQuizTask(task: ScheduledTask): Promise<ScheduledTask> {
   if (task.payload.type !== 'quiz') throw new Error('Wrong payload type');
   const { extractedText, questionType, length, difficulty, documentName } = task.payload.data;
 
-  const response = await generateQuiz(
-    extractedText,
-    questionType,
-    length,
-    difficulty,
-    documentName,
-  );
+  // Whole-document quiz (AI_DOCID_TASKS): only when the picked file is still in
+  // the document cache — a scheduled task never uploads on its own. Any
+  // document problem falls back to the text captured at schedule time.
+  const cachedDoc = await findScheduledQuizDocument(task.payload.data);
+  let response;
+  try {
+    response = await generateQuiz(
+      extractedText,
+      questionType,
+      length,
+      difficulty,
+      documentName,
+      undefined,
+      cachedDoc ?? undefined,
+    );
+  } catch (err) {
+    if (!cachedDoc || !isAIError(err) || (err.code !== 'DOC_NOT_FOUND' && err.code !== 'SERVER')) {
+      throw err;
+    }
+    response = await generateQuiz(
+      extractedText,
+      questionType,
+      length,
+      difficulty,
+      documentName,
+    );
+  }
 
   let questions: unknown[] = [];
   let questionsJson = '[]';

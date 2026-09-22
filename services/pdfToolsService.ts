@@ -42,7 +42,7 @@ export interface ProcessingResult {
   error?: string;
   /** Processing message */
   message?: string;
-  /** JSON data for info/search/validate/extract-data/diff/ocr tools */
+  /** JSON data for info/search/validate/diff/ocr tools */
   jsonData?: any;
 }
 
@@ -269,11 +269,6 @@ const TOOL_ENDPOINTS: Record<string, ToolEndpointConfig> = {
     outputExtension: "pdf",
     outputMimeType: "application/pdf",
   },
-  flatten: {
-    endpoint: API_ENDPOINTS.PDF.FLATTEN,
-    outputExtension: "pdf",
-    outputMimeType: "application/pdf",
-  },
   encrypt: {
     endpoint: `${API_BASE_URL}/pdf/encrypt`,
     outputExtension: "pdf",
@@ -300,18 +295,6 @@ const TOOL_ENDPOINTS: Record<string, ToolEndpointConfig> = {
     endpoint: `${API_BASE_URL}/pdf/merge-review`,
     outputExtension: "pdf",
     outputMimeType: "application/pdf",
-  },
-
-  // Forms tools
-  "fill-form": {
-    endpoint: `${API_BASE_URL}/pdf/fill-form`,
-    outputExtension: "pdf",
-    outputMimeType: "application/pdf",
-  },
-  "extract-data": {
-    endpoint: `${API_BASE_URL}/pdf/extract-data`,
-    outputExtension: "json",
-    outputMimeType: "application/json",
   },
 
   // Advanced tools
@@ -395,11 +378,6 @@ const TOOL_ENDPOINTS: Record<string, ToolEndpointConfig> = {
     endpoint: `${API_BASE_URL}/find-replace`,
     outputExtension: "json",
     outputMimeType: "application/json",
-  },
-  "qr-code": {
-    endpoint: `${API_BASE_URL}/qrcode`,
-    outputExtension: "pdf",
-    outputMimeType: "application/pdf",
   },
   "highlight-export": {
     endpoint: `${API_BASE_URL}/highlight-export`,
@@ -772,7 +750,6 @@ export async function processWithTool(
       "info",
       "search",
       "validate",
-      "extract-data",
       "diff",
       "compare",
       "ocr",

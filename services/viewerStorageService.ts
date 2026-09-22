@@ -59,6 +59,9 @@ export async function getReaderSettings(): Promise<ReaderSettings> {
     lineHeight: 1.6,
     theme: "light",
     fontFamily: "system-ui",
+    margin: 16,
+    textAlign: "left",
+    paragraphSpacing: 1,
   };
 }
 
