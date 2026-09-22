@@ -63,6 +63,7 @@ import {
 import { parseLocatorParams } from "@/services/ai/citationNavigator";
 import { useReadingSession } from "@/hooks/useReadingSession";
 import { useSavePage } from "@/hooks/useSavePage";
+import { useKeepScreenAwake } from "@/hooks/useKeepScreenAwake";
 import { SNAPSHOT_MAX } from "@/services/savedPagesTypes";
 import {
   IMAGE_MAX_EDGE,
@@ -995,6 +996,12 @@ export default function PdfViewerScreen() {
       excerptWaitersRef.current.push({ page, resolve: wrapped });
     });
   }, []);
+
+  /**
+   * Keep Screen Awake — holds a wake lock while this viewer is mounted, so the
+   * screen never dims mid-page. Released automatically on unmount.
+   */
+  const keepAwake = useKeepScreenAwake();
 
   const savePageState = useSavePage({
     uri,
@@ -2701,6 +2708,8 @@ export default function PdfViewerScreen() {
             : undefined
         }
         isPageSaved={savePageState.isSaved}
+        onToggleKeepAwake={keepAwake.supported ? keepAwake.toggle : undefined}
+        isKeepAwake={keepAwake.enabled}
       />
 
       <AnalyzeSheet

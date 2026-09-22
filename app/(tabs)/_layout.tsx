@@ -1,4 +1,11 @@
 import { GradientView } from "@/components/GradientView";
+// The little gesture each icon performs when its screen arrives — see the
+// module header for why the recipes live in one table.
+import {
+  useIconMotion,
+  usePlayOnFocus,
+  type MotionKind,
+} from "@/components/motion/iconMotion";
 import { colors as brandColors } from "@/constants/theme";
 // Every measurement the dock is built from. It lives outside this file because
 // the tab screens need the same numbers: each insets its own scroll content by
@@ -42,11 +49,14 @@ const { Navigator } = createMaterialTopTabNavigator();
 const MaterialTopTabs = withLayoutContext(Navigator);
 
 // ─── Tab metadata ────────────────────────────────────────────────────────────
-const TAB_META: Record<string, { title: string; Icon: typeof Home }> = {
-  index: { title: "Home", Icon: Home },
-  tools: { title: "Tools", Icon: Wrench },
-  library: { title: "Library", Icon: Library },
-  download: { title: "Download", Icon: Download },
+const TAB_META: Record<
+  string,
+  { title: string; Icon: typeof Home; motion: MotionKind }
+> = {
+  index: { title: "Home", Icon: Home, motion: "home" },
+  tools: { title: "Tools", Icon: Wrench, motion: "tools" },
+  library: { title: "Library", Icon: Library, motion: "library" },
+  download: { title: "Download", Icon: Download, motion: "download" },
 };
 
 const TAB_ORDER = ["index", "tools", "library", "download"] as const;
@@ -286,31 +296,54 @@ function Pill({
   );
 }
 
-/** The two stacked icons that cross-fade between resting and active. */
+/**
+ * The two stacked icons that cross-fade between resting and active — plus the
+ * gesture the glyph performs when its screen arrives.
+ *
+ * The motion wraps *both* layers rather than the lit one, so it is one
+ * transform on one node no matter where the cross-fade has got to: the icon
+ * moves as a single object, which is what it looks like to the eye anyway.
+ */
 function IconPair({
   Icon,
   size,
   on,
   restColor,
+  motion: kind,
+  current,
 }: {
   Icon: typeof Home;
   size: number;
   /** 0 = resting, 1 = active. */
   on: SharedValue<number>;
   restColor: string;
+  motion: MotionKind;
+  /**
+   * Whether this tab's screen is the one actually being shown — which is not
+   * always the tab that is *lit*. While Download holds the bar, the folded
+   * trio keeps the tab you left highlighted so it is already correct when the
+   * island unfolds, and an icon must not perform for a screen nobody is on.
+   */
+  current: boolean;
 }) {
   const rest = useAnimatedStyle(() => ({ opacity: 1 - on.value }));
   const active = useAnimatedStyle(() => ({ opacity: on.value }));
 
+  const motion = useIconMotion(kind, size);
+  usePlayOnFocus(motion, current);
+
   return (
-    <>
+    <Animated.View
+      pointerEvents="none"
+      style={[StyleSheet.absoluteFill, motion.style]}
+    >
       <Animated.View style={[styles.iconLayer, rest]}>
         <Icon color={restColor} size={size} strokeWidth={REST_STROKE} />
       </Animated.View>
       <Animated.View style={[styles.iconLayer, active]}>
         <Icon color="#FFFFFF" size={size} strokeWidth={ACTIVE_STROKE} />
       </Animated.View>
-    </>
+    </Animated.View>
   );
 }
 
@@ -328,7 +361,9 @@ function IconPair({
 function TrioTab({
   title,
   Icon,
+  motion,
   focused,
+  current,
   x,
   ready,
   metrics,
@@ -339,7 +374,10 @@ function TrioTab({
 }: {
   title: string;
   Icon: typeof Home;
+  motion: MotionKind;
   focused: boolean;
+  /** This tab's screen is the one on show — see `IconPair`. */
+  current: boolean;
   x: number;
   ready: boolean;
   metrics: TabDockMetrics;
@@ -391,6 +429,8 @@ function TrioTab({
           size={iconSize}
           on={on}
           restColor={t.tabInactive}
+          motion={motion}
+          current={current}
         />
       </View>
 
@@ -426,6 +466,7 @@ function TrioTab({
 function LoneIsland({
   title,
   Icon,
+  motion,
   focused,
   ready,
   spread,
@@ -438,6 +479,7 @@ function LoneIsland({
 }: {
   title: string;
   Icon: typeof Home;
+  motion: MotionKind;
   focused: boolean;
   ready: boolean;
   /** Inner width once opened: everything the folded "…" leaves behind. */
@@ -541,6 +583,10 @@ function LoneIsland({
             size={iconSize}
             on={on}
             restColor={t.tabInactive}
+            motion={motion}
+            // Download's island IS its tab, so "lit" and "on show" are the
+            // same thing here — no second flag to keep in step.
+            current={focused}
           />
         </View>
 
@@ -703,7 +749,9 @@ function CustomTabBar({
                 key={route.key}
                 title={meta.title}
                 Icon={meta.Icon}
+                motion={meta.motion}
                 focused={j === shownTrio}
+                current={activeName === name}
                 x={xFor(j)}
                 ready={ready}
                 metrics={metrics}
@@ -722,6 +770,7 @@ function CustomTabBar({
           <LoneIsland
             title={TAB_META[LONE_TAB].title}
             Icon={TAB_META[LONE_TAB].Icon}
+            motion={TAB_META[LONE_TAB].motion}
             focused={loneFocused}
             ready={ready}
             spread={spreadW}

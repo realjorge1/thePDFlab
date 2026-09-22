@@ -52,6 +52,8 @@ import {
 } from "@/constants/featureFlags";
 import { useReadingSession } from "@/hooks/useReadingSession";
 import { useSavePage } from "@/hooks/useSavePage";
+import { useKeepScreenAwake } from "@/hooks/useKeepScreenAwake";
+import { MenuToggle } from "@/components/DocumentViewer/MenuToggle";
 import { SNAPSHOT_MAX } from "@/services/savedPagesTypes";
 import { PAGE_HTML_CAPTURE_JS } from "@/utils/pageHtmlCapture";
 import { buildEpubTypographyCss } from "@/services/epubTypography";
@@ -1248,6 +1250,12 @@ export default function EpubViewerScreen() {
     });
   }, []);
 
+  /**
+   * Keep Screen Awake — holds a wake lock while this viewer is mounted, so the
+   * screen never dims mid-page. Released automatically on unmount.
+   */
+  const keepAwake = useKeepScreenAwake();
+
   const savePageState = useSavePage({
     uri,
     name: displayName,
@@ -1754,6 +1762,8 @@ export default function EpubViewerScreen() {
               : undefined
           }
           isPageSaved={savePageState.isSaved}
+          onToggleKeepAwake={keepAwake.supported ? keepAwake.toggle : undefined}
+          isKeepAwake={keepAwake.enabled}
         />
       </View>
 
@@ -1979,6 +1989,9 @@ interface HeaderProps {
   /** Bookmarks (R1) — omitted when the feature is off, as for the other entries. */
   onSavePage?: () => void;
   isPageSaved?: boolean;
+  /** Keep Awake — omitted where the platform cannot hold a wake lock. */
+  onToggleKeepAwake?: () => void;
+  isKeepAwake?: boolean;
 }
 
 function Header({
@@ -1995,6 +2008,8 @@ function Header({
   onChatWithDocument,
   onSavePage,
   isPageSaved = false,
+  onToggleKeepAwake,
+  isKeepAwake = false,
 }: HeaderProps) {
   const [showOverflow, setShowOverflow] = React.useState(false);
 
@@ -2157,6 +2172,31 @@ function Header({
                 >
                   {isPageSaved ? "Remove Bookmark" : "Bookmark"}
                 </Text>
+              </Pressable>
+            )}
+
+            {/* Keep Awake — a setting, so the menu stays open and the switch
+                flips in place instead of dismissing under the finger. */}
+            {onToggleKeepAwake && (
+              <Pressable
+                style={[styles.overflowItem, styles.overflowItemToggle]}
+                accessibilityRole="switch"
+                accessibilityState={{ checked: isKeepAwake }}
+                onPress={onToggleKeepAwake}
+              >
+                <MaterialIcons
+                  name="local-cafe"
+                  size={20}
+                  color={theme.text.primary}
+                />
+                <Text
+                  style={[styles.overflowLabel, { color: theme.text.primary }]}
+                >
+                  Keep Awake
+                </Text>
+                <View style={styles.overflowTrailing}>
+                  <MenuToggle on={isKeepAwake} theme={theme} />
+                </View>
               </Pressable>
             )}
 
@@ -2541,13 +2581,20 @@ const styles = StyleSheet.create({
   overflowItem: {
     flexDirection: "row",
     alignItems: "center",
+    minHeight: 46,
     paddingVertical: 12,
     paddingHorizontal: 16,
     gap: 12,
   } as any,
+  overflowItemToggle: {
+    paddingVertical: 8,
+  },
   overflowLabel: {
     fontSize: 15,
     fontWeight: "500" as const,
+  },
+  overflowTrailing: {
+    marginLeft: "auto",
   },
   // Centre content (loading/error)
   centerContent: {

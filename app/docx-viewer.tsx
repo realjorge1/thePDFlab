@@ -51,6 +51,7 @@ import {
 } from "@/constants/featureFlags";
 import { useReadingSession } from "@/hooks/useReadingSession";
 import { useSavePage } from "@/hooks/useSavePage";
+import { useKeepScreenAwake } from "@/hooks/useKeepScreenAwake";
 import { SNAPSHOT_MAX } from "@/services/savedPagesTypes";
 import { parseLocatorParams } from "@/services/ai/citationNavigator";
 import { locatorLabel, type AICitation } from "@/services/ai/citations";
@@ -808,6 +809,13 @@ export default function DocxViewerScreen() {
   }, []);
 
   const scrollPct = lastMobileScrollPctRef.current ?? 0;
+
+  /**
+   * Keep Screen Awake — holds a wake lock while this viewer is mounted, so the
+   * screen never dims mid-page. Released automatically on unmount.
+   */
+  const keepAwake = useKeepScreenAwake();
+
   const savePageState = useSavePage({
     uri,
     name: displayName,
@@ -1805,6 +1813,8 @@ export default function DocxViewerScreen() {
             : undefined
         }
         isPageSaved={savePageState.isSaved}
+        onToggleKeepAwake={keepAwake.supported ? keepAwake.toggle : undefined}
+        isKeepAwake={keepAwake.enabled}
       />
 
       <AnalyzeSheet

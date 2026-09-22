@@ -2,6 +2,8 @@ import { AILogoBadge } from "@/components/AIButton";
 import { AppHeaderContainer } from "@/components/AppHeaderContainer";
 import FileTypeOptionsDialog from "@/components/FileTypeOptionsDialog";
 import { GradientView } from "@/components/GradientView";
+import { MotionIcon, useIconMotion } from "@/components/motion/iconMotion";
+import { useAppOpen, useIconShow } from "@/components/motion/useIconShow";
 import { PINGate } from "@/components/PINGate";
 import { PressableScale } from "@/components/ui/PressableScale";
 import { aiFeatures } from "@/constants/ai-features";
@@ -25,6 +27,7 @@ import { useSettings } from "@/services/settingsService";
 import { useTheme } from "@/services/ThemeProvider";
 import { perfMark } from "@/utils/perfLogger";
 import { Ionicons } from "@expo/vector-icons";
+import { useIsFocused } from "@react-navigation/native";
 import { BlurView } from "expo-blur";
 import { useFocusEffect, useRouter } from "expo-router";
 import {
@@ -33,6 +36,7 @@ import {
   File,
   FileText,
   Filter,
+  Folder,
   FolderOpen,
   LayoutDashboard,
   PencilLine,
@@ -105,6 +109,12 @@ const NOIR_ACCENTS = {
   workspace: "#6B7280",
   premium: "#9CA3AF",
 } as const;
+
+// Glyph sizes inside the bento's icon chips. Named because the motion recipes
+// need the same numbers the JSX does — travel is scaled to the glyph, so a
+// chip icon and the big Create pencil move by the same *fraction* of
+// themselves rather than by the same number of pixels.
+const ACTIVITY_GLYPH = { large: 32, chip: 18, badge: 38 } as const;
 
 // Combined file type for display - allows both FileInfo and UnifiedFileRecord
 interface DisplayFile {
@@ -215,6 +225,39 @@ export default function HomeScreen() {
   // can be scrolled clear of it. It goes on the scroll *content*, never on the
   // screen container — the background is meant to run on underneath it.
   const dockInset = useTabDockInset();
+
+  // ── The Activity card's idle show ─────────────────────────────────────────
+  // Five icons, one at a time, in a fresh random order: on every app opening,
+  // and again after each stretch of stillness on this screen. Each icon owns
+  // its own gesture (components/motion/iconMotion) — the scheduler below only
+  // decides who goes when, and stops everything the moment the tab is left.
+  const createMotion = useIconMotion("create", ACTIVITY_GLYPH.large);
+  const gozlinMotion = useIconMotion("gozlin", ACTIVITY_GLYPH.badge);
+  const foldersMotion = useIconMotion("folders", ACTIVITY_GLYPH.chip);
+  const workspaceMotion = useIconMotion("workspace", ACTIVITY_GLYPH.chip);
+  const premiumMotion = useIconMotion("premium", ACTIVITY_GLYPH.chip);
+  const activityMotions = useMemo(
+    () => [
+      createMotion,
+      gozlinMotion,
+      foldersMotion,
+      workspaceMotion,
+      premiumMotion,
+    ],
+    [createMotion, gozlinMotion, foldersMotion, workspaceMotion, premiumMotion],
+  );
+
+  const { opens, foreground } = useAppOpen();
+  const screenFocused = useIsFocused();
+  // `pokeIdle` pushes the next idle performance back out to a full wait. It is
+  // wired to touches and scrolls below, so the repeat stays a reward for the
+  // screen being *at rest* rather than a metronome ticking over somebody who
+  // is in the middle of using it.
+  const pokeIdle = useIconShow(activityMotions, {
+    active: screenFocused && foreground,
+    openCount: opens,
+  });
+
   // Theme-aware container outline: light in dark mode, darker in light mode
   const containerBorderColor =
     mode === "dark" ? "rgba(255,255,255,0.28)" : "#B0B0B0";
@@ -647,6 +690,12 @@ export default function HomeScreen() {
             styles.scrollContent,
             { paddingBottom: dockInset + 8 },
           ]}
+          // What "at rest" means, in practice. Touch events bubble up from
+          // whichever card was pressed, so one handler here covers every tap on
+          // the screen without any of them having to know about the show;
+          // onScrollBeginDrag catches the flicks that never land on a child.
+          onTouchStart={pokeIdle}
+          onScrollBeginDrag={pokeIdle}
         >
           {/* Activity header + Bento — scale/fade together */}
           <RNAnimated.View
@@ -702,9 +751,11 @@ export default function HomeScreen() {
                             { backgroundColor: activityAccents.create },
                           ]}
                         >
-                          <PencilLine
+                          <MotionIcon
+                            motion={createMotion}
+                            Icon={PencilLine}
+                            size={ACTIVITY_GLYPH.large}
                             color="#FFFFFF"
-                            size={32}
                             strokeWidth={1.8}
                           />
                         </View>
@@ -736,7 +787,10 @@ export default function HomeScreen() {
                           style={styles.bentoCardMediumGradient}
                         >
                           <View style={styles.aiTopRow}>
-                            <AILogoBadge size={38} />
+                            <AILogoBadge
+                              size={ACTIVITY_GLYPH.badge}
+                              glow={gozlinMotion.glow}
+                            />
                             <Text
                               style={[
                                 styles.bentoMediumTitle,
@@ -769,9 +823,15 @@ export default function HomeScreen() {
                                 { backgroundColor: activityAccents.folders },
                               ]}
                             >
-                              <FolderOpen
+                              {/* The shut folder is the second half of the
+                                  gesture, not a state: it is only ever seen
+                                  mid-animation, on its way back open. */}
+                              <MotionIcon
+                                motion={foldersMotion}
+                                Icon={FolderOpen}
+                                AltIcon={Folder}
+                                size={ACTIVITY_GLYPH.chip}
                                 color="#FFFFFF"
-                                size={18}
                                 strokeWidth={2.5}
                               />
                             </View>
@@ -810,9 +870,11 @@ export default function HomeScreen() {
                               { backgroundColor: activityAccents.workspace },
                             ]}
                           >
-                            <LayoutDashboard
+                            <MotionIcon
+                              motion={workspaceMotion}
+                              Icon={LayoutDashboard}
+                              size={ACTIVITY_GLYPH.chip}
                               color="#FFFFFF"
-                              size={18}
                               strokeWidth={2.5}
                             />
                           </View>
@@ -848,9 +910,11 @@ export default function HomeScreen() {
                             { backgroundColor: activityAccents.premium },
                           ]}
                         >
-                          <Crown
+                          <MotionIcon
+                            motion={premiumMotion}
+                            Icon={Crown}
+                            size={ACTIVITY_GLYPH.chip}
                             color="#FFFFFF"
-                            size={18}
                             strokeWidth={2.5}
                           />
                         </View>
