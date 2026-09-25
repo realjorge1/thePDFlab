@@ -1,4 +1,5 @@
 import { API_ENDPOINTS, resilientFetch } from "@/config/api";
+import { deleteTempUploads, toUploadPart } from "@/services/pdfToolsService";
 import { colors, spacing } from "@/constants/theme";
 import { FileSourcePicker, type FileSourceOption } from "@/components/FileSourcePicker";
 import { LibraryFilePicker, type SelectedFile } from "@/components/LibraryFilePicker";
@@ -120,13 +121,10 @@ export default function ExtractImagesScreen() {
     setError(null);
     setResult(null);
 
+    const tempPaths: string[] = [];
     try {
       const formData = new FormData();
-      formData.append("pdf", {
-        uri: selectedFile.uri,
-        type: selectedFile.mimeType,
-        name: selectedFile.name,
-      } as any);
+      formData.append("pdf", (await toUploadPart(selectedFile, tempPaths)) as any);
 
       const response = await resilientFetch(
         API_ENDPOINTS.TOOLS.EXTRACT_IMAGES,
@@ -146,6 +144,7 @@ export default function ExtractImagesScreen() {
     } catch (err: any) {
       setError(err.message || "Extraction failed");
     } finally {
+      deleteTempUploads(tempPaths);
       setLoading(false);
     }
   }, [selectedFile]);

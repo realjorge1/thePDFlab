@@ -1323,12 +1323,15 @@ export default function PdfViewerScreen() {
 
   // ── Lock File ────────────────────────────────────────────────────
   const handleLockFile = useCallback(() => {
+    // Protect overwrites the original in place, so hand over the original URI
+    // (repaired if it arrived over-decoded), pre-encoded for expo-router's
+    // extra param decode.
     router.push({
       pathname: "/tool-processor",
       params: {
         tool: "protect",
-        fileUri: uri,
-        file: name,
+        fileUri: encodeURIComponent(reEncodeSafDocumentUri(uri as string)),
+        file: encodeURIComponent((name as string) || "document.pdf"),
         fileMimeType: "application/pdf",
       },
     });

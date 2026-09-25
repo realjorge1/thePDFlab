@@ -4,7 +4,6 @@ import { colors, spacing } from "@/constants/theme";
 import { pickFilesWithResult } from "@/services/document-manager";
 import { notifyProcessingComplete } from "@/services/notificationService";
 import { loadSettings } from "@/services/settingsService";
-import { wakeUpBackend } from "@/config/api";
 import {
   getToolConfig,
   isToolSupported,
@@ -12,7 +11,10 @@ import {
 } from "@/services/pdfToolsService";
 import { useActivityStore } from "@/services/activity/activityStore";
 import { useTheme } from "@/services/ThemeProvider";
+import { ADDITIONAL_FILE_TOOLS } from "@/utils/toolRoutes";
 import * as Clipboard from "expo-clipboard";
+import { ImageManipulator, SaveFormat } from "expo-image-manipulator";
+import * as ImagePicker from "expo-image-picker";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import * as FileSystem from "expo-file-system/legacy";
 import * as Sharing from "expo-sharing";
@@ -49,6 +51,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  Image,
   Keyboard,
   KeyboardAvoidingView,
   Platform,
@@ -148,15 +151,14 @@ const unitToPt = (val: number, unit: "mm" | "in" | "pt"): number => {
 const TOOL_DESCRIPTIONS: Record<string, string> = {
   compress: "Reduce file size while maintaining quality.",
   rotate: "Rotate all pages in the PDF.",
-  watermark: "Add watermark text to your PDF.",
+  watermark: "Add watermark text, a logo, or both to your PDF.",
   split: "Enter page numbers where you want to split the PDF.",
   remove: "Enter page numbers or ranges to process.",
   extract: "Enter page numbers or ranges to process.",
   duplicate: "Duplicate pages in your PDF.",
   protect: "Add password protection to your PDF.",
   unlock: "Remove password protection from your PDF.",
-  encrypt:
-    "Encrypt your PDF with AES-256-GCM encryption. Creates a .inscribed file.",
+  encrypt: "Encrypt your PDF with a password (AES-256).",
   decrypt: "Decrypt a .inscribed encrypted file back to PDF.",
   "header-footer": "Add header and footer text to every page.",
   "text-to-pdf": "Create a PDF from your text content.",
@@ -235,13 +237,22 @@ const parsePageInput = (input: string): number[] => {
 
 /** Tool sets for O(1) conditional checks */
 const PAGE_INPUT_TOOLS = new Set(["split", "remove", "extract"]);
-const MULTI_FILE_TOOLS = new Set(["merge", "compare", "diff", "merge-review"]);
 
 /** Static option arrays (avoid re-creation in render) */
+// ids are the backend's compression *levels*: "high" = most aggressive
+// (JPEG 45, 70% scale), "low" = lightest (JPEG 85, full size).
 const COMPRESSION_OPTIONS = [
-  { id: "low", label: "Maximum Compression", desc: "Smallest file size" },
+  { id: "high", label: "Maximum Compression", desc: "Smallest file size" },
   { id: "medium", label: "Balanced", desc: "Good quality and size" },
-  { id: "high", label: "High Quality", desc: "Larger file size" },
+  { id: "low", label: "High Quality", desc: "Larger file size" },
+] as const;
+
+const LOGO_POSITIONS = [
+  { id: "top-left", label: "Top Left" },
+  { id: "top-right", label: "Top Right" },
+  { id: "center", label: "Center" },
+  { id: "bottom-left", label: "Bottom Left" },
+  { id: "bottom-right", label: "Bottom Right" },
 ] as const;
 
 const ROTATION_OPTIONS = [
@@ -475,17 +486,46 @@ export default function ToolProcessorScreen() {
   const isMountedRef = useRef(true);
   // AbortController for cancelling in-flight requests
   const abortControllerRef = useRef<AbortController | null>(null);
+  // Watermark logos saved to the cache by this screen
+  const logoFilesRef = useRef<string[]>([]);
   useEffect(() => {
+    // Set here, not only in useRef: effects can re-run on a live screen (Fast
+    // Refresh, StrictMode), and a stale `false` would drop every result.
+    isMountedRef.current = true;
+    const logoFiles = logoFilesRef.current;
     return () => {
       isMountedRef.current = false;
       // Abort any pending request on unmount
       abortControllerRef.current?.abort();
+      for (const uri of logoFiles) {
+        FileSystem.deleteAsync(uri, { idempotent: true }).catch(() => {});
+      }
     };
   }, []);
 
-  // Wake up backend on mount
-  useEffect(() => {
-    wakeUpBackend().catch(console.warn);
+  // Watermark logo. Re-saved as PNG (keeps transparency and turns HEIC/WebP
+  // into a format the backend can embed), at most 800px wide.
+  const handlePickLogo = useCallback(async () => {
+    try {
+      const picked = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ["images"],
+        quality: 1,
+      });
+      if (picked.canceled || !picked.assets?.length) return;
+      const asset = picked.assets[0];
+      const context = ImageManipulator.manipulate(asset.uri);
+      if (asset.width > 800) context.resize({ width: 800 });
+      const image = await context.renderAsync();
+      const saved = await image.saveAsync({ format: SaveFormat.PNG });
+      logoFilesRef.current.push(saved.uri);
+      setLogoUri(saved.uri);
+    } catch (e) {
+      console.warn("Logo pick failed:", e);
+      Alert.alert(
+        "Couldn't Use Image",
+        "Please pick a PNG or JPG image and try again.",
+      );
+    }
   }, []);
 
   // Pick attachment files from device
@@ -552,8 +592,6 @@ export default function ToolProcessorScreen() {
     (progressValue: number, message: string) => {
       setProgress(progressValue);
       setProgressMessage(message);
-      // Mirror progress into the global spring overlay (determinate bar).
-      useActivityStore.getState().update({ progress: progressValue / 100 });
     },
     [],
   );
@@ -768,15 +806,16 @@ export default function ToolProcessorScreen() {
         return;
       }
 
-      // Show the global spring overlay (pull down to cancel) with live progress.
-      // Cancel bridges to the existing abort path so behavior is unchanged.
+      // The processing card below is the only progress UI; the global overlay
+      // adds just the "Pull down to cancel" hint at the bottom. Cancel bridges
+      // to the existing abort path.
       useActivityStore.getState().start({
         id: activityId,
         label: getTitle(tool as string),
         kind: "tool",
         startedAt: Date.now(),
-        progress: 0,
         cancelable: true,
+        hintOnly: true,
         abort: () => handleCancel(),
       });
 
@@ -832,11 +871,21 @@ export default function ToolProcessorScreen() {
           }
           break;
         case "watermark":
+          params.opacity = (parseInt(watermarkOpacity) || 30) / 100;
           if (watermarkText.trim()) {
             params.text = watermarkText;
-            params.opacity = (parseInt(watermarkOpacity) || 30) / 100;
             params.fontSize = parseInt(watermarkFontSize) || 50;
           }
+          if (logoUri) {
+            // pdfToolsService uploads this as the "logo" file
+            params.logoUri = logoUri;
+            params.logoPosition = logoPosition;
+          }
+          break;
+        case "pdf-to-jpg":
+        case "pdf-to-png":
+          // Every page, not just the first (older backends ignore this)
+          params.allPages = "true";
           break;
         case "compress":
           params.quality = compressionQuality;
@@ -884,6 +933,12 @@ export default function ToolProcessorScreen() {
         case "add-stamps":
           params.stampType = stampType;
           params.pageNumber = visualPlacement.pageNumber;
+          // The box shown in the editor (PDF points, bottom-left origin);
+          // same fallbacks the editor uses to draw it.
+          params.x = visualPlacement.x;
+          params.y = visualPlacement.y;
+          params.width = visualPlacement.width || 160;
+          params.height = visualPlacement.height || 60;
           if (pageInput.trim()) {
             params.pages = parsePageInput(pageInput);
           }
@@ -892,6 +947,10 @@ export default function ToolProcessorScreen() {
         case "header-footer":
           params.headerCenter = headerText;
           params.footerCenter = footerText;
+          // Leave blank sections off — the backend fills an empty footer
+          // with "{page} / {total}" otherwise.
+          if (!headerText.trim()) params.headerEnabled = "false";
+          if (!footerText.trim()) params.footerEnabled = "false";
           break;
         case "text-to-pdf":
           params.text = textContent;
@@ -970,11 +1029,11 @@ export default function ToolProcessorScreen() {
           break;
       }
 
-      // Parse additional files for merge / compare / diff / merge-review
+      // Parse additional files (merge / compare inputs, extra images)
       let parsedAdditionalFiles:
         | Array<{ uri: string; name: string; mimeType: string }>
         | undefined;
-      if (MULTI_FILE_TOOLS.has(tool as string) && additionalFiles) {
+      if (ADDITIONAL_FILE_TOOLS.has(tool as string) && additionalFiles) {
         try {
           parsedAdditionalFiles = JSON.parse(additionalFiles as string);
         } catch (e) {
@@ -1012,16 +1071,16 @@ export default function ToolProcessorScreen() {
     } catch (error) {
       console.error("Processing error:", error);
       if (!isMountedRef.current || controller.signal.aborted) return;
-      const errorMessage =
-        error instanceof Error ? error.message : "Unknown error";
+      // processWithTool returns network/server failures as results, so a
+      // throw here is a local problem — don't send users to check their
+      // connection.
+      const detail = error instanceof Error ? error.message : "Unknown error";
+      const errorMessage = `Something went wrong while preparing your file. Please go back, reselect it and try again.\n\n(${detail})`;
       setResult({
         success: false,
         error: errorMessage,
       });
-      Alert.alert(
-        "Processing Failed",
-        `An error occurred: ${errorMessage}\n\nPlease check your internet connection and try again.`,
-      );
+      Alert.alert("Processing Failed", errorMessage);
     } finally {
       useActivityStore.getState().end(activityId);
       if (isMountedRef.current && !controller.signal.aborted)
@@ -1231,22 +1290,6 @@ export default function ToolProcessorScreen() {
                 <Text style={[styles.progressText, { color: t.textSecondary }]}>
                   {progress}%
                 </Text>
-                <TouchableOpacity
-                  onPress={handleCancel}
-                  style={{
-                    marginTop: spacing.md,
-                    paddingVertical: spacing.sm,
-                    paddingHorizontal: spacing.xl,
-                    borderRadius: 10,
-                    backgroundColor: "#EF4444",
-                  }}
-                >
-                  <Text
-                    style={{ color: "white", fontWeight: "600", fontSize: 14 }}
-                  >
-                    Cancel
-                  </Text>
-                </TouchableOpacity>
               </View>
             )}
 
@@ -1521,6 +1564,108 @@ export default function ToolProcessorScreen() {
                         ]}
                         maxLength={100}
                       />
+                    </View>
+
+                    <View style={[styles.section, { backgroundColor: t.card }]}>
+                      <Text style={[styles.sectionTitle, { color: t.text }]}>
+                        Logo (optional)
+                      </Text>
+                      {logoUri ? (
+                        <>
+                          <View
+                            style={{
+                              flexDirection: "row",
+                              alignItems: "center",
+                              gap: spacing.md,
+                              marginBottom: spacing.md,
+                            }}
+                          >
+                            <Image
+                              source={{ uri: logoUri }}
+                              resizeMode="contain"
+                              style={{
+                                width: 72,
+                                height: 72,
+                                borderRadius: 8,
+                                backgroundColor: t.backgroundSecondary,
+                              }}
+                            />
+                            <TouchableOpacity
+                              onPress={handlePickLogo}
+                              style={[
+                                styles.optionButton,
+                                { flex: 1, backgroundColor: t.backgroundSecondary },
+                              ]}
+                            >
+                              <Text style={[styles.optionText, { color: t.text }]}>
+                                Change
+                              </Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                              onPress={() => setLogoUri("")}
+                              accessibilityLabel="Remove logo"
+                              style={{ padding: spacing.sm }}
+                            >
+                              <Trash2 color="#EF4444" size={20} />
+                            </TouchableOpacity>
+                          </View>
+                          <View
+                            style={{
+                              flexDirection: "row",
+                              flexWrap: "wrap",
+                              gap: spacing.sm,
+                            }}
+                          >
+                            {LOGO_POSITIONS.map((pos) => {
+                              const isActive = logoPosition === pos.id;
+                              return (
+                                <TouchableOpacity
+                                  key={pos.id}
+                                  onPress={() => setLogoPosition(pos.id)}
+                                  style={{
+                                    paddingHorizontal: 12,
+                                    paddingVertical: 8,
+                                    borderRadius: 10,
+                                    borderWidth: isActive ? 2 : 1,
+                                    borderColor: isActive ? colors.primary : t.border,
+                                    backgroundColor: isActive
+                                      ? colors.primary + "10"
+                                      : t.backgroundSecondary,
+                                  }}
+                                >
+                                  <Text
+                                    style={{
+                                      fontSize: 13,
+                                      fontWeight: isActive ? "600" : "400",
+                                      color: isActive ? colors.primary : t.text,
+                                    }}
+                                  >
+                                    {pos.label}
+                                  </Text>
+                                </TouchableOpacity>
+                              );
+                            })}
+                          </View>
+                        </>
+                      ) : (
+                        <TouchableOpacity
+                          onPress={handlePickLogo}
+                          style={[
+                            styles.optionButton,
+                            { backgroundColor: t.backgroundSecondary },
+                          ]}
+                        >
+                          <Plus color={t.text} size={20} />
+                          <Text
+                            style={[
+                              styles.optionText,
+                              { color: t.text, marginLeft: spacing.sm },
+                            ]}
+                          >
+                            Add Logo Image
+                          </Text>
+                        </TouchableOpacity>
+                      )}
                     </View>
 
                     <View style={[styles.section, { backgroundColor: t.card }]}>

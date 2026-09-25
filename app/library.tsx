@@ -556,8 +556,8 @@ export default function LibraryScreen() {
                   pathname: "/tool-processor",
                   params: {
                     tool: "decrypt",
-                    file: file.displayName,
-                    fileUri: file.uri,
+                    file: encodeURIComponent(file.displayName),
+                    fileUri: safeUri,
                     fileMimeType: "application/octet-stream",
                   },
                 }),

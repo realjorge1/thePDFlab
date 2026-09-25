@@ -1,4 +1,5 @@
 import { API_ENDPOINTS, resilientFetch } from "@/config/api";
+import { deleteTempUploads, toUploadPart } from "@/services/pdfToolsService";
 import { colors } from "@/constants/theme";
 import { FileSourcePicker, type FileSourceOption } from "@/components/FileSourcePicker";
 import { LibraryFilePicker, type SelectedFile } from "@/components/LibraryFilePicker";
@@ -116,11 +117,12 @@ export default function BatchCompressScreen() {
     setError(null);
     setResults(null);
 
+    const tempPaths: string[] = [];
     try {
       const formData = new FormData();
-      files.forEach((f) => {
-        formData.append("pdfs", { uri: f.uri, type: f.mimeType, name: f.name } as any);
-      });
+      for (const f of files) {
+        formData.append("pdfs", (await toUploadPart(f, tempPaths)) as any);
+      }
       // Backend reads "compressionLevel", not "level"
       formData.append("compressionLevel", level);
 
@@ -136,6 +138,7 @@ export default function BatchCompressScreen() {
     } catch (err: any) {
       setError(err.message || "Compression failed");
     } finally {
+      deleteTempUploads(tempPaths);
       setLoading(false);
     }
   }, [files, level]);

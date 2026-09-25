@@ -1,4 +1,9 @@
 import { API_ENDPOINTS, resilientFetch } from "@/config/api";
+import {
+  deleteTempUploads,
+  resolveFileName,
+  toUploadPart,
+} from "@/services/pdfToolsService";
 import { colors } from "@/constants/theme";
 import { FileSourcePicker, type FileSourceOption } from "@/components/FileSourcePicker";
 import { LibraryFilePicker, type SelectedFile } from "@/components/LibraryFilePicker";
@@ -123,9 +128,10 @@ export default function FindReplaceScreen() {
     setError(null);
     setMatches(null);
 
+    const tempPaths: string[] = [];
     try {
       const formData = new FormData();
-      formData.append("pdf", { uri: selectedFile.uri, type: selectedFile.mimeType, name: selectedFile.name } as any);
+      formData.append("pdf", (await toUploadPart(selectedFile, tempPaths)) as any);
       formData.append("search", searchText);
       formData.append("caseSensitive", String(caseSensitive));
 
@@ -144,6 +150,7 @@ export default function FindReplaceScreen() {
     } catch (err: any) {
       setError(err.message || "Preview failed");
     } finally {
+      deleteTempUploads(tempPaths);
       setPreviewing(false);
     }
   }, [selectedFile, searchText, caseSensitive]);
@@ -155,9 +162,10 @@ export default function FindReplaceScreen() {
     setResultUri(null);
     setDone(false);
 
+    const tempPaths: string[] = [];
     try {
       const formData = new FormData();
-      formData.append("pdf", { uri: selectedFile.uri, type: selectedFile.mimeType, name: selectedFile.name } as any);
+      formData.append("pdf", (await toUploadPart(selectedFile, tempPaths)) as any);
       formData.append("search", searchText);
       formData.append("replace", replaceText);
       formData.append("caseSensitive", String(caseSensitive));
@@ -175,7 +183,7 @@ export default function FindReplaceScreen() {
       // Save to documents directory so it persists, then register in the library
       const outputDir = `${FileSystem.documentDirectory}wordsinscribed-outputs/`;
       await FileSystem.makeDirectoryAsync(outputDir, { intermediates: true });
-      const outputName = `replaced_${selectedFile.name}`;
+      const outputName = `replaced_${resolveFileName(selectedFile.name, selectedFile.uri)}`;
       const outputUri = `${outputDir}${outputName}`;
       const downloadResult = await FileSystem.downloadAsync(data.downloadUrl, outputUri);
       if (downloadResult.status !== 200) {
@@ -197,6 +205,7 @@ export default function FindReplaceScreen() {
     } catch (err: any) {
       setError(err.message || "Replace failed");
     } finally {
+      deleteTempUploads(tempPaths);
       setLoading(false);
     }
   }, [selectedFile, searchText, replaceText, caseSensitive]);

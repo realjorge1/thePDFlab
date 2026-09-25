@@ -4,6 +4,7 @@
  */
 
 import { API_BASE_URL, API_ENDPOINTS, resilientFetch } from "@/config/api";
+import { getExtensionFromMime } from "@/services/document-manager/utils/file-utils";
 import { upsertFileRecord } from "@/services/fileIndexService";
 import * as FileSystem from "expo-file-system/legacy";
 
@@ -452,6 +453,19 @@ async function checkFileSize(uri: string): Promise<number> {
 }
 
 /**
+ * True when base64 data is a PDF: "%PDF-" within the first 1024 bytes, where
+ * the spec allows the header to start.
+ */
+function isPdfBase64(base64: string): boolean {
+  try {
+    // 1368 chars decode to 1026 bytes; a multiple of 4 keeps atob valid.
+    return atob(base64.substring(0, 1368)).includes("%PDF-");
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Get the tool configuration
  */
 export function getToolConfig(toolId: string): ToolEndpointConfig | null {
@@ -497,47 +511,96 @@ async function resolveUploadUri(
 }
 
 /**
+ * FormData file part for screens that build their own request, with the same
+ * content:// handling as processWithTool. Any temp copy is added to
+ * `tempPaths`; pass that to deleteTempUploads once the request settles.
+ */
+export async function toUploadPart(
+  file: { uri: string; name: string; mimeType?: string },
+  tempPaths: string[],
+): Promise<{ uri: string; type: string; name: string }> {
+  const type = file.mimeType || "application/pdf";
+  const { uploadUri, tempPath } = await resolveUploadUri(file.uri, type);
+  if (tempPath) tempPaths.push(tempPath);
+  return { uri: uploadUri, type, name: resolveFileName(file.name, file.uri) };
+}
+
+/** Delete the cache copies made for content:// uploads. */
+export function deleteTempUploads(tempPaths: string[]): void {
+  for (const p of tempPaths) {
+    FileSystem.deleteAsync(p, { idempotent: true }).catch(() => {});
+  }
+}
+
+/**
+ * Upload/display name for a file. Route params arrive `undefined` when the
+ * source had no name (expo-router drops nullish params), so never assume a
+ * string: fall back to the URI's last segment, then to `fallback`.
+ * Strips SAF directory prefixes ("documents/foo.pdf" → "foo.pdf").
+ */
+export function resolveFileName(
+  name: unknown,
+  uri: unknown,
+  fallback = "document.pdf",
+): string {
+  if (typeof name === "string" && name.trim()) {
+    return name.split("/").pop() || name;
+  }
+  if (typeof uri === "string" && uri) {
+    let tail = uri.split("?")[0].split("/").pop() || "";
+    try {
+      tail = decodeURIComponent(tail);
+    } catch {
+      // Keep the raw segment
+    }
+    // SAF document ids look like "primary:Download/foo.pdf"
+    const base = tail.split(/[/:]/).pop() || "";
+    if (base.includes(".")) return base;
+  }
+  return fallback;
+}
+
+/** Tools that upload two PDFs as pdf1 + pdf2. */
+const TWO_FILE_TOOLS = ["compare", "diff", "merge-review"];
+
+/**
  * Process a file with the specified tool
  */
 export async function processWithTool(
   options: ToolProcessingOptions,
   onProgress?: (progress: number, message: string) => void,
 ): Promise<ProcessingResult> {
-  const {
-    toolId,
-    fileUri,
-    fileMimeType,
-    additionalFiles,
-    params,
-    signal,
-  } = options;
+  const { toolId, fileUri, fileMimeType, params, signal } = options;
 
-  // Strip directory prefix from SAF-sourced filenames (e.g. "documents/foo.pdf" → "foo.pdf")
-  const fileName = options.fileName.split("/").pop() || options.fileName;
+  // Fallback names keep the real extension — converters reject a mismatch.
+  const fallbackName = (mime: string | undefined, stem: string) =>
+    `${stem}.${(mime && getExtensionFromMime(mime)) || "pdf"}`;
+
+  const fileName = resolveFileName(
+    options.fileName,
+    fileUri,
+    fallbackName(fileMimeType, "document"),
+  );
+  if (!options.fileName) {
+    console.warn(
+      `[PdfTools] ${toolId}: no file name was passed, using "${fileName}"`,
+    );
+  }
+  // Drop entries without a URI; name the rest safely.
+  const additionalFiles = (options.additionalFiles ?? [])
+    .filter((f) => f && typeof f.uri === "string" && f.uri)
+    .map((f, i) => ({
+      uri: f.uri,
+      name: resolveFileName(
+        f.name,
+        f.uri,
+        fallbackName(f.mimeType, `document-${i + 2}`),
+      ),
+      mimeType: f.mimeType,
+    }));
 
   console.log(`[PdfTools] Processing ${toolId} for file: ${fileName}`);
   console.log(`[PdfTools] Backend URL: ${API_BASE_URL}`);
-
-  // Quick connectivity pre-check (3 s timeout)
-  try {
-    const hc = new AbortController();
-    const hcTimer = setTimeout(() => hc.abort(), 3000);
-    const hcResp = await fetch(API_BASE_URL.replace("/api", "/api/health"), {
-      signal: hc.signal,
-    });
-    clearTimeout(hcTimer);
-    if (!hcResp.ok)
-      console.warn("[PdfTools] Health check returned", hcResp.status);
-  } catch {
-    console.warn(
-      "[PdfTools] Backend unreachable at",
-      API_BASE_URL,
-      "— continuing anyway",
-    );
-  }
-
-  // Initialize output directory
-  await initializeOutputDir();
 
   // Get tool configuration
   const toolConfig = getToolConfig(toolId);
@@ -548,8 +611,32 @@ export async function processWithTool(
     };
   }
 
-  // Check file size (skip for tools that don't require an input file)
+  // Validate inputs before touching the network (skip for tools that don't
+  // require an input file).
   const noFileTools = ["text-to-pdf"];
+  if (!noFileTools.includes(toolId) && !fileUri) {
+    return {
+      success: false,
+      error: "No file was selected. Please go back and choose a file.",
+    };
+  }
+  if (toolId === "merge" && additionalFiles.length < 1) {
+    return {
+      success: false,
+      error: "Please select at least 2 PDF files to merge.",
+    };
+  }
+  if (TWO_FILE_TOOLS.includes(toolId) && additionalFiles.length < 1) {
+    return {
+      success: false,
+      error: "Please select a second PDF to compare against.",
+    };
+  }
+
+  // Initialize output directory
+  await initializeOutputDir();
+
+  // Check file size
   let fileSize = 0;
   if (!noFileTools.includes(toolId)) {
     onProgress?.(5, "Validating file...");
@@ -590,17 +677,15 @@ export async function processWithTool(
         type: mainMime,
         name: fileName,
       } as any);
-      if (additionalFiles && additionalFiles.length > 0) {
-        for (const addFile of additionalFiles) {
-          const addMime = addFile.mimeType || "application/pdf";
-          formData.append("pdfs", {
-            uri: await resolveUri(addFile.uri, addMime),
-            type: addMime,
-            name: addFile.name.split("/").pop() || addFile.name,
-          } as any);
-        }
+      for (const addFile of additionalFiles) {
+        const addMime = addFile.mimeType || "application/pdf";
+        formData.append("pdfs", {
+          uri: await resolveUri(addFile.uri, addMime),
+          type: addMime,
+          name: addFile.name,
+        } as any);
       }
-    } else if (["compare", "diff", "merge-review"].includes(toolId)) {
+    } else if (TWO_FILE_TOOLS.includes(toolId)) {
       // Two-file tools: send as pdf1 + pdf2
       const mainMime = fileMimeType || "application/pdf";
       formData.append("pdf1", {
@@ -608,14 +693,12 @@ export async function processWithTool(
         type: mainMime,
         name: fileName,
       } as any);
-      if (additionalFiles && additionalFiles.length > 0) {
-        const addMime = additionalFiles[0].mimeType || "application/pdf";
-        formData.append("pdf2", {
-          uri: await resolveUri(additionalFiles[0].uri, addMime),
-          type: addMime,
-          name: additionalFiles[0].name.split("/").pop() || additionalFiles[0].name,
-        } as any);
-      }
+      const addMime = additionalFiles[0].mimeType || "application/pdf";
+      formData.append("pdf2", {
+        uri: await resolveUri(additionalFiles[0].uri, addMime),
+        type: addMime,
+        name: additionalFiles[0].name,
+      } as any);
     } else if (["jpg-to-pdf", "png-to-pdf"].includes(toolId)) {
       // Image-to-PDF: send under "images" key
       const mainMime = fileMimeType || "image/jpeg";
@@ -624,15 +707,13 @@ export async function processWithTool(
         type: mainMime,
         name: fileName,
       } as any);
-      if (additionalFiles && additionalFiles.length > 0) {
-        for (const addFile of additionalFiles) {
-          const addMime = addFile.mimeType || "image/jpeg";
-          formData.append("images", {
-            uri: await resolveUri(addFile.uri, addMime),
-            type: addMime,
-            name: addFile.name.split("/").pop() || addFile.name,
-          } as any);
-        }
+      for (const addFile of additionalFiles) {
+        const addMime = addFile.mimeType || "image/jpeg";
+        formData.append("images", {
+          uri: await resolveUri(addFile.uri, addMime),
+          type: addMime,
+          name: addFile.name,
+        } as any);
       }
     } else if (
       ["word-to-pdf", "ppt-to-pdf", "excel-to-pdf", "html-to-pdf"].includes(
@@ -661,7 +742,11 @@ export async function processWithTool(
       Object.entries(params).forEach(([key, value]) => {
         if (value !== undefined && value !== null) {
           if (toolId === "text-to-pdf" && key === "text") return;
-          if (key === "attachmentFiles") return;
+          if (key === "attachmentFiles" || key === "logoUri") return;
+          // pdf-lib throws on opacity outside 0–1 (a 500 from the server)
+          if (toolId === "watermark" && key === "opacity") {
+            value = Math.min(1, Math.max(0.01, Number(value) || 0.3));
+          }
           formData.append(
             key,
             typeof value === "string" ? value : JSON.stringify(value),
@@ -685,6 +770,16 @@ export async function processWithTool(
       } catch (e) {
         console.warn("[PdfTools] Failed to parse attachment files:", e);
       }
+    }
+
+    // Watermark logo: its own "logo" field, after the PDF — the backend copies
+    // the first uploaded file onto "pdf"/"image"/etc.
+    if (toolId === "watermark" && params?.logoUri) {
+      formData.append("logo", {
+        uri: await resolveUri(params.logoUri, "image/png"),
+        type: "image/png",
+        name: "logo.png",
+      } as any);
     }
 
     // Make API request
@@ -731,7 +826,12 @@ export async function processWithTool(
             errorData.details ||
             errorData.error ||
             "This file can't be converted. Check the file type and size.";
+        } else if (response.status < 500) {
+          // 4xx: `error` is a short label ("Insufficient files"); `message`
+          // is the sentence written for the user.
+          errorMessage = errorData.message || errorData.error || errorMessage;
         } else {
+          // 5xx: `message` is usually a raw exception — keep the label.
           errorMessage = errorData.error || errorData.message || errorMessage;
         }
       } catch {
@@ -777,21 +877,31 @@ export async function processWithTool(
         } as any;
       }
 
-      // Split tool returns multiple files — download each individually
+      // Multiple files (split parts, or one image per page for pdf-to-jpg/png
+      // with allPages) — download each individually
       if (result.success && result.files && Array.isArray(result.files)) {
+        const isSplit = toolId === "split";
+        const partConfig = isSplit
+          ? { ...toolConfig, outputExtension: "pdf", outputMimeType: "application/pdf" }
+          : toolConfig;
+        const noun = isSplit ? "part" : "page";
+        const baseName = fileName.replace(/\.pdf$/i, "");
         const savedFiles: string[] = [];
-        const pdfConfig = { ...toolConfig, outputExtension: "pdf", outputMimeType: "application/pdf" };
         for (let i = 0; i < result.files.length; i++) {
+          // Stop on cancel; files already saved stay in the library.
+          if (signal?.aborted) {
+            return { success: false, error: "Request was cancelled." };
+          }
           const f = result.files[i];
           onProgress?.(
             60 + Math.round((i / result.files.length) * 30),
-            `Downloading part ${i + 1} of ${result.files.length}...`,
+            `Downloading ${noun} ${i + 1} of ${result.files.length}...`,
           );
           const partResult = await downloadAndSaveFile(
             f.url,
-            f.filename || `${fileName.replace(/\.pdf$/i, "")}_part_${i + 1}.pdf`,
+            f.filename || `${baseName}_${noun}_${i + 1}.${partConfig.outputExtension}`,
             toolId,
-            pdfConfig,
+            partConfig,
             undefined,
           );
           if (partResult.success && partResult.outputUri) {
@@ -799,12 +909,26 @@ export async function processWithTool(
           }
         }
         onProgress?.(100, "Complete!");
+        if (savedFiles.length === 0) {
+          return {
+            success: false,
+            error: "The files were processed but couldn't be downloaded. Please try again.",
+          };
+        }
+        const missed = result.files.length - savedFiles.length;
         return {
           success: true,
-          outputUri: savedFiles[0] || "",
-          outputFileName: result.files[0]?.filename || `${fileName.replace(/\.pdf$/i, "")}_part_1.pdf`,
-          outputType: "application/pdf",
-          message: `Split into ${savedFiles.length} files. All files saved to library.`,
+          outputUri: savedFiles[0],
+          outputFileName:
+            result.files[0]?.filename ||
+            `${baseName}_${noun}_1.${partConfig.outputExtension}`,
+          outputType: partConfig.outputMimeType,
+          message:
+            (isSplit
+              ? `Split into ${savedFiles.length} files.`
+              : `Converted ${savedFiles.length} page${savedFiles.length === 1 ? "" : "s"} to images.`) +
+            (missed > 0 ? ` ${missed} couldn't be downloaded.` : "") +
+            " All files saved to library.",
         };
       }
 
@@ -856,7 +980,8 @@ export async function processWithTool(
       );
     }
   } catch (error) {
-    console.error("[PdfTools] Processing error:", error);
+    // A user cancel isn't an error (and would raise a dev LogBox toast)
+    if (!signal?.aborted) console.error("[PdfTools] Processing error:", error);
 
     if (error instanceof Error) {
       if (error.name === "AbortError") {
@@ -901,9 +1026,7 @@ export async function processWithTool(
     };
   } finally {
     // Delete any temp cache copies made for SAF content:// URIs
-    for (const p of tempPaths) {
-      FileSystem.deleteAsync(p, { idempotent: true }).catch(() => {});
-    }
+    deleteTempUploads(tempPaths);
   }
 }
 
@@ -941,9 +1064,7 @@ async function saveInPlace(
     if (base64Data.length < 20) {
       throw new Error("Server returned empty or invalid response.");
     }
-    // Decode first 5 bytes to check for %PDF- header
-    const headerCheck = atob(base64Data.substring(0, 8));
-    if (!headerCheck.startsWith("%PDF-")) {
+    if (!isPdfBase64(base64Data)) {
       throw new Error(
         "Server response is not a valid PDF. The file was not modified.",
       );
@@ -1149,16 +1270,9 @@ async function saveBlobToFile(
       });
     }
 
-    // Validate PDF output before saving (for PDF tools)
-    if (toolConfig.outputExtension === "pdf" && base64Data.length >= 8) {
-      try {
-        const headerCheck = atob(base64Data.substring(0, 8));
-        if (!headerCheck.startsWith("%PDF-")) {
-          throw new Error("Server response is not a valid PDF.");
-        }
-      } catch {
-        // If atob fails the data may still be valid binary for non-PDF tools
-      }
+    // Never save a non-PDF (e.g. an HTML error page) under a .pdf name
+    if (toolConfig.outputExtension === "pdf" && !isPdfBase64(base64Data)) {
+      throw new Error("Server response is not a valid PDF.");
     }
 
     onProgress?.(85, "Saving file...");
@@ -1215,36 +1329,6 @@ async function saveBlobToFile(
       success: false,
       error: `Failed to save processed file: ${error instanceof Error ? error.message : "Unknown error"}`,
     };
-  }
-}
-
-// ============================================================================
-// WAKE UP HELPER
-// ============================================================================
-
-/**
- * Wake up the backend server (for cold start on free tier hosting)
- */
-export async function wakeUpBackend(): Promise<boolean> {
-  try {
-    console.log("[PdfTools] Waking up backend...");
-    const response = await fetch(API_BASE_URL.replace("/api", "/health"), {
-      method: "GET",
-      headers: {
-        Accept: "application/json",
-      },
-    });
-
-    if (response.ok) {
-      console.log("[PdfTools] Backend is awake!");
-      return true;
-    }
-
-    console.warn("[PdfTools] Backend health check failed:", response.status);
-    return false;
-  } catch (error) {
-    console.error("[PdfTools] Failed to wake backend:", error);
-    return false;
   }
 }
 
@@ -1538,7 +1622,6 @@ export default {
   getToolConfig,
   isToolSupported,
   getSupportedTools,
-  wakeUpBackend,
   // Tool-specific helpers
   mergePdfs,
   compressPdf,

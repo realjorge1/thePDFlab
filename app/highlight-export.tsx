@@ -1,4 +1,9 @@
 import { API_ENDPOINTS, resilientFetch } from "@/config/api";
+import {
+  deleteTempUploads,
+  resolveFileName,
+  toUploadPart,
+} from "@/services/pdfToolsService";
 import { colors } from "@/constants/theme";
 import { FileSourcePicker, type FileSourceOption } from "@/components/FileSourcePicker";
 import { LibraryFilePicker, type SelectedFile } from "@/components/LibraryFilePicker";
@@ -121,13 +126,10 @@ export default function HighlightExportScreen() {
     setError(null);
     setResult(null);
 
+    const tempPaths: string[] = [];
     try {
       const formData = new FormData();
-      formData.append("pdf", {
-        uri: selectedFile.uri,
-        type: selectedFile.mimeType,
-        name: selectedFile.name,
-      } as any);
+      formData.append("pdf", (await toUploadPart(selectedFile, tempPaths)) as any);
       formData.append("groupBy", groupBy);
       formData.append("includeNotes", String(includeNotes));
       formData.append("includeColors", String(includeColors));
@@ -148,6 +150,7 @@ export default function HighlightExportScreen() {
     } catch (err: any) {
       setError(err.message || "Export failed");
     } finally {
+      deleteTempUploads(tempPaths);
       setLoading(false);
     }
   }, [selectedFile, groupBy, includeNotes, includeColors]);
@@ -155,7 +158,12 @@ export default function HighlightExportScreen() {
   const handleDownload = useCallback(async () => {
     if (!result?.url) return;
     try {
-      const filename = `highlights_${selectedFile?.name || "export"}.pdf`;
+      const stem = resolveFileName(
+        selectedFile?.name,
+        selectedFile?.uri,
+        "export.pdf",
+      ).replace(/\.pdf$/i, "");
+      const filename = `highlights_${stem}.pdf`;
       const localUri = `${FileSystem.cacheDirectory}${filename}`;
       const download = await FileSystem.downloadAsync(result.url, localUri);
       if (await Sharing.isAvailableAsync()) {

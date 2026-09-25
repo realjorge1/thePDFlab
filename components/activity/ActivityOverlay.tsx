@@ -8,6 +8,11 @@
 // rubber-band resistance) past a threshold to cancel — which aborts the
 // underlying request and springs the overlay away.
 //
+// The "Pull down to cancel" hint always sits at the bottom of the screen. The
+// overlay never draws a progress bar: screens that show their own progress
+// start the task with `hintOnly`, and then the overlay adds nothing but that
+// hint (no dimming, no status text) while still catching the pull.
+//
 // Renders null when idle, so screens that never call runCancelable() are wholly
 // unaffected. Wrapped in a SafeBoundary at the mount site.
 // ============================================
@@ -24,6 +29,7 @@ import {
   Gesture,
   GestureDetector,
 } from "react-native-gesture-handler";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Animated, {
   Easing,
   interpolate,
@@ -56,6 +62,7 @@ function safeHaptic(fn: () => Promise<unknown>) {
 export function ActivityOverlay() {
   const task = useActivityStore((s) => s.task);
   const { colors: t, mode } = useTheme();
+  const insets = useSafeAreaInsets();
 
   // Drag + entrance animation state
   const translateY = useSharedValue(0);
@@ -67,6 +74,7 @@ export function ActivityOverlay() {
 
   const active = !!task;
   const cancelable = task?.cancelable ?? false;
+  const hintOnly = task?.hintOnly ?? false;
 
   useEffect(() => {
     if (active) {
@@ -82,10 +90,10 @@ export function ActivityOverlay() {
   }, [active, enter, translateY]);
 
   useEffect(() => {
-    if (!active) return;
+    if (!active || hintOnly) return;
     const interval = setInterval(() => setTick((n) => n + 1), 600);
     return () => clearInterval(interval);
-  }, [active]);
+  }, [active, hintOnly]);
 
   // Drive the "release to cancel" label from the UI thread without re-rendering
   // on every frame.
@@ -124,9 +132,11 @@ export function ActivityOverlay() {
             translateY.value = CANCEL_THRESHOLD + (dy - CANCEL_THRESHOLD) * 0.4;
           }
         })
-        .onEnd(() => {
+        .onEnd((e, success) => {
           "worklet";
-          if (translateY.value > CANCEL_THRESHOLD) {
+          // Judge by the release point: on a busy device moves arrive sparsely
+          // and the last onUpdate can lag well behind where the finger let go.
+          if (success && e.translationY > CANCEL_THRESHOLD) {
             translateY.value = withTiming(600, { duration: 220 });
             runOnJS(doCancel)();
           } else {
@@ -156,6 +166,21 @@ export function ActivityOverlay() {
     };
   });
 
+  // The hint stays pinned to the bottom; it only nudges down with the pull.
+  const hintStyle = useAnimatedStyle(() => ({
+    opacity: enter.value,
+    transform: [
+      {
+        translateY: interpolate(
+          translateY.value,
+          [0, CANCEL_THRESHOLD],
+          [0, 12],
+          "clamp",
+        ),
+      },
+    ],
+  }));
+
   if (!active || !task) return null;
 
   const elapsedMs = Date.now() - task.startedAt;
@@ -169,78 +194,60 @@ export function ActivityOverlay() {
   const accent = t.primary;
   const scrimColor =
     mode === "dark" ? "rgba(0,0,0,0.62)" : "rgba(15,23,42,0.42)";
-  const determinate = typeof task.progress === "number";
+  const hintColor = armed ? accent : t.textSecondary;
 
   return (
     <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
-      <Animated.View
-        style={[
-          StyleSheet.absoluteFill,
-          { backgroundColor: scrimColor },
-          scrimStyle,
-        ]}
-        pointerEvents="auto"
-      />
+      {!hintOnly && (
+        <Animated.View
+          style={[
+            StyleSheet.absoluteFill,
+            { backgroundColor: scrimColor },
+            scrimStyle,
+          ]}
+          pointerEvents="auto"
+        />
+      )}
       <GestureDetector gesture={panGesture}>
         {/* Full-screen capture surface so the pull-to-cancel gesture works
             anywhere on the overlay, and underlying touches stay blocked. The
             status text floats alone — no card, no icon. */}
-        <Animated.View style={styles.centerWrap}>
-          <Animated.View style={[styles.content, contentStyle]}>
-            <Animated.Text
-              style={[styles.statusText, { color: t.textSecondary }]}
-            >
-              {task.label ? `${task.label}…` : `${message}…`}
-            </Animated.Text>
-
-            {/* Sub status uses the rotating phase copy when a label is set */}
-            {!!task.label && (
-              <Animated.Text
-                style={[styles.subText, { color: t.textTertiary }]}
-              >
-                {`${message}…`}
-              </Animated.Text>
-            )}
-
-            {determinate && (
-              <View
-                style={[
-                  styles.progressTrack,
-                  { backgroundColor: mode === "dark" ? "#262626" : "#EEF2FF" },
-                ]}
-              >
-                <View
-                  style={[
-                    styles.progressFill,
-                    {
-                      backgroundColor: accent,
-                      width: `${Math.round(
-                        Math.min(1, Math.max(0, task.progress ?? 0)) * 100,
-                      )}%`,
-                    },
-                  ]}
-                />
-              </View>
-            )}
-
-            {cancelable && (
-              <View style={styles.cancelHint}>
-                <ChevronDown
-                  size={16}
-                  color={armed ? accent : t.textTertiary}
-                  strokeWidth={2.4}
-                />
+        <Animated.View style={StyleSheet.absoluteFill}>
+          {!hintOnly && (
+            <View style={styles.centerWrap}>
+              <Animated.View style={[styles.content, contentStyle]}>
                 <Animated.Text
-                  style={[
-                    styles.cancelText,
-                    { color: armed ? accent : t.textTertiary },
-                  ]}
+                  style={[styles.statusText, { color: t.textSecondary }]}
                 >
-                  {armed ? "Release to cancel" : "Pull down to cancel"}
+                  {task.label ? `${task.label}…` : `${message}…`}
                 </Animated.Text>
-              </View>
-            )}
-          </Animated.View>
+
+                {/* Sub status uses the rotating phase copy when a label is set */}
+                {!!task.label && (
+                  <Animated.Text
+                    style={[styles.subText, { color: t.textTertiary }]}
+                  >
+                    {`${message}…`}
+                  </Animated.Text>
+                )}
+              </Animated.View>
+            </View>
+          )}
+
+          {cancelable && (
+            <Animated.View
+              style={[
+                styles.cancelHint,
+                { bottom: insets.bottom + 28 },
+                hintStyle,
+              ]}
+            >
+              <ChevronDown size={16} color={hintColor} strokeWidth={2.4} />
+              <Animated.Text style={[styles.cancelText, { color: hintColor }]}>
+                {armed ? "Release to cancel" : "Pull down to cancel"}
+              </Animated.Text>
+            </Animated.View>
+          )}
         </Animated.View>
       </GestureDetector>
     </View>
@@ -271,21 +278,13 @@ const styles = StyleSheet.create({
     marginTop: 6,
     textAlign: "center",
   },
-  progressTrack: {
-    marginTop: 16,
-    height: 5,
-    width: 180,
-    borderRadius: 3,
-    overflow: "hidden",
-  },
-  progressFill: {
-    height: "100%",
-    borderRadius: 3,
-  },
   cancelHint: {
-    marginTop: 18,
+    position: "absolute",
+    left: 0,
+    right: 0,
     flexDirection: "row",
     alignItems: "center",
+    justifyContent: "center",
     gap: 5,
   },
   cancelText: {

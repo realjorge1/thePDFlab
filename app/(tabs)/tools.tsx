@@ -17,6 +17,11 @@ import { useTabDockInset } from "@/hooks/useTabDock";
 import { pickFilesWithResult } from "@/services/document-manager";
 import { upsertFileRecord } from "@/services/fileIndexService";
 import { useTheme } from "@/services/ThemeProvider";
+import {
+  IMAGE_TO_PDF_TOOLS,
+  MULTI_FILE_TOOLS,
+  buildToolRoute,
+} from "@/utils/toolRoutes";
 import { useRouter } from "expo-router";
 import { ArrowLeft } from "lucide-react-native";
 import { useCallback, useMemo, useState } from "react";
@@ -103,15 +108,6 @@ const TOOLS_REQUIRING_PDF = new Set([
   "highlight-export",
   "citation-extractor",
 ]);
-
-// Tools that have dedicated screens (not tool-processor)
-const DEDICATED_SCREEN_TOOLS: Record<string, string> = {
-  "extract-images": "/extract-images",
-  "batch-compress": "/batch-compress",
-  "find-replace": "/find-replace",
-  "highlight-export": "/highlight-export",
-  "citation-extractor": "/citation-extractor",
-};
 
 // Conversion tools with their MIME types and extensions
 const CONVERSION_TOOLS: Record<
@@ -239,9 +235,7 @@ export default function ToolsScreen() {
         toolId,
         mimeTypes: ["application/pdf"],
         allowedExtensions: ["pdf"],
-        allowMultiple: ["merge", "compare", "diff", "merge-review"].includes(
-          toolId,
-        ),
+        allowMultiple: MULTI_FILE_TOOLS.has(toolId),
       });
       setShowSourcePicker(true);
     } else if (CONVERSION_TOOLS[toolId]) {
@@ -251,7 +245,7 @@ export default function ToolsScreen() {
         toolId,
         mimeTypes: config.mimeTypes,
         allowedExtensions: config.extensions,
-        allowMultiple: toolId.includes("jpg-to") || toolId.includes("png-to"),
+        allowMultiple: IMAGE_TO_PDF_TOOLS.has(toolId),
       });
       setShowSourcePicker(true);
     } else {
@@ -262,6 +256,17 @@ export default function ToolsScreen() {
       );
     }
   }, []);
+
+  // Navigate to the tool's screen with the picked file(s).
+  const openTool = useCallback(
+    (
+      toolId: string,
+      files: { uri: string; name: string; mimeType: string }[],
+    ) => {
+      router.push(buildToolRoute(toolId, files));
+    },
+    [router],
+  );
 
   const handleSourceSelect = useCallback(
     async (source: FileSourceOption) => {
@@ -310,9 +315,8 @@ export default function ToolsScreen() {
       }
 
       // For merge/compare/diff/merge-review, require at least 2 files
-      const multiFileTools = ["merge", "compare", "diff", "merge-review"];
       if (
-        multiFileTools.includes(pendingTool.toolId) &&
+        MULTI_FILE_TOOLS.has(pendingTool.toolId) &&
         result.files.length < 2
       ) {
         Alert.alert(
@@ -323,8 +327,6 @@ export default function ToolsScreen() {
         setPendingTool(null);
         return;
       }
-
-      const file = result.files[0];
 
       // Import the file(s) to the library (file index)
       for (const f of result.files) {
@@ -339,51 +341,7 @@ export default function ToolsScreen() {
         });
       }
 
-      // Navigate to the appropriate screen
-      if (pendingTool.toolId === "sign") {
-        router.push({
-          pathname: "/sign-document",
-          params: {
-            file: file.name,
-            fileUri: file.uri,
-            fileMimeType: file.mimeType,
-          },
-        });
-      } else if (DEDICATED_SCREEN_TOOLS[pendingTool.toolId]) {
-        router.push({
-          pathname: DEDICATED_SCREEN_TOOLS[pendingTool.toolId] as any,
-          params: {
-            file: file.name,
-            fileUri: file.uri,
-            fileMimeType: file.mimeType,
-          },
-        });
-      } else {
-        const navParams: Record<string, string> = {
-          tool: pendingTool.toolId,
-          file: file.name,
-          fileUri: file.uri,
-          fileMimeType: file.mimeType,
-        };
-
-        // For multi-file tools, pass additional files as JSON
-        if (
-          multiFileTools.includes(pendingTool.toolId) &&
-          result.files.length > 1
-        ) {
-          const additionalFiles = result.files.slice(1).map((f: any) => ({
-            uri: f.uri,
-            name: f.name,
-            mimeType: f.mimeType,
-          }));
-          navParams.additionalFiles = JSON.stringify(additionalFiles);
-        }
-
-        router.push({
-          pathname: "/tool-processor",
-          params: navParams,
-        });
-      }
+      openTool(pendingTool.toolId, result.files);
     } catch (error) {
       console.error("Tool error:", error);
       Alert.alert(
@@ -394,7 +352,7 @@ export default function ToolsScreen() {
       setLoading(false);
       setPendingTool(null);
     }
-  }, [pendingTool, router]);
+  }, [pendingTool, openTool]);
 
   const handleLibrarySelect = useCallback(
     (files: SelectedFile[]) => {
@@ -406,8 +364,7 @@ export default function ToolsScreen() {
       }
 
       // For multi-file tools, we need at least 2 files
-      const multiFileTools = ["merge", "compare", "diff", "merge-review"];
-      if (multiFileTools.includes(pendingTool.toolId) && files.length < 2) {
+      if (MULTI_FILE_TOOLS.has(pendingTool.toolId) && files.length < 2) {
         Alert.alert(
           "Insufficient Files",
           "Please select at least 2 PDF files.",
@@ -416,54 +373,10 @@ export default function ToolsScreen() {
         return;
       }
 
-      const file = files[0];
-
-      // Navigate to the appropriate screen
-      if (pendingTool.toolId === "sign") {
-        router.push({
-          pathname: "/sign-document",
-          params: {
-            file: file.name,
-            fileUri: file.uri,
-            fileMimeType: file.mimeType,
-          },
-        });
-      } else if (DEDICATED_SCREEN_TOOLS[pendingTool.toolId]) {
-        router.push({
-          pathname: DEDICATED_SCREEN_TOOLS[pendingTool.toolId] as any,
-          params: {
-            file: file.name,
-            fileUri: file.uri,
-            fileMimeType: file.mimeType,
-          },
-        });
-      } else {
-        const params: Record<string, string> = {
-          tool: pendingTool.toolId,
-          file: file.name,
-          fileUri: file.uri,
-          fileMimeType: file.mimeType,
-        };
-
-        // For multi-file tools, pass additional files as JSON
-        if (multiFileTools.includes(pendingTool.toolId) && files.length > 1) {
-          const additionalFiles = files.slice(1).map((f) => ({
-            uri: f.uri,
-            name: f.name,
-            mimeType: f.mimeType,
-          }));
-          params.additionalFiles = JSON.stringify(additionalFiles);
-        }
-
-        router.push({
-          pathname: "/tool-processor",
-          params,
-        });
-      }
-
+      openTool(pendingTool.toolId, files);
       setPendingTool(null);
     },
-    [pendingTool, router],
+    [pendingTool, openTool],
   );
 
   const handleCloseSourcePicker = useCallback(() => {

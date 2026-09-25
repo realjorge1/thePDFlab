@@ -22,6 +22,11 @@ export interface ActivityTask {
   progress?: number;
   /** Whether the user may pull-to-cancel this task. */
   cancelable: boolean;
+  /**
+   * The screen shows its own progress, so the overlay draws only the
+   * "Pull down to cancel" hint at the bottom (no dimming, no status text).
+   */
+  hintOnly?: boolean;
   /** Abort the underlying work and reject the runCancelable() promise. */
   abort: () => void;
 }

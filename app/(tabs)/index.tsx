@@ -116,6 +116,21 @@ const NOIR_ACCENTS = {
 // themselves rather than by the same number of pixels.
 const ACTIVITY_GLYPH = { large: 32, chip: 18, badge: 38 } as const;
 
+// "Convert to PDF" from the file options dialog → the matching converter tool.
+const CONVERT_TO_PDF_TOOLS: Record<string, string> = {
+  doc: "word-to-pdf",
+  docx: "word-to-pdf",
+  ppt: "ppt-to-pdf",
+  pptx: "ppt-to-pdf",
+  xls: "excel-to-pdf",
+  xlsx: "excel-to-pdf",
+  html: "html-to-pdf",
+  htm: "html-to-pdf",
+  jpg: "jpg-to-pdf",
+  jpeg: "jpg-to-pdf",
+  png: "png-to-pdf",
+};
+
 // Combined file type for display - allows both FileInfo and UnifiedFileRecord
 interface DisplayFile {
   id: string;
@@ -557,14 +572,23 @@ export default function HomeScreen() {
   const handleConvertToPdf = useCallback(
     (file: DisplayFile) => {
       setShowFileTypeOptions(false);
+      const ext = file.name.split(".").pop()?.toLowerCase() ?? "";
+      const toolId = CONVERT_TO_PDF_TOOLS[ext];
+      if (!toolId) {
+        Alert.alert(
+          "Can't Convert",
+          `${ext ? `.${ext} files` : "This file"} can't be converted to PDF yet.`,
+        );
+        return;
+      }
       router.push({
         pathname: "/tool-processor",
         params: {
-          tool: "convert",
-          fileId: file.id,
-          fileName: file.name,
-          fileUri: file.uri,
-          fileType: file.type,
+          tool: toolId,
+          // Pre-encoded for expo-router's extra decode (see handleFilePress).
+          file: encodeURIComponent(file.name),
+          fileUri: encodeURIComponent(file.uri),
+          fileMimeType: file.mimeType,
         },
       });
     },
